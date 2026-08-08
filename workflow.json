@@ -1,0 +1,69 @@
+{
+  "name": "Autonomous Lead Gen & AI Outreach Engine",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "c1f7b8a1-7d1a-4d22-b8d9-2e02f10b0001",
+      "name": "1-Hour Cron Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "command": "/opt/venv/bin/python3 /files/scripts/fetch_leads.py"
+      },
+      "id": "c1f7b8a1-7d1a-4d22-b8d9-2e02f10b0002",
+      "name": "Run Python Scraper",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const stdout = $input.first().json.stdout;\nconst leads = JSON.parse(stdout);\nreturn leads.map(item => ({ json: item }));"
+      },
+      "id": "c1f7b8a1-7d1a-4d22-b8d9-2e02f10b0003",
+      "name": "Parse Leads Array",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [700, 300]
+    }
+  ],
+  "connections": {
+    "1-Hour Cron Trigger": {
+      "main": [
+        [
+          {
+            "node": "Run Python Scraper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Python Scraper": {
+      "main": [
+        [
+          {
+            "node": "Parse Leads Array",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
