@@ -1,0 +1,16 @@
+FROM n8nio/n8n:latest
+
+USER root
+
+# Install Python 3, pip, and essential dependencies
+RUN apk add --no-cache python3 py3-pip build-base python3-dev
+
+# Set up Python virtual environment
+ENV VIRTUAL_ENV=/opt/venv
+RUN python3 -m venv $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
+
+# Install AI libraries
+RUN pip install --no-cache-dir requests pandas pydantic openai anthropic beautifulsoup4
+
+USER node
