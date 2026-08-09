@@ -3,15 +3,31 @@
 import json
 import os
 import sqlite3
+import urllib.parse
 from datetime import datetime, timezone, timedelta
 
 DB_PATH = os.getenv('REVENUE_DB_PATH', '/files/data/revenue_agent.db')
 FOLLOWUP_HOURS = int(os.getenv('FOLLOWUP_HOURS', '72'))
 MAX_FOLLOWUPS = int(os.getenv('MAX_FOLLOWUPS', '2'))
+OFFER_PRICE = os.getenv('OFFER_PRICE', '100')
+OFFER_NAME = os.getenv('OFFER_NAME', 'AI Customer Response System')
+CHECKOUT_URL_TEMPLATE = os.getenv('CHECKOUT_URL_TEMPLATE', '').strip()
 
 
 def parse_ts(value):
     return datetime.fromisoformat(value.replace('Z', '+00:00'))
+
+
+def checkout_url(lead):
+    if not CHECKOUT_URL_TEMPLATE:
+        return None
+    values = {
+        'lead_id': urllib.parse.quote(str(lead['id']), safe=''),
+        'email': urllib.parse.quote(str(lead['email'] or ''), safe=''),
+        'amount': urllib.parse.quote(str(OFFER_PRICE), safe=''),
+        'offer': urllib.parse.quote(str(OFFER_NAME), safe=''),
+    }
+    return CHECKOUT_URL_TEMPLATE.format(**values)
 
 
 def main():
@@ -27,7 +43,17 @@ def main():
         if 'opt_out' in kinds or 'sale' in kinds or 'refund' in kinds:
             continue
         if 'interested' in kinds:
-            actions.append({'lead_id': lead['id'], 'action': 'human_close', 'reason': 'prospect expressed interest', 'company': lead['company']})
+            url = checkout_url(lead)
+            actions.append({
+                'lead_id': lead['id'],
+                'action': 'send_checkout' if url else 'human_close',
+                'reason': 'prospect expressed interest',
+                'company': lead['company'],
+                'email': lead['email'],
+                'checkout_url': url,
+                'amount': float(OFFER_PRICE),
+                'offer': OFFER_NAME,
+            })
             continue
         if 'reply' in kinds:
             actions.append({'lead_id': lead['id'], 'action': 'review_reply', 'reason': 'prospect replied', 'company': lead['company']})
