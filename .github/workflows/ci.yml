@@ -15,13 +15,12 @@ jobs:
           python-version: '3.12'
       - name: Compile Python
         run: python -m py_compile scripts/*.py
-      - name: Smoke test revenue cycle
+      - name: Smoke test CSV import and revenue cycle
         env:
           REVENUE_DB_PATH: /tmp/revenue_agent.db
-          LEADS_JSON: >-
-            [{"id":"ci_1","first_name":"Jane","company_name":"Jane Plumbing","contact_email":"jane@example.com","industry":"Home Services","pain_point":"slow inquiry follow-up","website":"https://example.com","contact_allowed":true,"source":"ci"}]
         run: |
-          python scripts/revenue_cycle.py > /tmp/result.json
+          printf 'first_name,company_name,contact_email,industry,pain_point,website,contact_allowed\nJane,Jane Plumbing,jane@example.com,Home Services,slow inquiry follow-up,https://example.com,true\n' > /tmp/leads.csv
+          python scripts/import_leads.py /tmp/leads.csv | python scripts/revenue_cycle.py > /tmp/result.json
           python - <<'PY'
           import json
           data=json.load(open('/tmp/result.json'))
@@ -29,14 +28,33 @@ jobs:
           assert data['metrics']['contact_ready'] == 1
           assert data['contact_ready'][0]['outreach']['score'] >= 55
           PY
+      - name: Smoke test next actions
+        env:
+          REVENUE_DB_PATH: /tmp/revenue_agent.db
+        run: |
+          python scripts/next_actions.py > /tmp/actions.json
+          python - <<'PY'
+          import json
+          data=json.load(open('/tmp/actions.json'))
+          assert data['count'] == 1
+          assert data['actions'][0]['action'] == 'send_initial'
+          PY
       - name: Smoke test revenue events and reporting
         env:
           REVENUE_DB_PATH: /tmp/revenue_agent.db
         run: |
-          python scripts/record_event.py ci_1 sent
-          python scripts/record_event.py ci_1 reply
-          python scripts/record_event.py ci_1 interested
-          python scripts/record_event.py ci_1 sale --value 100
+          python scripts/record_event.py ci_1 sent || true
+          LEAD_ID=$(python - <<'PY'
+          import sqlite3
+          c=sqlite3.connect('/tmp/revenue_agent.db')
+          print(c.execute('select id from leads limit 1').fetchone()[0])
+          PY
+          )
+          python scripts/record_event.py "$LEAD_ID" sent
+          python scripts/record_event.py "$LEAD_ID" followup_sent
+          python scripts/record_event.py "$LEAD_ID" reply
+          python scripts/record_event.py "$LEAD_ID" interested
+          python scripts/record_event.py "$LEAD_ID" sale --value 100
           python scripts/revenue_report.py > /tmp/report.json
           python - <<'PY'
           import json
