@@ -1,33 +1,28 @@
 # AI Revenue Agent
 
-AI Revenue Agent is an automation-first revenue pipeline for finding or ingesting business prospects, qualifying them, generating a tailored offer, tracking state, and feeding safe outreach workflows.
+AI Revenue Agent is an automation-first revenue pipeline for ingesting business prospects, qualifying them, generating tailored offers, tracking lifecycle state, and feeding approved outreach workflows.
 
 ## Current revenue offer
 
 Default offer: **AI Customer Response System — $100 one-time**.
 
-The offer is configurable with `OFFER_NAME` and `OFFER_PRICE`.
+Configure with `OFFER_NAME` and `OFFER_PRICE`.
 
-## Revenue loop
+## Automated revenue loop
 
-1. Ingest leads from a configured JSON/API source.
+1. Ingest leads from `LEADS_JSON` or `LEADS_API_URL`.
 2. Normalize and deduplicate prospects.
 3. Score each prospect for sales readiness.
 4. Generate a personalized outreach draft.
 5. Persist lead state and events in SQLite.
-6. Return qualified drafts to n8n.
-7. Only put a lead in `contact_ready` when `contact_allowed=true`.
-8. Downstream workflows can send, track replies, record sales, and optimize conversion.
+6. Hourly n8n workflow returns only qualified `contact_ready` leads.
+7. Approved downstream senders can deliver the outreach.
+8. Reply, interest, meeting, sale, refund, and opt-out events are recorded.
+9. Revenue reporting measures conversion rates and revenue per outreach.
 
 ## Lead input
 
-Set either:
-
-- `LEADS_JSON` — a JSON array or `{ "leads": [...] }`
-- `LEADS_API_URL` — an HTTP endpoint returning JSON or CSV
-- `LEADS_API_TOKEN` — optional bearer token
-
-Recommended lead fields:
+Recommended fields:
 
 ```json
 {
@@ -42,12 +37,12 @@ Recommended lead fields:
 }
 ```
 
-`contact_allowed` defaults to false. Keep it false unless the configured outreach channel and source permit contacting that prospect.
+`contact_allowed` defaults to false. Keep it false unless the configured source/channel permits contacting that prospect.
 
-## Run the revenue engine
+## Run manually
 
 ```bash
-python3 scripts/revenue_cycle.py
+python3 scripts/fetch_leads.py | python3 scripts/revenue_cycle.py
 ```
 
 Useful environment variables:
@@ -57,11 +52,33 @@ Useful environment variables:
 - `MAX_OUTREACH_PER_RUN` (default `20`)
 - `OFFER_PRICE` (default `100`)
 - `OFFER_NAME` (default `AI Customer Response System`)
+- `LEADS_JSON`
+- `LEADS_API_URL`
+- `LEADS_API_TOKEN`
+
+## Record lifecycle and revenue events
+
+```bash
+python3 scripts/record_event.py LEAD_ID sent
+python3 scripts/record_event.py LEAD_ID reply
+python3 scripts/record_event.py LEAD_ID interested
+python3 scripts/record_event.py LEAD_ID meeting
+python3 scripts/record_event.py LEAD_ID sale --value 100
+python3 scripts/record_event.py LEAD_ID opt_out
+```
+
+Generate the current funnel report:
+
+```bash
+python3 scripts/revenue_report.py
+```
+
+The report includes lead counts, qualified prospects, sent messages, replies, interested leads, meetings, sales, reply/interest/close rates, gross and net revenue, and revenue per sent message.
 
 ## n8n
 
-The existing `workflow.json` runs hourly and can continue using `scripts/fetch_leads.py`. The next workflow upgrade should pipe fetched leads through `scripts/revenue_cycle.py`, then route `contact_ready` leads to an approved sending channel and log delivery/reply/payment events.
+`workflow.json` runs every hour, pipes the configured lead source through `revenue_cycle.py`, and emits only qualified prospects that pass the explicit contact gate. Connect its output to an approved sending channel, then call `record_event.py` from delivery/reply/payment workflows so the agent can optimize against actual outcomes.
 
 ## Safety and deliverability
 
-Do not blindly scrape and mass-message addresses. Use legitimate lead sources, honor opt-outs and channel rules, rate-limit outreach, keep suppression lists, and preserve human review for unusual/high-impact communications. The agent is designed to optimize sustainable revenue rather than spam volume.
+Do not blindly scrape and mass-message addresses. Use legitimate lead sources, honor opt-outs and channel rules, maintain suppression lists, rate-limit outreach, and preserve human review for unusual or high-impact communications. Optimize sustainable revenue and trust, not spam volume.
