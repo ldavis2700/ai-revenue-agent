@@ -15,7 +15,7 @@ def now_iso():
 def main():
     parser = argparse.ArgumentParser(description='Record a revenue lifecycle event for a lead.')
     parser.add_argument('lead_id')
-    parser.add_argument('event_type', choices=['sent', 'delivered', 'reply', 'interested', 'not_interested', 'meeting', 'sale', 'refund', 'opt_out'])
+    parser.add_argument('event_type', choices=['sent', 'followup_sent', 'delivered', 'reply', 'interested', 'not_interested', 'meeting', 'sale', 'refund', 'opt_out'])
     parser.add_argument('--value', type=float, default=0)
     parser.add_argument('--metadata', default='{}')
     args = parser.parse_args()
@@ -31,6 +31,7 @@ def main():
 
     status_map = {
         'sent': 'contacted',
+        'followup_sent': 'followed_up',
         'reply': 'replied',
         'interested': 'interested',
         'not_interested': 'closed_lost',
@@ -47,18 +48,12 @@ def main():
             pass
     conn.commit()
 
-    totals = dict(conn.execute('''SELECT
+    row = conn.execute('''SELECT
         COALESCE(SUM(CASE WHEN event_type='sale' THEN value ELSE 0 END),0),
         COALESCE(SUM(CASE WHEN event_type='refund' THEN value ELSE 0 END),0),
         COUNT(CASE WHEN event_type='sale' THEN 1 END)
-        FROM events''').fetchone() and zip(
-            ['gross_revenue', 'refunds', 'sales'],
-            conn.execute('''SELECT
-                COALESCE(SUM(CASE WHEN event_type='sale' THEN value ELSE 0 END),0),
-                COALESCE(SUM(CASE WHEN event_type='refund' THEN value ELSE 0 END),0),
-                COUNT(CASE WHEN event_type='sale' THEN 1 END)
-                FROM events''').fetchone()
-        ))
+        FROM events''').fetchone()
+    totals = dict(zip(['gross_revenue', 'refunds', 'sales'], row))
     totals['net_revenue'] = totals['gross_revenue'] - totals['refunds']
     print(json.dumps({'ok': True, 'lead_id': args.lead_id, 'event_type': args.event_type, 'totals': totals}))
 
