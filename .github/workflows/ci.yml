@@ -28,37 +28,55 @@ jobs:
           assert data['metrics']['contact_ready'] == 1
           assert data['contact_ready'][0]['outreach']['score'] >= 55
           PY
-      - name: Smoke test next actions
-        env:
-          REVENUE_DB_PATH: /tmp/revenue_agent.db
+      - name: Smoke test outbound policy
         run: |
-          python scripts/next_actions.py > /tmp/actions.json
+          python scripts/outbound_policy.py --json '{"channel":"sms","consent":false,"contact_allowed":true}' > /tmp/sms_blocked.json
+          python scripts/outbound_policy.py --json '{"channel":"sms","consent":true,"contact_allowed":true}' > /tmp/sms_allowed.json
           python - <<'PY'
           import json
-          data=json.load(open('/tmp/actions.json'))
-          assert data['count'] == 1
-          assert data['actions'][0]['action'] == 'send_initial'
+          assert json.load(open('/tmp/sms_blocked.json'))['allowed'] is False
+          assert json.load(open('/tmp/sms_allowed.json'))['allowed'] is True
           PY
-      - name: Smoke test revenue events and reporting
+      - name: Smoke test checkout generation and interested action
         env:
           REVENUE_DB_PATH: /tmp/revenue_agent.db
+          CHECKOUT_URL_TEMPLATE: "https://pay.example.test/checkout?lead={lead_id}&email={email}&amount={amount}&offer={offer}"
         run: |
-          python scripts/record_event.py ci_1 sent || true
           LEAD_ID=$(python - <<'PY'
           import sqlite3
           c=sqlite3.connect('/tmp/revenue_agent.db')
           print(c.execute('select id from leads limit 1').fetchone()[0])
           PY
           )
-          python scripts/record_event.py "$LEAD_ID" sent
-          python scripts/record_event.py "$LEAD_ID" followup_sent
-          python scripts/record_event.py "$LEAD_ID" reply
+          python scripts/checkout_link.py "$LEAD_ID" --email jane@example.com > /tmp/checkout.json
           python scripts/record_event.py "$LEAD_ID" interested
-          python scripts/record_event.py "$LEAD_ID" sale --value 100
+          python scripts/next_actions.py > /tmp/actions.json
+          python - <<'PY'
+          import json
+          checkout=json.load(open('/tmp/checkout.json'))
+          actions=json.load(open('/tmp/actions.json'))
+          assert checkout['ready'] is True
+          assert actions['actions'][0]['action'] == 'send_checkout'
+          assert 'pay.example.test' in actions['actions'][0]['checkout_url']
+          PY
+      - name: Smoke test idempotent payment and reporting
+        env:
+          REVENUE_DB_PATH: /tmp/revenue_agent.db
+        run: |
+          LEAD_ID=$(python - <<'PY'
+          import sqlite3
+          c=sqlite3.connect('/tmp/revenue_agent.db')
+          print(c.execute('select id from leads limit 1').fetchone()[0])
+          PY
+          )
+          python scripts/record_payment.py "$LEAD_ID" evt_ci_1 --amount 100 --processor test > /tmp/pay1.json
+          python scripts/record_payment.py "$LEAD_ID" evt_ci_1 --amount 100 --processor test > /tmp/pay2.json
           python scripts/revenue_report.py > /tmp/report.json
           python - <<'PY'
           import json
-          data=json.load(open('/tmp/report.json'))
-          assert data['sales'] == 1
-          assert data['net_revenue'] == 100
+          assert json.load(open('/tmp/pay1.json'))['duplicate'] is False
+          assert json.load(open('/tmp/pay2.json'))['duplicate'] is True
+          report=json.load(open('/tmp/report.json'))
+          assert report['sales'] == 1
+          assert report['net_revenue'] == 100
           PY
