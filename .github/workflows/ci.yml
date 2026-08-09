@@ -1,0 +1,46 @@
+name: Revenue Agent CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile Python
+        run: python -m py_compile scripts/*.py
+      - name: Smoke test revenue cycle
+        env:
+          REVENUE_DB_PATH: /tmp/revenue_agent.db
+          LEADS_JSON: >-
+            [{"id":"ci_1","first_name":"Jane","company_name":"Jane Plumbing","contact_email":"jane@example.com","industry":"Home Services","pain_point":"slow inquiry follow-up","website":"https://example.com","contact_allowed":true,"source":"ci"}]
+        run: |
+          python scripts/revenue_cycle.py > /tmp/result.json
+          python - <<'PY'
+          import json
+          data=json.load(open('/tmp/result.json'))
+          assert data['metrics']['processed'] == 1
+          assert data['metrics']['contact_ready'] == 1
+          assert data['contact_ready'][0]['outreach']['score'] >= 55
+          PY
+      - name: Smoke test revenue events and reporting
+        env:
+          REVENUE_DB_PATH: /tmp/revenue_agent.db
+        run: |
+          python scripts/record_event.py ci_1 sent
+          python scripts/record_event.py ci_1 reply
+          python scripts/record_event.py ci_1 interested
+          python scripts/record_event.py ci_1 sale --value 100
+          python scripts/revenue_report.py > /tmp/report.json
+          python - <<'PY'
+          import json
+          data=json.load(open('/tmp/report.json'))
+          assert data['sales'] == 1
+          assert data['net_revenue'] == 100
+          PY

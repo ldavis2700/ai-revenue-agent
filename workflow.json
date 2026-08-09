@@ -1,5 +1,5 @@
 {
-  "name": "Autonomous Lead Gen & AI Outreach Engine",
+  "name": "Autonomous Revenue Engine",
   "nodes": [
     {
       "parameters": {
@@ -20,23 +20,23 @@
     },
     {
       "parameters": {
-        "command": "/opt/venv/bin/python3 /files/scripts/fetch_leads.py"
+        "command": "/opt/venv/bin/python3 /files/scripts/fetch_leads.py | /opt/venv/bin/python3 /files/scripts/revenue_cycle.py"
       },
       "id": "c1f7b8a1-7d1a-4d22-b8d9-2e02f10b0002",
-      "name": "Run Python Scraper",
+      "name": "Run Revenue Cycle",
       "type": "n8n-nodes-base.executeCommand",
       "typeVersion": 1,
-      "position": [480, 300]
+      "position": [500, 300]
     },
     {
       "parameters": {
-        "jsCode": "const stdout = $input.first().json.stdout;\nconst leads = JSON.parse(stdout);\nreturn leads.map(item => ({ json: item }));"
+        "jsCode": "const result = JSON.parse($input.first().json.stdout || '{}');\nconst ready = result.contact_ready || [];\nreturn ready.map(lead => ({ json: { ...lead, run_metrics: result.metrics || {} } }));"
       },
       "id": "c1f7b8a1-7d1a-4d22-b8d9-2e02f10b0003",
-      "name": "Parse Leads Array",
+      "name": "Emit Contact-Ready Leads",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [700, 300]
+      "position": [760, 300]
     }
   ],
   "connections": {
@@ -44,18 +44,18 @@
       "main": [
         [
           {
-            "node": "Run Python Scraper",
+            "node": "Run Revenue Cycle",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Run Python Scraper": {
+    "Run Revenue Cycle": {
       "main": [
         [
           {
-            "node": "Parse Leads Array",
+            "node": "Emit Contact-Ready Leads",
             "type": "main",
             "index": 0
           }
