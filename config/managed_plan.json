@@ -1,0 +1,23 @@
+{
+  "experiment_id": "exp-opp-005",
+  "status": "approved_active",
+  "offer_name": "AI Customer Response System",
+  "setup_price_usd": 100,
+  "managed_monthly_price_usd": 99,
+  "offer_mode": "setup_plus_managed",
+  "managed_plan_optional": true,
+  "activation_scope": {
+    "offer_copy": true,
+    "qualified_contact_ready_leads": true,
+    "automatic_outreach": false,
+    "automatic_charging": false,
+    "customer_system_changes": false
+  },
+  "guardrails": [
+    "Only contact leads with explicit contact_allowed=true.",
+    "The $99/month managed plan remains optional after the $100 setup offer.",
+    "Do not charge or enroll a customer without their affirmative purchase/authorization.",
+    "Do not count revenue until a payment is independently verified.",
+    "Preserve opt-out and outbound policy enforcement."
+  ]
+}
