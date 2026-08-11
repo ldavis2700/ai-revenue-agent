@@ -8,13 +8,53 @@ import argparse
 import json
 import os
 import sqlite3
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 
 DB_PATH = os.getenv('REVENUE_DB_PATH', '/files/data/revenue_agent.db')
+APEX_REVENUE_URL = os.getenv('APEX_REVENUE_URL', '').strip()
+APEX_ADMIN_TOKEN = os.getenv('APEX_ADMIN_TOKEN', '').strip()
+APEX_PROPERTY_ID = os.getenv('APEX_PROPERTY_ID', '003').strip()
 
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
+
+
+def forward_to_apex(*, processor_event_id, amount, processor, occurred_at):
+    """Best-effort forward of already-verified revenue into APEX.
+
+    Local payment recording remains the source transaction and must not fail
+    just because APEX is unavailable.
+    """
+    if not APEX_REVENUE_URL or not APEX_ADMIN_TOKEN:
+        return {'enabled': False}
+
+    payload = {
+        'id': processor_event_id,
+        'propertyId': APEX_PROPERTY_ID,
+        'source': f'ai-revenue-agent:{processor}',
+        'type': 'sale',
+        'amountCents': int(round(amount * 100)),
+        'occurredAt': occurred_at,
+        'verified': True,
+    }
+    request = urllib.request.Request(
+        APEX_REVENUE_URL,
+        data=json.dumps(payload).encode('utf-8'),
+        headers={
+            'Authorization': f'Bearer {APEX_ADMIN_TOKEN}',
+            'Content-Type': 'application/json',
+        },
+        method='POST',
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            body = json.loads(response.read().decode('utf-8') or '{}')
+            return {'enabled': True, 'ok': 200 <= response.status < 300, 'response': body}
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as exc:
+        return {'enabled': True, 'ok': False, 'error': str(exc)}
 
 
 def main():
@@ -60,8 +100,15 @@ def main():
     except sqlite3.OperationalError:
         pass
     conn.commit()
+
+    apex = forward_to_apex(
+        processor_event_id=args.processor_event_id,
+        amount=args.amount,
+        processor=args.processor,
+        occurred_at=ts,
+    )
     print(json.dumps({'ok': True, 'duplicate': False, 'lead_id': args.lead_id,
-                      'amount': args.amount, 'currency': args.currency.upper()}))
+                      'amount': args.amount, 'currency': args.currency.upper(), 'apex': apex}))
 
 
 if __name__ == '__main__':
