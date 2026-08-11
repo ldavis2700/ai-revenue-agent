@@ -12,8 +12,10 @@ from datetime import datetime, timezone
 DB_PATH = os.getenv('REVENUE_DB_PATH', '/files/data/revenue_agent.db')
 MIN_SCORE = int(os.getenv('MIN_LEAD_SCORE', '55'))
 MAX_OUTREACH = int(os.getenv('MAX_OUTREACH_PER_RUN', '20'))
-OFFER_PRICE = os.getenv('OFFER_PRICE', '100')
 OFFER_NAME = os.getenv('OFFER_NAME', 'AI Customer Response System')
+SETUP_PRICE = os.getenv('OFFER_SETUP_PRICE', os.getenv('OFFER_PRICE', '100'))
+MANAGED_MONTHLY_PRICE = os.getenv('MANAGED_MONTHLY_PRICE', '99')
+OFFER_MODE = os.getenv('OFFER_MODE', 'setup_plus_managed')
 
 
 def now_iso():
@@ -58,6 +60,24 @@ def score_lead(lead):
     return min(score, 100), reasons
 
 
+def offer_text(company):
+    if OFFER_MODE == 'setup_only':
+        return (
+            f'I can build a tailored {OFFER_NAME} for {company} for a one-time ${SETUP_PRICE}. '
+            'If useful, I can show you exactly what I would build before you decide.'
+        )
+    if OFFER_MODE == 'managed_only':
+        return (
+            f'I can set up and manage a tailored {OFFER_NAME} for {company} for ${MANAGED_MONTHLY_PRICE}/month. '
+            'That includes ongoing response and follow-up optimization. I can show you the system before you decide.'
+        )
+    return (
+        f'I can build a tailored {OFFER_NAME} for {company} for a one-time ${SETUP_PRICE}. '
+        f'If you want ongoing optimization after setup, there is also an optional managed plan at ${MANAGED_MONTHLY_PRICE}/month. '
+        'I can show you exactly what I would build before you decide.'
+    )
+
+
 def build_outreach(lead, score):
     first = lead['first_name'] or 'there'
     company = lead['company_name'] or 'your business'
@@ -68,11 +88,16 @@ def build_outreach(lead, score):
             f'Hi {first},\n\nI came across {company} and noticed an opportunity around {pain}. '
             'I build simple AI-powered customer response systems for businesses that help respond faster, '
             'follow up consistently, and convert more inquiries into customers.\n\n'
-            f'I can build a tailored {OFFER_NAME} for {company} for a one-time ${OFFER_PRICE}. '
-            'If useful, I can show you exactly what I would build before you decide.\n\n'
+            f'{offer_text(company)}\n\n'
             'Best,\nRMC Family Enterprises LLC'
         ),
         'score': score,
+        'offer': {
+            'mode': OFFER_MODE,
+            'name': OFFER_NAME,
+            'setup_price': SETUP_PRICE,
+            'managed_monthly_price': MANAGED_MONTHLY_PRICE,
+        },
     }
 
 
@@ -156,6 +181,8 @@ def main():
         'metrics': {
             'processed': len(leads), 'qualified': len(drafts), 'contact_ready': len(actionable),
             'min_score': MIN_SCORE, 'max_outreach_per_run': MAX_OUTREACH, 'database': DB_PATH,
+            'offer_mode': OFFER_MODE, 'setup_price': SETUP_PRICE,
+            'managed_monthly_price': MANAGED_MONTHLY_PRICE,
         },
         'contact_ready': actionable,
         'drafts': drafts,

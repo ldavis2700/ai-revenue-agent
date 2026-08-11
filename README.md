@@ -4,21 +4,32 @@ AI Revenue Agent is an automation-first revenue pipeline for ingesting business 
 
 ## Current revenue offer
 
-Default offer: **AI Customer Response System — $100 one-time**.
+Default offer stack:
 
-Configure with `OFFER_NAME` and `OFFER_PRICE`.
+- **AI Customer Response System setup — $100 one-time**
+- **Optional managed optimization — $99/month**
+
+The recurring managed plan is designed to turn a successful setup into ongoing revenue while keeping the initial purchase simple.
+
+Configure with:
+
+- `OFFER_NAME`
+- `OFFER_SETUP_PRICE` (falls back to legacy `OFFER_PRICE`)
+- `MANAGED_MONTHLY_PRICE`
+- `OFFER_MODE` = `setup_plus_managed`, `setup_only`, or `managed_only`
 
 ## Automated revenue loop
 
 1. Ingest leads from `LEADS_JSON` or `LEADS_API_URL`.
 2. Normalize and deduplicate prospects.
 3. Score each prospect for sales readiness.
-4. Generate a personalized outreach draft.
+4. Generate a personalized outreach draft with the configured offer stack.
 5. Persist lead state and events in SQLite.
 6. Hourly n8n workflow returns only qualified `contact_ready` leads.
 7. Approved downstream senders can deliver the outreach.
 8. Reply, interest, meeting, sale, refund, and opt-out events are recorded.
 9. Revenue reporting measures conversion rates and revenue per outreach.
+10. Successful setup customers can be moved into the managed monthly plan where appropriate.
 
 ## Lead input
 
@@ -50,8 +61,10 @@ Useful environment variables:
 - `REVENUE_DB_PATH` (default `/files/data/revenue_agent.db`)
 - `MIN_LEAD_SCORE` (default `55`)
 - `MAX_OUTREACH_PER_RUN` (default `20`)
-- `OFFER_PRICE` (default `100`)
 - `OFFER_NAME` (default `AI Customer Response System`)
+- `OFFER_SETUP_PRICE` (default `100`, legacy fallback: `OFFER_PRICE`)
+- `MANAGED_MONTHLY_PRICE` (default `99`)
+- `OFFER_MODE` (default `setup_plus_managed`)
 - `LEADS_JSON`
 - `LEADS_API_URL`
 - `LEADS_API_TOKEN`
