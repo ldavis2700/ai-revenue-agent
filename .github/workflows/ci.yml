@@ -15,6 +15,18 @@ jobs:
           python-version: '3.12'
       - name: Compile Python
         run: python -m py_compile scripts/*.py
+      - name: Smoke test industry templates
+        run: |
+          python scripts/render_industry_template.py home_services --company 'Jane Plumbing' --first-name Jane --service 'water heater repair' > /tmp/template.json
+          python - <<'PY'
+          import json
+          data=json.load(open('/tmp/template.json'))
+          assert data['industry_key'] == 'home_services'
+          assert data['company'] == 'Jane Plumbing'
+          assert 'Jane Plumbing' in data['responses']['new_inquiry']
+          assert 'water heater repair' in data['responses']['follow_up']
+          assert len(data['responses']) == 7
+          PY
       - name: Smoke test CSV import and revenue cycle
         env:
           REVENUE_DB_PATH: /tmp/revenue_agent.db
