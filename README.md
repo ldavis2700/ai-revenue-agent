@@ -90,6 +90,27 @@ APEX_API_KEY=<server-side Supabase secret key>
 
 Legacy APEX deployments remain supported by leaving `APEX_AUTH_MODE=bearer` and providing `APEX_ADMIN_TOKEN`.
 
+## Referral / partner attribution (prepared, disabled by default)
+
+`scripts/referral_program.py` provides referral-code creation and attribution for clicks, leads, meetings, sales, and attributed revenue. It does **not** send messages, modify pricing, or create/pay commissions.
+
+Write actions stay disabled unless the server environment explicitly contains:
+
+```text
+REFERRAL_PROGRAM_ENABLED=true
+```
+
+Example preparation flow:
+
+```bash
+REFERRAL_PROGRAM_ENABLED=true python3 scripts/referral_program.py create-partner "Partner Name" --code PARTNER1
+REFERRAL_PROGRAM_ENABLED=true python3 scripts/referral_program.py record PARTNER1 lead --lead-id LEAD_ID
+REFERRAL_PROGRAM_ENABLED=true python3 scripts/referral_program.py record PARTNER1 sale --lead-id LEAD_ID --value 100
+python3 scripts/referral_program.py report
+```
+
+Referral payouts remain disabled in this implementation. Any commission amount, partner agreement, automatic outreach, or payment action requires a separate business decision and authorization.
+
 ## Record lifecycle and revenue events
 
 ```bash
