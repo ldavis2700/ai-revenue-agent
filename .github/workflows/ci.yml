@@ -15,6 +15,30 @@ jobs:
           python-version: '3.12'
       - name: Compile Python
         run: python -m py_compile scripts/*.py
+      - name: Smoke test Supabase APEX request contract
+        env:
+          APEX_REVENUE_URL: https://example.supabase.co/functions/v1/apex-runtime
+          APEX_AUTH_MODE: supabase_edge
+          APEX_API_KEY: test_secret_key
+          APEX_PROPERTY_ID: '003'
+        run: |
+          python - <<'PY'
+          import importlib.util, json
+          spec=importlib.util.spec_from_file_location('record_payment','scripts/record_payment.py')
+          mod=importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(mod)
+          req=mod.build_apex_request(processor_event_id='evt_contract_1', amount=100, currency='usd', processor='test', occurred_at='2026-08-11T00:00:00+00:00')
+          assert req is not None
+          assert req.headers['Apikey'] == 'test_secret_key'
+          assert 'Authorization' not in req.headers
+          payload=json.loads(req.data.decode())
+          assert payload['action'] == 'ingest_verified_revenue'
+          assert payload['propertyId'] == '003'
+          assert payload['externalEventId'] == 'evt_contract_1'
+          assert payload['amountCents'] == 10000
+          assert payload['currency'] == 'USD'
+          assert payload['verified'] is True
+          PY
       - name: Smoke test industry templates
         run: |
           python scripts/render_industry_template.py home_services --company 'Jane Plumbing' --first-name Jane --service 'water heater repair' > /tmp/template.json

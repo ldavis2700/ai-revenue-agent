@@ -69,6 +69,27 @@ Useful environment variables:
 - `LEADS_API_URL`
 - `LEADS_API_TOKEN`
 
+## APEX verified-revenue integration
+
+The production APEX Supabase Edge runtime is:
+
+```text
+https://wuzmqruxdclstezitsbf.supabase.co/functions/v1/apex-runtime
+```
+
+For the live Supabase runtime, configure the Revenue Agent backend with:
+
+```text
+APEX_REVENUE_URL=https://wuzmqruxdclstezitsbf.supabase.co/functions/v1/apex-runtime
+APEX_AUTH_MODE=supabase_edge
+APEX_PROPERTY_ID=003
+APEX_API_KEY=<server-side Supabase secret key>
+```
+
+`APEX_API_KEY` must remain server-side and must never be committed to Git or exposed to browser/mobile clients. When configured, `record_payment.py` forwards only already-verified processor payments to APEX using the protected `ingest_verified_revenue` action. APEX forwarding is best-effort: a temporary APEX failure does not undo or lose the local payment record.
+
+Legacy APEX deployments remain supported by leaving `APEX_AUTH_MODE=bearer` and providing `APEX_ADMIN_TOKEN`.
+
 ## Record lifecycle and revenue events
 
 ```bash
