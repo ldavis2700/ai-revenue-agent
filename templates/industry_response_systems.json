@@ -1,0 +1,67 @@
+{
+  "home_services": {
+    "label": "Home Services",
+    "positioning": "Turn missed calls and estimate requests into booked jobs faster.",
+    "responses": {
+      "new_inquiry": "Thanks for reaching out to {company}. We can help with {service}. What address or ZIP code is the job in, and what would you like us to take a look at?",
+      "quote_request": "Absolutely. To give you the most useful estimate, please send the service needed, location, timing, and any photos or details you have. We’ll confirm the next best step.",
+      "missed_call": "Sorry we missed your call. This is {company}. What can we help you with today? Reply here with the service you need and your ZIP code and we’ll follow up.",
+      "follow_up": "Hi {first_name}, just checking back on your {service} request. If you still need help, I can get the next step lined up for you.",
+      "review_request": "Thanks for choosing {company}. If everything went well, would you mind leaving a quick review? It really helps a local business like ours.",
+      "repeat_offer": "Hi {first_name}, thanks again for working with {company}. If anything else comes up, we’re happy to help—and we can also schedule routine maintenance if useful.",
+      "faq": "We can help answer questions about service areas, scheduling, estimates, availability, and what to expect before the appointment."
+    }
+  },
+  "salon_spa": {
+    "label": "Salon & Spa",
+    "positioning": "Convert appointment questions into bookings and bring past clients back.",
+    "responses": {
+      "new_inquiry": "Thanks for contacting {company}. What service are you interested in, and what day or time works best for you?",
+      "quote_request": "Happy to help. Pricing depends on the service and any add-ons. Tell me what you’re looking for and I’ll point you to the right option.",
+      "missed_call": "Sorry we missed you at {company}. If you were calling to book, reply with the service you want and your preferred day/time and we’ll help from there.",
+      "follow_up": "Hi {first_name}, checking back in case you still wanted to book your {service}. I can help you get the next step sorted out.",
+      "review_request": "Thank you for visiting {company}. If you loved your service, a quick review would mean a lot to our team.",
+      "repeat_offer": "Hi {first_name}, it may be time for your next visit. Want help finding a time for your usual service at {company}?",
+      "faq": "We can answer common questions about services, appointment timing, preparation, cancellation policies, and availability."
+    }
+  },
+  "auto_repair": {
+    "label": "Auto Repair",
+    "positioning": "Respond quickly to service requests and turn estimates into scheduled repairs.",
+    "responses": {
+      "new_inquiry": "Thanks for contacting {company}. What vehicle do you have, and what issue or service do you need help with?",
+      "quote_request": "We can help with an estimate. Please send the year, make, model, mileage, and the service or symptoms you’re seeing. Final pricing may depend on inspection and parts.",
+      "missed_call": "Sorry we missed your call at {company}. Reply with your vehicle year/make/model and what’s going on, and we’ll help you with the next step.",
+      "follow_up": "Hi {first_name}, just following up on your vehicle service request. If you still need help, we can work on getting you scheduled.",
+      "review_request": "Thanks for trusting {company} with your vehicle. If you were happy with the service, we’d appreciate a quick review.",
+      "repeat_offer": "Hi {first_name}, checking in from {company}. If you’re due for maintenance or have another vehicle concern, we’re here to help.",
+      "faq": "We can answer common questions about scheduling, diagnostics, estimates, parts, service timing, and pickup."
+    }
+  },
+  "restaurant": {
+    "label": "Restaurants",
+    "positioning": "Turn questions, catering requests, and missed messages into reservations and orders.",
+    "responses": {
+      "new_inquiry": "Thanks for contacting {company}. Are you looking for a reservation, takeout, catering, or information about the menu?",
+      "quote_request": "We’d be happy to help with your event or catering request. Please share the date, estimated guest count, location, and what you have in mind.",
+      "missed_call": "Sorry we missed your call at {company}. Reply with what you need—reservation, takeout, catering, or a menu question—and we’ll point you in the right direction.",
+      "follow_up": "Hi {first_name}, following up on your request to {company}. If you still need help, just reply and we’ll continue from there.",
+      "review_request": "Thanks for dining with {company}. If you enjoyed your experience, we’d really appreciate a quick review.",
+      "repeat_offer": "Hi {first_name}, we’d love to welcome you back to {company}. Reach out anytime if you’d like help with a reservation, takeout, or catering.",
+      "faq": "We can answer common questions about hours, menu items, reservations, takeout, catering, and group dining."
+    }
+  },
+  "fitness_studio": {
+    "label": "Fitness Studios",
+    "positioning": "Convert class and membership questions into trials, visits, and memberships.",
+    "responses": {
+      "new_inquiry": "Thanks for reaching out to {company}. Are you interested in classes, personal training, a trial visit, or membership information?",
+      "quote_request": "Happy to help with pricing. Tell me what you’re interested in—classes, training, or membership—and how often you’d like to attend.",
+      "missed_call": "Sorry we missed you at {company}. Reply with what you’re interested in and the best time for you, and we’ll help with the next step.",
+      "follow_up": "Hi {first_name}, checking back on your interest in {company}. If you still want to try us out, I can help you figure out the next step.",
+      "review_request": "Thanks for being part of {company}. If you’ve had a great experience, we’d appreciate a quick review.",
+      "repeat_offer": "Hi {first_name}, we’d love to see you back at {company}. If you want to restart classes or training, we can help make that easy.",
+      "faq": "We can answer common questions about class schedules, memberships, trials, cancellations, amenities, and what to bring."
+    }
+  }
+}
