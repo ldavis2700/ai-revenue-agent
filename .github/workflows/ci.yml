@@ -15,6 +15,34 @@ jobs:
           python-version: '3.12'
       - name: Compile Python
         run: python -m py_compile scripts/*.py
+      - name: Smoke test referral attribution loop
+        env:
+          REVENUE_DB_PATH: /tmp/referral_agent.db
+        run: |
+          set +e
+          python scripts/referral_program.py create-partner 'Partner One' --code PARTNER1 >/tmp/ref-disabled.txt 2>&1
+          DISABLED_STATUS=$?
+          set -e
+          test "$DISABLED_STATUS" -ne 0
+          REFERRAL_PROGRAM_ENABLED=true python scripts/referral_program.py create-partner 'Partner One' --code PARTNER1 > /tmp/ref-partner.json
+          REFERRAL_PROGRAM_ENABLED=true python scripts/referral_program.py record PARTNER1 lead --lead-id lead-1 > /tmp/ref-lead.json
+          REFERRAL_PROGRAM_ENABLED=true python scripts/referral_program.py record PARTNER1 sale --lead-id lead-1 --value 100 > /tmp/ref-sale.json
+          python scripts/referral_program.py report > /tmp/ref-report.json
+          python - <<'PY'
+          import json
+          partner=json.load(open('/tmp/ref-partner.json'))
+          lead=json.load(open('/tmp/ref-lead.json'))
+          sale=json.load(open('/tmp/ref-sale.json'))
+          report=json.load(open('/tmp/ref-report.json'))
+          assert partner['code'] == 'PARTNER1'
+          assert lead['duplicate'] is False
+          assert sale['duplicate'] is False
+          assert report['active_partners'] == 1
+          assert report['leads'] == 1
+          assert report['sales'] == 1
+          assert report['attributed_revenue'] == 100
+          assert report['payouts_enabled'] is False
+          PY
       - name: Smoke test Supabase APEX request contract
         env:
           APEX_REVENUE_URL: https://example.supabase.co/functions/v1/apex-runtime
