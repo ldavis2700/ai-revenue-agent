@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AI Customer Response System | RMC Family Enterprises LLC</title>
+  <meta name="description" content="A practical AI customer response system for small businesses: $100 setup with an optional $99/month managed optimization plan." />
+  <style>
+    :root { color-scheme: light; font-family: Inter, system-ui, sans-serif; }
+    body { margin:0; background:#f7f7f8; color:#171717; }
+    main { max-width:860px; margin:auto; padding:56px 22px 80px; }
+    .card { background:white; border:1px solid #e7e7e8; border-radius:20px; padding:32px; box-shadow:0 12px 35px rgba(0,0,0,.05); }
+    h1 { font-size:clamp(2rem,6vw,3.5rem); line-height:1.03; margin:0 0 18px; }
+    h2 { margin-top:34px; }
+    p, li { font-size:1.05rem; line-height:1.65; }
+    .price { font-size:1.35rem; font-weight:700; margin:22px 0; }
+    .muted { color:#666; }
+    .cta { display:inline-block; margin:10px 10px 0 0; padding:14px 20px; border-radius:12px; background:#171717; color:#fff; text-decoration:none; font-weight:700; }
+    .cta.secondary { background:#ececee; color:#171717; }
+    .disabled { opacity:.55; pointer-events:none; }
+    footer { color:#666; margin-top:28px; font-size:.9rem; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <p class="muted">RMC Family Enterprises LLC</p>
+    <h1>Respond faster. Follow up better. Convert more inquiries.</h1>
+    <p>I build a tailored AI Customer Response System for small businesses that gives you ready-to-use responses for new inquiries, quotes, missed calls, follow-ups, reviews, repeat customers, and common questions.</p>
+
+    <div class="price">$100 one-time setup</div>
+    <p>After setup, ongoing optimization is optional at <strong>$99/month</strong>. Nothing changes and no recurring charge begins unless you affirmatively choose the managed plan.</p>
+
+    <h2>What you receive</h2>
+    <ul>
+      <li>New-customer inquiry responses</li>
+      <li>Pricing and quote-request responses</li>
+      <li>Missed-call and message follow-up</li>
+      <li>Lead follow-up sequences</li>
+      <li>Review-request messages</li>
+      <li>Repeat-customer offers</li>
+      <li>Common-question responses</li>
+    </ul>
+
+    <h2>Before you pay</h2>
+    <p>I can show you what I would build for your business first. The setup purchase and managed-plan enrollment remain separate customer decisions.</p>
+
+    <a id="setup-link" class="cta disabled" href="#">Buy the $100 setup</a>
+    <a id="managed-link" class="cta secondary disabled" href="#">Join the optional $99/month plan</a>
+    <p id="checkout-note" class="muted">Secure checkout links are being connected. Do not publish this page until the correct payment account is configured.</p>
+  </div>
+  <footer>AI Customer Response System · RMC Family Enterprises LLC</footer>
+</main>
+<script>
+  const params = new URLSearchParams(window.location.search);
+  const setup = params.get('setup');
+  const managed = params.get('managed');
+  function enable(id, url) {
+    if (!url || !/^https:\/\//i.test(url)) return;
+    const el = document.getElementById(id);
+    el.href = url;
+    el.classList.remove('disabled');
+  }
+  enable('setup-link', setup);
+  enable('managed-link', managed);
+  if (setup || managed) document.getElementById('checkout-note').textContent = 'Checkout is customer-initiated. The managed plan remains optional.';
+</script>
+</body>
+</html>
