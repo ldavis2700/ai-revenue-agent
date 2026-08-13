@@ -31,6 +31,24 @@ Configure with:
 9. Revenue reporting measures conversion rates and revenue per outreach.
 10. Successful setup customers can be moved into the managed monthly plan where appropriate.
 
+## Mission control
+
+`scripts/mission_control.py` gives the agent a measurable operating mission instead of a vague instruction to "make money." It audits the live funnel, rewards only verified net revenue and conversion quality, chooses the current bottleneck, and records every plan in SQLite.
+
+Run it with:
+
+```bash
+python3 scripts/mission_control.py
+```
+
+Safe defaults are intentionally strict:
+
+- `REVENUE_AGENT_KILL_SWITCH=false`
+- `REVENUE_AGENT_EXECUTION_ENABLED=false`
+- `REVENUE_AGENT_DAILY_RUN_CAP=0`
+
+With those defaults, the agent may analyze, prioritize, draft, and prepare, but it may not take external actions. A nonzero daily cap and explicit execution enablement are both required before an approved runtime may act. Spending, contracts, automatic charging, customer-system changes, and irreversible production changes remain approval-gated regardless.
+
 ## Lead input
 
 Recommended fields:
