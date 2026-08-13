@@ -135,6 +135,14 @@
   const params = new URLSearchParams(window.location.search);
   const setup = params.get('setup');
   const managed = params.get('managed');
+  function campaignTag(name) {
+    return (params.get(name) || '').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 80);
+  }
+  const campaign = [
+    campaignTag('utm_source'),
+    campaignTag('utm_medium'),
+    campaignTag('utm_campaign')
+  ].filter(Boolean).join('/');
   function enable(id, url) {
     if (!url || !/^https:\/\//i.test(url)) return;
     const el = document.getElementById(id);
@@ -162,6 +170,7 @@
     payload.contact_consent = form.elements.contact_consent.checked;
     payload.privacy_acknowledged = form.elements.privacy_acknowledged.checked;
     payload.consent_version = 'contact-v1';
+    if (campaign) payload.campaign = campaign;
     try {
       const response = await fetch(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
       if (!response.ok) throw new Error('request_failed');
