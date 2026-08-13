@@ -4,7 +4,8 @@
   "trailingSlash": false,
   "rewrites": [
     { "source": "/", "destination": "/sales/offer.html" },
-    { "source": "/privacy", "destination": "/sales/privacy.html" }
+    { "source": "/privacy", "destination": "/sales/privacy.html" },
+    { "source": "/home-services", "destination": "/sales/home-services.html" }
   ],
   "headers": [
     {
