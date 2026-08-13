@@ -118,6 +118,20 @@ APEX_API_KEY=<server-side Supabase secret key>
 
 `APEX_API_KEY` must remain server-side and must never be committed to Git or exposed to browser/mobile clients. When configured, `record_payment.py` forwards only already-verified processor payments to APEX using the protected `ingest_verified_revenue` action. APEX forwarding is best-effort: a temporary APEX failure does not undo or lose the local payment record.
 
+### Stripe revenue webhook
+
+The Supabase Edge Function in `supabase/functions/stripe-revenue` is the production bridge for verified Stripe revenue. It:
+
+- verifies the raw request body with `STRIPE_REVENUE_WEBHOOK_SECRET` and rejects stale or invalid signatures;
+- accepts only paid `checkout.session.completed` and `invoice.paid` events;
+- records each Stripe event exactly once in `verified_revenue_events`;
+- stores a customer email hash rather than a plaintext payment email and links to a consented inbound lead when hashes match; and
+- leaves the revenue table protected by RLS with no public client policy.
+
+Production endpoint: `https://wuzmqruxdclstezitsbf.supabase.co/functions/v1/stripe-revenue`
+
+Activation requires an owner-controlled Stripe webhook endpoint subscribed to `checkout.session.completed` and `invoice.paid`, plus its signing secret stored as the Supabase secret `STRIPE_REVENUE_WEBHOOK_SECRET`. Never commit or paste the signing secret into source, client code, logs, issues, or pull requests. Until the secret is configured, the deployed endpoint intentionally returns `503 service_not_configured` and cannot record events.
+
 Legacy APEX deployments remain supported by leaving `APEX_AUTH_MODE=bearer` and providing `APEX_ADMIN_TOKEN`.
 
 ## Referral / partner attribution (prepared, disabled by default)
