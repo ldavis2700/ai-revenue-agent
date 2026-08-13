@@ -68,6 +68,18 @@ Recommended fields:
 
 `contact_allowed` defaults to false. Keep it false unless the configured source/channel permits contacting that prospect.
 
+### Zero-budget owned inbound intake
+
+`scripts/capture_inbound_lead.py` turns affirmative website-form requests into normalized, contact-permitted leads. It fails closed unless the submission includes a valid business email, company name, explicit contact consent, and privacy acknowledgement. A honeypot field rejects basic bot submissions, and the consent audit stores an email hash rather than duplicating the address.
+
+```bash
+echo '{"email":"owner@example.com","company":"Example Co","contact_consent":true,"privacy_acknowledged":true}' \\
+  | python3 scripts/capture_inbound_lead.py \\
+  | python3 scripts/revenue_cycle.py
+```
+
+An approved deployment should map its form checkbox to `contact_consent`, link the current privacy notice, keep the optional `website_confirm` field hidden from people, and pass a version identifier in `consent_version`. This adapter prepares and audits the lead; it does not send outreach.
+
 ## Run manually
 
 ```bash
