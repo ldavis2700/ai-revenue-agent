@@ -107,6 +107,10 @@ Deno.serve(async (req: Request) => {
     return json({ received: false, error: "invalid_json" }, 400);
   }
 
+  if (event.livemode !== true) {
+    return json({ received: true, ignored: true, reason: "non_live_event" });
+  }
+
   const payment = paidEvent(event);
   if (!payment) return json({ received: true, ignored: true });
   if (!Number.isInteger(payment.amount) || payment.amount <= 0) {
