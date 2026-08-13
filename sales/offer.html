@@ -55,7 +55,7 @@
     <a id="setup-link" class="cta disabled" href="#">Buy the $100 setup</a>
     <a id="managed-link" class="cta secondary disabled" href="#">Join the optional $99/month plan</a>
     <p id="checkout-note" class="muted">Secure checkout links are being connected. Do not publish this page until the correct payment account is configured.</p>
-    <form id="lead-form" data-lead-endpoint="">
+    <form id="lead-form" data-lead-endpoint="https://wuzmqruxdclstezitsbf.supabase.co/functions/v1/revenue-inbound">
       <h2>See what I would build first</h2>
       <p>Tell me about your business. Submitting this form does not purchase or enroll you in anything.</p>
       <label for="first-name">First name</label><input id="first-name" name="first_name" autocomplete="given-name" />
@@ -64,7 +64,7 @@
       <label for="pain">What customer-response problem should I solve?</label><textarea id="pain" name="pain_point" rows="3"></textarea>
       <div class="hp" aria-hidden="true"><label for="website-confirm">Leave blank</label><input id="website-confirm" name="website_confirm" tabindex="-1" autocomplete="off" /></div>
       <label class="consent"><input name="contact_consent" type="checkbox" required /><span>I agree that RMC Family Enterprises LLC may contact me about this request. I can opt out at any time.</span></label>
-      <label class="consent"><input name="privacy_acknowledged" type="checkbox" required /><span>I acknowledge the <a href="/privacy" target="_blank" rel="noopener">privacy notice</a>.</span></label>
+      <label class="consent"><input name="privacy_acknowledged" type="checkbox" required /><span>I acknowledge the <a href="/privacy.html" target="_blank" rel="noopener">privacy notice</a>.</span></label>
       <button id="lead-submit" class="cta disabled" type="submit" disabled>Request my preview</button>
       <p id="lead-status" class="muted">Lead intake is being connected. The form will activate only after its secure endpoint is verified.</p>
     </form>
