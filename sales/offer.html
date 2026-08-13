@@ -18,6 +18,13 @@
     .cta { display:inline-block; margin:10px 10px 0 0; padding:14px 20px; border-radius:12px; background:#171717; color:#fff; text-decoration:none; font-weight:700; }
     .cta.secondary { background:#ececee; color:#171717; }
     .disabled { opacity:.55; pointer-events:none; }
+    form { margin-top:30px; padding-top:26px; border-top:1px solid #e7e7e8; }
+    label { display:block; font-weight:650; margin:14px 0 6px; }
+    input, textarea { box-sizing:border-box; width:100%; padding:12px; border:1px solid #cfcfd2; border-radius:10px; font:inherit; }
+    .consent { display:flex; gap:10px; align-items:flex-start; font-weight:400; }
+    .consent input { width:auto; margin-top:6px; }
+    .hp { position:absolute; left:-10000px; }
+    button.cta { border:0; cursor:pointer; }
     footer { color:#666; margin-top:28px; font-size:.9rem; }
   </style>
 </head>
@@ -48,6 +55,19 @@
     <a id="setup-link" class="cta disabled" href="#">Buy the $100 setup</a>
     <a id="managed-link" class="cta secondary disabled" href="#">Join the optional $99/month plan</a>
     <p id="checkout-note" class="muted">Secure checkout links are being connected. Do not publish this page until the correct payment account is configured.</p>
+    <form id="lead-form" data-lead-endpoint="">
+      <h2>See what I would build first</h2>
+      <p>Tell me about your business. Submitting this form does not purchase or enroll you in anything.</p>
+      <label for="first-name">First name</label><input id="first-name" name="first_name" autocomplete="given-name" />
+      <label for="company">Business name</label><input id="company" name="company_name" autocomplete="organization" required />
+      <label for="email">Business email</label><input id="email" name="contact_email" type="email" autocomplete="email" required />
+      <label for="pain">What customer-response problem should I solve?</label><textarea id="pain" name="pain_point" rows="3"></textarea>
+      <div class="hp" aria-hidden="true"><label for="website-confirm">Leave blank</label><input id="website-confirm" name="website_confirm" tabindex="-1" autocomplete="off" /></div>
+      <label class="consent"><input name="contact_consent" type="checkbox" required /><span>I agree that RMC Family Enterprises LLC may contact me about this request. I can opt out at any time.</span></label>
+      <label class="consent"><input name="privacy_acknowledged" type="checkbox" required /><span>I acknowledge the <a href="/privacy" target="_blank" rel="noopener">privacy notice</a>.</span></label>
+      <button id="lead-submit" class="cta disabled" type="submit" disabled>Request my preview</button>
+      <p id="lead-status" class="muted">Lead intake is being connected. The form will activate only after its secure endpoint is verified.</p>
+    </form>
   </div>
   <footer>AI Customer Response System · RMC Family Enterprises LLC</footer>
 </main>
@@ -64,6 +84,34 @@
   enable('setup-link', setup);
   enable('managed-link', managed);
   if (setup || managed) document.getElementById('checkout-note').textContent = 'Checkout is customer-initiated. The managed plan remains optional.';
+  const form = document.getElementById('lead-form');
+  const endpoint = form.dataset.leadEndpoint;
+  const submit = document.getElementById('lead-submit');
+  const status = document.getElementById('lead-status');
+  if (/^https:\/\//i.test(endpoint)) {
+    submit.disabled = false;
+    submit.classList.remove('disabled');
+    status.textContent = 'Your information is used only to respond to this request.';
+  }
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!/^https:\/\//i.test(endpoint)) return;
+    submit.disabled = true;
+    status.textContent = 'Sending securely…';
+    const payload = Object.fromEntries(new FormData(form).entries());
+    payload.contact_consent = form.elements.contact_consent.checked;
+    payload.privacy_acknowledged = form.elements.privacy_acknowledged.checked;
+    payload.consent_version = 'contact-v1';
+    try {
+      const response = await fetch(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+      if (!response.ok) throw new Error('request_failed');
+      form.reset();
+      status.textContent = 'Thank you. Your preview request was received.';
+    } catch (_) {
+      status.textContent = 'Your request was not sent. Please try again later.';
+      submit.disabled = false;
+    }
+  });
 </script>
 </body>
 </html>

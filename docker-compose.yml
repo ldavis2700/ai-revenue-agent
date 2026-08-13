@@ -8,6 +8,7 @@ volumes:
   n8n_storage:
   postgres_storage:
   redis_storage:
+  revenue_data:
 
 services:
   postgres:
@@ -61,3 +62,21 @@ services:
     depends_on:
       - postgres
       - redis
+
+  inbound:
+    build:
+      context: .
+      dockerfile: Dockerfile.n8n
+    container_name: revenue_inbound
+    restart: always
+    networks:
+      - ai_agent_network
+    command: ["/opt/venv/bin/python3", "/files/scripts/inbound_server.py"]
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      - REVENUE_DB_PATH=/files/data/revenue_agent.db
+      - INBOUND_ALLOWED_ORIGINS=${INBOUND_ALLOWED_ORIGINS}
+    volumes:
+      - ./scripts:/files/scripts:ro
+      - revenue_data:/files/data
