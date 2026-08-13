@@ -18,3 +18,9 @@ Example shape:
 ```
 
 The buttons remain disabled when URLs are absent. The managed plan is explicitly optional and customer-initiated.
+
+## Consented preview-request form
+
+The form in `offer.html` is disabled until `data-lead-endpoint` contains the verified HTTPS URL for the inbound service's `/leads` route. Configure `INBOUND_ALLOWED_ORIGINS` with the exact public offer-page origin. Keep the service bound to localhost behind an HTTPS reverse proxy; do not expose its plain HTTP port directly.
+
+Before activation, publish a real privacy notice at `/privacy`, verify the final domain and HTTPS certificate, submit a test lead, confirm its consent audit record, and confirm that no message is automatically sent.
