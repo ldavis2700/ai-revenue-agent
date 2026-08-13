@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://ai-revenue-agent-seven.vercel.app/sitemap.xml
