@@ -5,7 +5,9 @@
   "rewrites": [
     { "source": "/", "destination": "/sales/offer" },
     { "source": "/privacy", "destination": "/sales/privacy" },
-    { "source": "/home-services", "destination": "/sales/home-services" }
+    { "source": "/home-services", "destination": "/sales/home-services" },
+    { "source": "/industries", "destination": "/sales/industries" },
+    { "source": "/partners", "destination": "/sales/partners" }
   ],
   "headers": [
     {
