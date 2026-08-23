@@ -54,6 +54,8 @@
     .consent input { width:auto; margin-top:6px; }
     .hp { position:absolute; left:-10000px; }
     button.cta { border:0; cursor:pointer; }
+    .instant-preview { margin-top:24px; }
+    .instant-preview[hidden] { display:none; }
     footer { color:#666; margin-top:28px; font-size:.9rem; }
   </style>
 </head>
@@ -135,6 +137,17 @@
       <label class="consent"><input name="privacy_acknowledged" type="checkbox" required /><span>I acknowledge the <a href="/privacy.html" target="_blank" rel="noopener">privacy notice</a>.</span></label>
       <button id="lead-submit" class="cta disabled" type="submit" disabled>Request my preview</button>
       <p id="lead-status" class="muted">Lead intake is being connected. The form will activate only after its secure endpoint is verified.</p>
+      <section id="instant-preview" class="preview instant-preview" aria-live="polite" hidden>
+        <h2>Your instant starter preview</h2>
+        <p id="instant-summary" class="muted"></p>
+        <div class="preview-grid">
+          <article class="message"><h3>New inquiry</h3><p id="instant-inquiry"></p></article>
+          <article class="message"><h3>Missed call</h3><p id="instant-missed-call"></p></article>
+          <article class="message"><h3>Follow-up</h3><p id="instant-follow-up"></p></article>
+        </div>
+        <p>This starter preview is generated from the business details you submitted. It does not send messages to your customers or enroll you in a paid service.</p>
+        <a class="cta" href="https://buy.stripe.com/28E3cxedvdR92kOb3n87K02">Get the complete $100 setup</a>
+      </section>
     </form>
   </div>
   <footer>AI Customer Response System · RMC Family Enterprises LLC</footer>
@@ -169,6 +182,21 @@
     submit.classList.remove('disabled');
     status.textContent = 'Your information is used only to respond to this request.';
   }
+  function showInstantPreview(payload) {
+    const company = String(payload.company_name || 'your business').trim().slice(0, 80);
+    const problem = String(payload.pain_point || '').trim().replace(/\s+/g, ' ').slice(0, 160);
+    document.getElementById('instant-summary').textContent = problem
+      ? `Starter responses for ${company}, based on your request about: ${problem}`
+      : `Starter customer-response messages for ${company}.`;
+    document.getElementById('instant-inquiry').textContent =
+      `Thanks for reaching out to ${company}. I’d be happy to help. What do you need, and when would you like to get started?`;
+    document.getElementById('instant-missed-call').textContent =
+      `Thanks for calling ${company}. Sorry we missed you. Reply with what you need, your preferred timing, and the best way to reach you.`;
+    document.getElementById('instant-follow-up').textContent =
+      `Just checking in about your request with ${company}. Do you have any questions, or would you like the next available step?`;
+    document.getElementById('instant-preview').hidden = false;
+  }
+
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (!/^https:\/\//i.test(endpoint)) return;
@@ -182,8 +210,9 @@
     try {
       const response = await fetch(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
       if (!response.ok) throw new Error('request_failed');
+      showInstantPreview(payload);
       form.reset();
-      status.textContent = 'Thank you. Your preview request was received.';
+      status.textContent = 'Thank you. Your request was received and your starter preview is ready below.';
     } catch (_) {
       status.textContent = 'Your request was not sent. Please try again later.';
       submit.disabled = false;
