@@ -12,6 +12,8 @@ import subprocess
 import sys
 from datetime import datetime, timezone
 
+from delivery_adapter import deliver
+
 DB_PATH = os.getenv("REVENUE_DB_PATH", "/files/data/revenue_agent.db")
 AUTONOMY_ENABLED = os.getenv("CONSENTED_INBOUND_AUTOMATION_ENABLED", "true").lower() == "true"
 KILL_SWITCH = os.getenv("REVENUE_AGENT_KILL_SWITCH", "false").lower() == "true"
@@ -67,16 +69,19 @@ def route(actions, sources, enabled=AUTONOMY_ENABLED, kill_switch=KILL_SWITCH, c
 def run(path=DB_PATH):
     actions = load_actions(path)
     autonomous, review, blocked = route(actions, lead_sources(path))
+    delivery_results = [deliver(action, path) for action in autonomous]
     return {
         "generated_at": now_iso(),
         "mode": "consented_inbound_autonomy" if AUTONOMY_ENABLED and not KILL_SWITCH else "paused",
         "autonomous_dispatch": autonomous,
         "owner_review": review,
         "blocked": blocked,
+        "delivery_results": delivery_results,
         "counts": {
             "autonomous_dispatch": len(autonomous),
             "owner_review": len(review),
             "blocked": len(blocked),
+            "delivered": sum(1 for result in delivery_results if result["status"] == "delivered"),
         },
         "guardrails": {
             "owned_inbound_only": True,
