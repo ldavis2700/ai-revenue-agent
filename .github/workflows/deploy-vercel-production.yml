@@ -1,0 +1,102 @@
+name: Deploy AI Revenue Agent to Vercel Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Full 40-character commit SHA to deploy
+        required: true
+        default: 4766a33efcaf1790a91961f5e585af33a1c936bc
+      confirm_production:
+        description: Confirm this exact commit may change production
+        required: true
+        type: choice
+        options:
+          - "false"
+          - "true"
+        default: "false"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-revenue-agent-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ inputs.confirm_production == 'true' }}
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      VERCEL_ORG_ID: team_Pq6j0TvljUmrDjXtGTqlyTlr
+      VERCEL_PROJECT_ID: prj_aowAhoa8OWthoQgE5scgyRrNehmt
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    steps:
+      - name: Validate requested commit
+        env:
+          REQUESTED_SHA: ${{ inputs.commit_sha }}
+        run: |
+          if [[ ! "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "commit_sha must be a full lowercase 40-character SHA" >&2
+            exit 1
+          fi
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "The production environment is missing the VERCEL_TOKEN secret" >&2
+            exit 1
+          fi
+
+      - name: Check out the exact requested commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.commit_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify checkout identity
+        env:
+          REQUESTED_SHA: ${{ inputs.commit_sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$REQUESTED_SHA"
+          test -z "$(git status --porcelain)"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install pinned Vercel CLI
+        run: npm install --global vercel@59.4.0
+
+      - name: Build the production artifact
+        run: |
+          vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+          vercel build --prod --token="$VERCEL_TOKEN"
+
+      - name: Deploy the prebuilt artifact to production
+        id: deploy
+        run: |
+          DEPLOYMENT_URL="$(vercel deploy --prebuilt --prod --yes --token="$VERCEL_TOKEN")"
+          test -n "$DEPLOYMENT_URL"
+          echo "deployment_url=$DEPLOYMENT_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Verify approved acquisition routes
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+        run: |
+          curl --fail --silent --show-error --retry 5 --retry-all-errors "$DEPLOYMENT_URL/industries" > /tmp/industries.html
+          curl --fail --silent --show-error --retry 5 --retry-all-errors "$DEPLOYMENT_URL/partners" > /tmp/partners.html
+          grep -Fq 'https://ai-revenue-agent-seven.vercel.app/industries' /tmp/industries.html
+          grep -Fq 'https://ai-revenue-agent-seven.vercel.app/partners' /tmp/partners.html
+
+      - name: Record release evidence
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+          REQUESTED_SHA: ${{ inputs.commit_sha }}
+        run: |
+          {
+            echo "## AI Revenue Agent production release"
+            echo "- Commit: \`$REQUESTED_SHA\`"
+            echo "- Deployment: $DEPLOYMENT_URL"
+            echo "- Verified: \`/industries\` and \`/partners\` returned successfully with expected canonical URLs"
+          } >> "$GITHUB_STEP_SUMMARY"
