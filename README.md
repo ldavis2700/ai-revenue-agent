@@ -181,3 +181,20 @@ The report includes lead counts, qualified prospects, sent messages, replies, in
 ## Safety and deliverability
 
 Do not blindly scrape and mass-message addresses. Use legitimate lead sources, honor opt-outs and channel rules, maintain suppression lists, rate-limit outreach, and preserve human review for unusual or high-impact communications. Optimize sustainable revenue and trust, not spam volume.
+
+
+## Consented inbound autonomy
+
+`autonomous_cycle.py` is the default hourly operations router. It automatically advances routine work only when the lead came through the owned inbound adapter with affirmative contact consent. It separates work into:
+
+- `autonomous_dispatch` — bounded initial replies, follow-ups, or checkout delivery for verified owned inbound requests;
+- `owner_review` — cold/external sources, ambiguous sources, reply interpretation, and actions outside the pre-authorized class; and
+- `blocked` — missing delivery data, disabled autonomy, kill-switch activation, or per-run cap exhaustion.
+
+Safe defaults require no owner action:
+
+- `CONSENTED_INBOUND_AUTOMATION_ENABLED=true`
+- `CONSENTED_INBOUND_PER_RUN_CAP=5`
+- `REVENUE_AGENT_KILL_SWITCH=false`
+
+The router never spends money, signs contracts, changes prices, charges customers, or permits unsolicited outreach. It emits a bounded, consent-verified dispatch queue for an authenticated delivery adapter, which must record successful delivery events idempotently. Until that adapter and an owned inbound endpoint are connected, the agent will continue analyzing and preparing work but cannot contact or close customers autonomously.
