@@ -27,7 +27,7 @@ class AutonomousCycleTests(unittest.TestCase):
         self.assertEqual(review, [])
         self.assertEqual(blocked[0]["blocked_reason"], "autonomy_disabled")
 
-    def test_daily_cap_is_enforced(self):
+    def test_per_run_cap_is_enforced(self):
         actions = [
             {"lead_id": "in_1", "action": "send_initial", "email": "one@example.com"},
             {"lead_id": "in_2", "action": "send_initial", "email": "two@example.com"},
@@ -38,7 +38,7 @@ class AutonomousCycleTests(unittest.TestCase):
             cap=1,
         )
         self.assertEqual(len(dispatched), 1)
-        self.assertEqual(blocked[0]["blocked_reason"], "daily_dispatch_cap_reached")
+        self.assertEqual(blocked[0]["blocked_reason"], "per_run_dispatch_cap_reached")
 
 
 if __name__ == "__main__":
