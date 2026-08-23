@@ -14,7 +14,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile Python
-        run: python -m py_compile scripts/*.py
+        run: python -m py_compile autonomous_cycle.py scripts/*.py
+      - name: Test consented autonomy routing
+        run: python -m unittest discover -s tests -p 'test_autonomous_cycle.py' -v
       - name: Smoke test referral attribution loop
         env:
           REVENUE_DB_PATH: /tmp/referral_agent.db
