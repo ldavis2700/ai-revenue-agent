@@ -20,7 +20,7 @@
     },
     {
       "parameters": {
-        "command": "/opt/venv/bin/python3 /files/scripts/fetch_leads.py | /opt/venv/bin/python3 /files/scripts/revenue_cycle.py"
+        "command": "/opt/venv/bin/python3 /files/scripts/fetch_leads.py | /opt/venv/bin/python3 /files/scripts/revenue_cycle.py > /tmp/revenue-cycle.json && /opt/venv/bin/python3 /files/autonomous_cycle.py"
       },
       "id": "c1f7b8a1-7d1a-4d22-b8d9-2e02f10b0002",
       "name": "Run Revenue Cycle",
@@ -30,10 +30,10 @@
     },
     {
       "parameters": {
-        "jsCode": "const result = JSON.parse($input.first().json.stdout || '{}');\nconst ready = result.contact_ready || [];\nreturn ready.map(lead => ({ json: { ...lead, run_metrics: result.metrics || {} } }));"
+        "jsCode": "const result = JSON.parse($input.first().json.stdout || '{}');\nconst ready = result.autonomous_dispatch || [];\nreturn ready.map(lead => ({ json: { ...lead, run_metrics: result.metrics || {} } }));"
       },
       "id": "c1f7b8a1-7d1a-4d22-b8d9-2e02f10b0003",
-      "name": "Emit Contact-Ready Leads",
+      "name": "Emit Autonomous Consented Actions",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [760, 300]
@@ -55,7 +55,7 @@
       "main": [
         [
           {
-            "node": "Emit Contact-Ready Leads",
+            "node": "Emit Autonomous Consented Actions",
             "type": "main",
             "index": 0
           }
