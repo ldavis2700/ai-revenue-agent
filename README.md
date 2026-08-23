@@ -198,3 +198,15 @@ Safe defaults require no owner action:
 - `REVENUE_AGENT_KILL_SWITCH=false`
 
 The router never spends money, signs contracts, changes prices, charges customers, or permits unsolicited outreach. It emits a bounded, consent-verified dispatch queue for an authenticated delivery adapter, which must record successful delivery events idempotently. Until that adapter and an owned inbound endpoint are connected, the agent will continue analyzing and preparing work but cannot contact or close customers autonomously.
+
+
+### Authenticated delivery adapter
+
+When the owned inbound endpoint and sender are ready, configure the runtime with:
+
+- `DELIVERY_ENABLED=true`
+- `DELIVERY_WEBHOOK_URL=https://...`
+- `DELIVERY_WEBHOOK_TOKEN=<server-side bearer token>`
+- `CONSENTED_INBOUND_DAILY_DELIVERY_CAP=20` (or a lower bounded value)
+
+The endpoint must accept a JSON payload containing `action` and `idempotency_key`, honor the `Idempotency-Key` header, and return a 2xx status only after durable acceptance. The adapter writes one local delivery receipt and lifecycle event only after that response. Duplicate actions, non-HTTPS endpoints, missing authentication, external lead sources, unsupported actions, and daily-cap overflow fail closed. Tokens are never printed or persisted.
