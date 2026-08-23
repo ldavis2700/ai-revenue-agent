@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 DB_PATH = os.getenv("REVENUE_DB_PATH", "/files/data/revenue_agent.db")
 AUTONOMY_ENABLED = os.getenv("CONSENTED_INBOUND_AUTOMATION_ENABLED", "true").lower() == "true"
 KILL_SWITCH = os.getenv("REVENUE_AGENT_KILL_SWITCH", "false").lower() == "true"
-MAX_DISPATCH = max(0, int(os.getenv("CONSENTED_INBOUND_DAILY_CAP", "20")))
+MAX_DISPATCH = max(0, int(os.getenv("CONSENTED_INBOUND_PER_RUN_CAP", "5")))
 OWNED_INBOUND_SOURCE = "owned_inbound_opt_in"
 AUTONOMOUS_ACTIONS = {"send_initial", "send_followup", "send_checkout", "send_managed_checkout"}
 
@@ -58,7 +58,7 @@ def route(actions, sources, enabled=AUTONOMY_ENABLED, kill_switch=KILL_SWITCH, c
         elif not enriched.get("email"):
             blocked.append({**enriched, "blocked_reason": "delivery_address_missing"})
         elif len(autonomous) >= cap:
-            blocked.append({**enriched, "blocked_reason": "daily_dispatch_cap_reached"})
+            blocked.append({**enriched, "blocked_reason": "per_run_dispatch_cap_reached"})
         else:
             autonomous.append(enriched)
     return autonomous, review, blocked
