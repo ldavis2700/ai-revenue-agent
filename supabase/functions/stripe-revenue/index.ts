@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.111.0";
+import { paidEvent } from "./paid-event.mjs";
 
 const PROPERTY_ID = "003";
 const MAX_BODY_BYTES = 256 * 1024;
@@ -59,29 +60,6 @@ async function verifyStripeSignature(body: string, header: string, secret: strin
 async function sha256(value: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function paidEvent(event: Record<string, any>) {
-  const object = event?.data?.object ?? {};
-  if (event.type === "checkout.session.completed" && object.payment_status === "paid") {
-    return {
-      amount: Number(object.amount_total ?? 0),
-      currency: String(object.currency ?? "usd").toUpperCase(),
-      email: String(object.customer_details?.email ?? object.customer_email ?? "").trim().toLowerCase(),
-      paymentReference: String(object.payment_intent ?? object.subscription ?? object.id ?? ""),
-      kind: object.mode === "subscription" ? "subscription_checkout" : "one_time_checkout",
-    };
-  }
-  if (event.type === "invoice.paid") {
-    return {
-      amount: Number(object.amount_paid ?? 0),
-      currency: String(object.currency ?? "usd").toUpperCase(),
-      email: String(object.customer_email ?? "").trim().toLowerCase(),
-      paymentReference: String(object.payment_intent ?? object.id ?? ""),
-      kind: "subscription_invoice",
-    };
-  }
-  return null;
 }
 
 Deno.serve(async (req: Request) => {
