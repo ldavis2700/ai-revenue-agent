@@ -1,0 +1,84 @@
+name: Deploy Consented Inbound Function to Supabase Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_production:
+        description: Deploy the tested revenue-inbound function to production
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: revenue-inbound-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ github.ref == 'refs/heads/main' && inputs.confirm_production }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_ID: wuzmqruxdclstezitsbf
+      ALLOWED_ORIGIN: https://ai-revenue-agent-seven.vercel.app
+
+    steps:
+      - name: Check out the exact selected main commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Verify release prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -f supabase/functions/revenue-inbound/index.ts
+          test -f supabase/functions/revenue-inbound/lead-intake.mjs
+          grep -F 'normalizeLeadPayload(payload)' supabase/functions/revenue-inbound/index.ts
+          grep -F 'payload.contact_consent !== true' supabase/functions/revenue-inbound/lead-intake.mjs
+          grep -F 'payload.privacy_acknowledged !== true' supabase/functions/revenue-inbound/lead-intake.mjs
+          grep -F '[functions.revenue-inbound]' supabase/config.toml
+          grep -A1 -F '[functions.revenue-inbound]' supabase/config.toml | grep -F 'verify_jwt = false'
+
+      - name: Run consented inbound regression tests
+        run: node --test tests/revenue_inbound_validation.test.mjs
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf # v2.1.1
+        with:
+          version: latest
+
+      - name: Deploy only the consented inbound function
+        run: supabase functions deploy revenue-inbound --project-ref "$SUPABASE_PROJECT_ID"
+
+      - name: Verify live origin and consent enforcement
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://${SUPABASE_PROJECT_ID}.supabase.co/functions/v1/revenue-inbound"
+          blocked_status="$(curl --silent --show-error --output /tmp/inbound-blocked.json --write-out '%{http_code}' --request POST "$endpoint" --header 'content-type: application/json' --data '{}')"
+          test "$blocked_status" = "403"
+          grep -F '"origin_not_allowed"' /tmp/inbound-blocked.json
+          consent_status="$(curl --silent --show-error --output /tmp/inbound-consent.json --write-out '%{http_code}' --request POST "$endpoint" --header 'content-type: application/json' --header "origin: $ALLOWED_ORIGIN" --data 'null')"
+          test "$consent_status" = "422"
+          grep -F '"valid_contact_email_required"' /tmp/inbound-consent.json
+          grep -F '"affirmative_contact_consent_required"' /tmp/inbound-consent.json
+          grep -F '"privacy_acknowledgement_required"' /tmp/inbound-consent.json
+
+      - name: Record deployed commit
+        run: |
+          {
+            echo "### Consented inbound production release"
+            echo
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Function: \`revenue-inbound\`"
+            echo "- Project: \`${SUPABASE_PROJECT_ID}\`"
+            echo "- Origin enforcement: passed"
+            echo "- Consent enforcement: passed"
+          } >> "$GITHUB_STEP_SUMMARY"
