@@ -1,2 +1,5 @@
 [functions.revenue-inbound]
 verify_jwt = false
+
+[functions.stripe-revenue]
+verify_jwt = false
