@@ -1,0 +1,79 @@
+name: Deploy Stripe Revenue Function to Supabase Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_production:
+        description: Deploy the tested stripe-revenue function to production
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stripe-revenue-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ github.ref == 'refs/heads/main' && inputs.confirm_production }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_ID: wuzmqruxdclstezitsbf
+
+    steps:
+      - name: Check out the exact selected main commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Verify release prerequisites
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -f supabase/functions/stripe-revenue/index.ts
+          test -f supabase/functions/stripe-revenue/paid-event.mjs
+          grep -F 'object.mode === "payment"' supabase/functions/stripe-revenue/paid-event.mjs
+          grep -F 'event?.type === "invoice.paid"' supabase/functions/stripe-revenue/paid-event.mjs
+          grep -F '[functions.stripe-revenue]' supabase/config.toml
+          grep -A1 -F '[functions.stripe-revenue]' supabase/config.toml | grep -F 'verify_jwt = false'
+
+      - name: Run Stripe revenue regression tests
+        run: node --test tests/stripe_paid_event.test.mjs
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf # v2.1.1
+        with:
+          version: latest
+
+      - name: Deploy only the Stripe revenue function
+        run: supabase functions deploy stripe-revenue --project-ref "$SUPABASE_PROJECT_ID"
+
+      - name: Verify live signature enforcement
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://${SUPABASE_PROJECT_ID}.supabase.co/functions/v1/stripe-revenue"
+          status="$(curl --silent --show-error --output /tmp/stripe-revenue-response.json --write-out '%{http_code}' \
+            --request POST "$endpoint" \
+            --header 'content-type: application/json' \
+            --data '{}')"
+          test "$status" = "400"
+          grep -F '"error":"invalid_signature"' /tmp/stripe-revenue-response.json
+
+      - name: Record deployed commit
+        run: |
+          {
+            echo "### Stripe revenue production release"
+            echo
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Function: \`stripe-revenue\`"
+            echo "- Project: \`${SUPABASE_PROJECT_ID}\`"
+            echo "- Signature enforcement smoke test: passed"
+          } >> "$GITHUB_STEP_SUMMARY"
