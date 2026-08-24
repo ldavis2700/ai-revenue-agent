@@ -14,6 +14,8 @@
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
+    "@graph": [
+    {
     "@type": "Service",
     "name": "AI Customer Response System Setup",
     "description": "A tailored set of ready-to-use customer inquiry, quote, missed-call, follow-up, review-request, repeat-customer, and FAQ responses for small businesses.",
@@ -25,6 +27,33 @@
       "priceCurrency": "USD",
       "url": "https://ai-revenue-agent-seven.vercel.app/"
     }
+  },
+    {
+      "@type": "FAQPage",
+      "mainEntity": [
+        {
+          "@type": "Question",
+          "name": "Does the preview request cost anything?",
+          "acceptedAnswer": {"@type": "Answer", "text": "No. The preview form does not purchase or enroll you in anything."}
+        },
+        {
+          "@type": "Question",
+          "name": "Is the $99 managed plan required?",
+          "acceptedAnswer": {"@type": "Answer", "text": "No. It is an optional monthly service offered separately from the one-time setup."}
+        },
+        {
+          "@type": "Question",
+          "name": "Will the setup automatically message my customers?",
+          "acceptedAnswer": {"@type": "Answer", "text": "No. The setup provides tailored response assets and a practical response system. Customer-system access or automated sending requires separate agreement and authorization."}
+        },
+        {
+          "@type": "Question",
+          "name": "Can I opt out of contact?",
+          "acceptedAnswer": {"@type": "Answer", "text": "Yes. You may opt out at any time."}
+        }
+      ]
+    }
+    ]
   }
   </script>
   <style>
@@ -150,7 +179,7 @@
       </section>
     </form>
   </div>
-  <footer>AI Customer Response System · RMC Family Enterprises LLC</footer>
+  <footer><a href="/industries">Industries</a> · <a href="/partners">Partners</a> · <a href="/privacy">Privacy</a> · RMC Family Enterprises LLC</footer>
 </main>
 <script>
   const params = new URLSearchParams(window.location.search);
