@@ -1,0 +1,94 @@
+name: Deploy AI Revenue Agent Vercel Preview
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Branch, tag, or full commit SHA to deploy as an isolated preview
+        required: true
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ai-revenue-agent-preview-${{ inputs.target_ref }}
+  cancel-in-progress: true
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    env:
+      VERCEL_ORG_ID: team_Pq6j0TvljUmrDjXtGTqlyTlr
+      VERCEL_PROJECT_ID: prj_aowAhoa8OWthoQgE5scgyRrNehmt
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+    steps:
+      - name: Verify preview credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$VERCEL_TOKEN"
+
+      - name: Check out the requested source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          echo "DEPLOYED_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Build isolated preview
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm exec --yes vercel@59.4.0 -- pull --yes --environment=preview --token="$VERCEL_TOKEN"
+          npm exec --yes vercel@59.4.0 -- build --token="$VERCEL_TOKEN"
+
+      - name: Deploy isolated preview
+        id: deploy
+        shell: bash
+        run: |
+          set -euo pipefail
+          DEPLOYMENT_URL="$(npm exec --yes vercel@59.4.0 -- deploy --prebuilt --yes --token="$VERCEL_TOKEN")"
+          test -n "$DEPLOYMENT_URL"
+          echo "deployment_url=$DEPLOYMENT_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Verify acquisition, attribution, and trust routes
+        shell: bash
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+        run: |
+          set -euo pipefail
+          for route in "" home-services industries partners privacy; do
+            curl --fail --silent --show-error --retry 5 --retry-all-errors "$DEPLOYMENT_URL/$route" > "/tmp/${route:-home}.html"
+          done
+          grep -Fq 'https://wuzmqruxdclstezitsbf.supabase.co/functions/v1/revenue-inbound' /tmp/home.html
+          grep -Fq 'showInstantPreview' /tmp/home.html
+          grep -Fq 'client_reference_id' /tmp/home.html
+          grep -Fq 'https://ai-revenue-agent-seven.vercel.app/home-services' /tmp/home-services.html
+          grep -Fq 'https://ai-revenue-agent-seven.vercel.app/industries' /tmp/industries.html
+          grep -Fq 'https://ai-revenue-agent-seven.vercel.app/partners' /tmp/partners.html
+          grep -Fq 'Privacy Notice' /tmp/privacy.html
+
+      - name: Record preview evidence
+        shell: bash
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
+        run: |
+          {
+            echo "## AI Revenue Agent isolated preview"
+            echo "- Source: \`${{ inputs.target_ref }}\`"
+            echo "- Commit: \`$DEPLOYED_SHA\`"
+            echo "- Deployment: $DEPLOYMENT_URL"
+            echo "- Production flag: not used"
+            echo "- Acquisition, attribution, and trust-route checks: passed"
+          } >> "$GITHUB_STEP_SUMMARY"
