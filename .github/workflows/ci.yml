@@ -148,5 +148,7 @@ jobs:
           assert report['sales'] == 1
           assert report['net_revenue'] == 100
           PY
+      - name: Test consented inbound validation
+        run: node --test tests/revenue_inbound_validation.test.mjs
       - name: Test Stripe revenue event normalization
         run: node --test tests/stripe_paid_event.test.mjs
