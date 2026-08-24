@@ -62,12 +62,10 @@ jobs:
         run: |
           set -euo pipefail
           endpoint="https://${SUPABASE_PROJECT_ID}.supabase.co/functions/v1/revenue-inbound"
-
-                    blocked_status="$(curl --silent --show-error --output /tmp/inbound-blocked.json --write-out '%{http_code}' --request POST "$endpoint" --header 'content-type: application/json' --data '{}')"
+          blocked_status="$(curl --silent --show-error --output /tmp/inbound-blocked.json --write-out '%{http_code}' --request POST "$endpoint" --header 'content-type: application/json' --data '{}')"
           test "$blocked_status" = "403"
           grep -F '"origin_not_allowed"' /tmp/inbound-blocked.json
-
-                    consent_status="$(curl --silent --show-error --output /tmp/inbound-consent.json --write-out '%{http_code}' --request POST "$endpoint" --header 'content-type: application/json' --header "origin: $ALLOWED_ORIGIN" --data 'null')"
+          consent_status="$(curl --silent --show-error --output /tmp/inbound-consent.json --write-out '%{http_code}' --request POST "$endpoint" --header 'content-type: application/json' --header "origin: $ALLOWED_ORIGIN" --data 'null')"
           test "$consent_status" = "422"
           grep -F '"valid_contact_email_required"' /tmp/inbound-consent.json
           grep -F '"affirmative_contact_consent_required"' /tmp/inbound-consent.json
