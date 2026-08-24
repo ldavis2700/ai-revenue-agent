@@ -1,0 +1,79 @@
+name: Deploy Verified Revenue Index to Supabase Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_production:
+        description: Apply only the verified revenue lead attribution index
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verified-revenue-index-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: ${{ github.ref == 'refs/heads/main' && inputs.confirm_production }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: production
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_PROJECT_ID: wuzmqruxdclstezitsbf
+      EXPECTED_MIGRATION: supabase/migrations/20260824113000_index_verified_revenue_events_lead_id.sql
+
+    steps:
+      - name: Check out the exact selected main commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Verify single-purpose release scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SUPABASE_ACCESS_TOKEN"
+          test -n "$SUPABASE_DB_PASSWORD"
+          test -f "$EXPECTED_MIGRATION"
+          test "$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | wc -l | tr -d ' ')" = "3"
+          echo "5b48812cde58e7e2142d59de695519d376b48108199caba5da504a29cccb6f74  $EXPECTED_MIGRATION" | sha256sum --check
+          grep -F 'create index if not exists verified_revenue_events_lead_id_idx' "$EXPECTED_MIGRATION"
+          grep -F 'on public.verified_revenue_events (lead_id);' "$EXPECTED_MIGRATION"
+
+      - name: Install Supabase CLI
+        uses: supabase/setup-cli@3c2f5e2ae34c34e428e8e206e2c4d21fa2d20fbf # v2.1.1
+        with:
+          version: latest
+
+      - name: Link the production project
+        run: supabase link --project-ref "$SUPABASE_PROJECT_ID"
+
+      - name: Preview the exact pending migration
+        run: supabase db push --dry-run
+
+      - name: Apply the verified migration
+        run: supabase db push
+
+      - name: Verify migration history
+        shell: bash
+        run: |
+          set -euo pipefail
+          supabase migration list | tee /tmp/migration-list.txt
+          grep -F '20260824113000' /tmp/migration-list.txt
+
+      - name: Record deployed commit
+        run: |
+          {
+            echo "### Verified revenue index production release"
+            echo
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Migration: \`20260824113000_index_verified_revenue_events_lead_id.sql\`"
+            echo "- Project: \`${SUPABASE_PROJECT_ID}\`"
+            echo "- Migration history verification: passed"
+          } >> "$GITHUB_STEP_SUMMARY"
