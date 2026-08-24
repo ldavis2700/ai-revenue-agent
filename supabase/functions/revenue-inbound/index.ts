@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.111.0";
+import { normalizeLeadPayload, text } from "./lead-intake.mjs";
 
 const MAX_BODY_BYTES = 16 * 1024;
 const PROPERTY_ID = "003";
@@ -29,10 +30,6 @@ function json(body: unknown, status: number, origin = "") {
   return new Response(JSON.stringify(body), { status, headers: headers(origin) });
 }
 
-function text(value: unknown, max = 500) {
-  return String(value ?? "").trim().slice(0, max);
-}
-
 async function sha256(value: string) {
   const data = new TextEncoder().encode(value);
   const digest = await crypto.subtle.digest("SHA-256", data);
@@ -61,22 +58,17 @@ Deno.serve(async (req: Request) => {
   const contentLength = Number(req.headers.get("content-length") ?? "0");
   if (contentLength > MAX_BODY_BYTES) return json({ accepted: false, errors: ["invalid_body_size"] }, 413, origin);
 
-  let payload: Record<string, unknown>;
+  let payload: unknown;
   try {
     payload = await req.json();
   } catch {
     return json({ accepted: false, errors: ["invalid_json"] }, 400, origin);
   }
 
-  const email = text(payload.contact_email ?? payload.email, 320).toLowerCase();
-  const company = text(payload.company_name ?? payload.company, 200);
-  const errors: string[] = [];
-  if (text(payload.website_confirm, 100)) errors.push("spam_check_failed");
-  if (!email || !email.includes("@") || email.startsWith("@") || email.endsWith("@")) errors.push("valid_contact_email_required");
-  if (!company) errors.push("company_name_required");
-  if (payload.contact_consent !== true) errors.push("affirmative_contact_consent_required");
-  if (payload.privacy_acknowledged !== true) errors.push("privacy_acknowledgement_required");
-  if (errors.length) return json({ accepted: false, errors }, 422, origin);
+  const normalized = normalizeLeadPayload(payload);
+  if (normalized.errors.length) return json({ accepted: false, errors: normalized.errors }, 422, origin);
+  const { email, company } = normalized;
+  const leadPayload = normalized.payload as Record<string, unknown>;
 
   const url = Deno.env.get("SUPABASE_URL");
   const secretKey = getSecretKey();
@@ -89,18 +81,18 @@ Deno.serve(async (req: Request) => {
     property_id: PROPERTY_ID,
     email,
     email_hash: emailHash,
-    first_name: text(payload.first_name, 100),
+    first_name: text(leadPayload.first_name, 100),
     company_name: company,
-    industry: text(payload.industry, 120),
-    pain_point: text(payload.pain_point, 1000),
-    website: text(payload.website, 500),
+    industry: text(leadPayload.industry, 120),
+    pain_point: text(leadPayload.pain_point, 1000),
+    website: text(leadPayload.website, 500),
     source: "owned_inbound_opt_in",
     status: "new",
     contact_allowed: true,
     privacy_acknowledged: true,
-    consent_version: text(payload.consent_version, 100) || "contact-v1",
+    consent_version: text(leadPayload.consent_version, 100) || "contact-v1",
     consent_recorded_at: now,
-    metadata: { campaign: text(payload.campaign, 120) },
+    metadata: { campaign: text(leadPayload.campaign, 120) },
     updated_at: now,
   }, { onConflict: "property_id,email_hash" }).select("id").single();
 
