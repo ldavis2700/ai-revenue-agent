@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       commit_sha:
-        description: Full 40-character commit SHA to deploy
-        required: true
-        default: 4766a33efcaf1790a91961f5e585af33a1c936bc
+        description: Optional full 40-character commit SHA; blank deploys the selected branch's current commit
+        required: false
+        default: ""
       confirm_production:
         description: Confirm this exact commit may change production
         required: true
@@ -32,10 +32,10 @@ jobs:
       VERCEL_ORG_ID: team_Pq6j0TvljUmrDjXtGTqlyTlr
       VERCEL_PROJECT_ID: prj_aowAhoa8OWthoQgE5scgyRrNehmt
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      REQUESTED_SHA: ${{ inputs.commit_sha || github.sha }}
+    timeout-minutes: 15
     steps:
       - name: Validate requested commit
-        env:
-          REQUESTED_SHA: ${{ inputs.commit_sha }}
         run: |
           if [[ ! "$REQUESTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
             echo "commit_sha must be a full lowercase 40-character SHA" >&2
@@ -49,13 +49,11 @@ jobs:
       - name: Check out the exact requested commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.commit_sha }}
+          ref: ${{ env.REQUESTED_SHA }}
           fetch-depth: 1
           persist-credentials: false
 
       - name: Verify checkout identity
-        env:
-          REQUESTED_SHA: ${{ inputs.commit_sha }}
         run: |
           test "$(git rev-parse HEAD)" = "$REQUESTED_SHA"
           test -z "$(git status --porcelain)"
@@ -80,14 +78,19 @@ jobs:
           test -n "$DEPLOYMENT_URL"
           echo "deployment_url=$DEPLOYMENT_URL" >> "$GITHUB_OUTPUT"
 
-      - name: Verify approved acquisition routes
+      - name: Verify public acquisition and trust routes
         env:
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
         run: |
-          curl --fail --silent --show-error --retry 5 --retry-all-errors "$DEPLOYMENT_URL/industries" > /tmp/industries.html
-          curl --fail --silent --show-error --retry 5 --retry-all-errors "$DEPLOYMENT_URL/partners" > /tmp/partners.html
+          for route in "" home-services industries partners privacy; do
+            curl --fail --silent --show-error --retry 5 --retry-all-errors "$DEPLOYMENT_URL/$route" > "/tmp/${route:-home}.html"
+          done
+          grep -Fq 'https://wuzmqruxdclstezitsbf.supabase.co/functions/v1/revenue-inbound' /tmp/home.html
+          grep -Fq 'showInstantPreview' /tmp/home.html
+          grep -Fq 'https://ai-revenue-agent-seven.vercel.app/home-services' /tmp/home-services.html
           grep -Fq 'https://ai-revenue-agent-seven.vercel.app/industries' /tmp/industries.html
           grep -Fq 'https://ai-revenue-agent-seven.vercel.app/partners' /tmp/partners.html
+          grep -Fq 'Privacy Notice' /tmp/privacy.html
 
       - name: Record release evidence
         env:
