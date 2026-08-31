@@ -50,6 +50,34 @@ class MissionControlTests(unittest.TestCase):
         self.assertGreater(len(intelligence['top_candidates']), 0)
         self.assertEqual(result['plan'][-1]['action'], 'validate_top_business_model_candidate')
 
+    def test_business_model_evidence_persists_across_runs(self):
+        conn = mission_control.connect(self.path)
+        mission_control.upsert_business_model_evidence(
+            conn,
+            'directory',
+            observed_revenue=1200,
+            observed_cost=100,
+            conversion_rate=0.30,
+            evidence_quality=0.95,
+            sample_size=25,
+            observed_at='2026-08-30T00:00:00+00:00',
+        )
+        conn.close()
+
+        reopened = mission_control.connect(self.path)
+        stored = mission_control.load_persisted_evidence(reopened)
+        reopened.close()
+        self.assertIn('directory', stored)
+        self.assertEqual(stored['directory']['observed_revenue'], 1200)
+        self.assertEqual(stored['directory']['sample_size'], 25)
+
+        result = mission_control.run(self.path)
+        self.assertEqual(result['business_model_intelligence']['evidence_models'], 1)
+        candidates = result['business_model_intelligence']['top_candidates']
+        self.assertTrue(any(candidate['id'] == 'directory' for candidate in candidates))
+        directory = next(candidate for candidate in candidates if candidate['id'] == 'directory')
+        self.assertIn(directory['experiment_state'], {'continue_validation', 'scale_candidate'})
+
 
 if __name__ == '__main__':
     unittest.main()
