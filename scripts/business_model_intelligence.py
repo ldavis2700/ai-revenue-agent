@@ -115,7 +115,8 @@ def portfolio(ranked: list[dict[str, Any]], limit: int = 10) -> dict[str, Any]:
             break
     if len(selected) < limit:
         ids = {m["id"] for m in selected}
-        selected.extend(m for m in eligible_models if m["id"] not in ids)[: limit - len(selected)]
+        remaining = [m for m in eligible_models if m["id"] not in ids]
+        selected.extend(remaining[: limit - len(selected)])
     return {
         "candidates": selected,
         "count": len(selected),
