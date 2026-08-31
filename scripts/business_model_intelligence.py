@@ -17,6 +17,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CATALOG = ROOT / "config" / "business_models.json"
+EXTENDED_CATALOG = ROOT / "config" / "business_models_expansion.json"
 
 DEFAULT_WEIGHTS = {
     "speed_to_revenue": 0.23,
@@ -35,10 +36,21 @@ REQUIRED_FIELDS = {
 
 
 def load_catalog(path: str | os.PathLike[str] = DEFAULT_CATALOG) -> dict[str, Any]:
+    path = Path(path)
     with open(path, "r", encoding="utf-8") as handle:
         payload = json.load(handle)
     if not isinstance(payload.get("models"), list):
         raise ValueError("catalog.models must be a list")
+
+    # The default APEX universe is intentionally split into a stable core and an
+    # extensible expansion file. Explicit custom catalogs remain self-contained.
+    if path.resolve() == DEFAULT_CATALOG.resolve() and EXTENDED_CATALOG.exists():
+        with open(EXTENDED_CATALOG, "r", encoding="utf-8") as handle:
+            expansion = json.load(handle)
+        if not isinstance(expansion.get("models"), list):
+            raise ValueError("expansion.models must be a list")
+        payload = {**payload, "models": [*payload["models"], *expansion["models"]]}
+
     seen: set[str] = set()
     for model in payload["models"]:
         missing = REQUIRED_FIELDS - model.keys()
