@@ -1,0 +1,29 @@
+name: APEX Evidence Persistence
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/business_model_intelligence.py'
+      - 'scripts/mission_control.py'
+      - 'tests/test_mission_control.py'
+      - '.github/workflows/evidence-persistence.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/business_model_intelligence.py'
+      - 'scripts/mission_control.py'
+      - 'tests/test_mission_control.py'
+      - '.github/workflows/evidence-persistence.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile intelligence and Mission Control
+        run: python -m py_compile scripts/business_model_intelligence.py scripts/mission_control.py
+      - name: Test Mission Control evidence persistence
+        run: python -m unittest discover -s tests -p 'test_mission_control.py' -v

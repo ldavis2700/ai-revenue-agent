@@ -1,0 +1,28 @@
+name: APEX Mission Control Experiment Queue
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/mission_control.py'
+      - 'scripts/experiment_queue.py'
+      - 'tests/test_mission_control_experiment_queue.py'
+      - '.github/workflows/mission-control-experiment-queue.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/mission_control.py'
+      - 'scripts/experiment_queue.py'
+      - 'tests/test_mission_control_experiment_queue.py'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile Mission Control and queue
+        run: python -m py_compile scripts/mission_control.py scripts/experiment_queue.py scripts/portfolio_competition.py scripts/business_model_intelligence.py
+      - name: Test zero-cost queue integration
+        run: python -m unittest discover -s tests -p 'test_mission_control_experiment_queue.py' -v
