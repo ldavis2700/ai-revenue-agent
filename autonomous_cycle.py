@@ -21,6 +21,16 @@ MAX_DISPATCH = max(0, int(os.getenv("CONSENTED_INBOUND_PER_RUN_CAP", "5")))
 OWNED_INBOUND_SOURCE = "owned_inbound_opt_in"
 AUTONOMOUS_ACTIONS = {"send_initial", "send_followup", "send_checkout", "send_managed_checkout"}
 
+# When capacity is limited, buyer-requested checkout actions must win over
+# follow-ups and new outreach. This improves close velocity without weakening
+# consent, source, spending, contract, or charging guardrails.
+ACTION_PRIORITY = {
+    "send_managed_checkout": 0,
+    "send_checkout": 1,
+    "send_followup": 2,
+    "send_initial": 3,
+}
+
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
@@ -48,7 +58,8 @@ def lead_sources(path=DB_PATH):
 
 def route(actions, sources, enabled=AUTONOMY_ENABLED, kill_switch=KILL_SWITCH, cap=MAX_DISPATCH):
     autonomous, review, blocked = [], [], []
-    for action in actions:
+    candidates = []
+    for index, action in enumerate(actions):
         enriched = {**action, "source": sources.get(action.get("lead_id"), "unknown")}
         kind = enriched.get("action")
         if kill_switch or not enabled:
@@ -59,7 +70,12 @@ def route(actions, sources, enabled=AUTONOMY_ENABLED, kill_switch=KILL_SWITCH, c
             review.append({**enriched, "review_reason": "action_not_pre_authorized"})
         elif not enriched.get("email"):
             blocked.append({**enriched, "blocked_reason": "delivery_address_missing"})
-        elif len(autonomous) >= cap:
+        else:
+            candidates.append((ACTION_PRIORITY.get(kind, 99), index, enriched))
+
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    for _, _, enriched in candidates:
+        if len(autonomous) >= cap:
             blocked.append({**enriched, "blocked_reason": "per_run_dispatch_cap_reached"})
         else:
             autonomous.append(enriched)
