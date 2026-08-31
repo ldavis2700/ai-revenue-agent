@@ -36,9 +36,11 @@ class MissionControlExperimentQueueTests(unittest.TestCase):
 
     def test_existing_measured_champion_causes_distinct_challenger_to_be_queued(self):
         conn = mission_control.connect(self.path)
+        baseline = mission_control.business_model_snapshot(conn)
+        champion_seed = baseline['top_candidates'][0]
         mission_control.upsert_business_model_evidence(
             conn,
-            'directory',
+            champion_seed['id'],
             observed_revenue=1200,
             observed_cost=100,
             conversion_rate=0.30,
@@ -54,6 +56,7 @@ class MissionControlExperimentQueueTests(unittest.TestCase):
         challenger = competition.get('challenger')
         self.assertIsNotNone(champion)
         self.assertIsNotNone(challenger)
+        self.assertEqual(champion['id'], champion_seed['id'])
         self.assertNotEqual(champion['id'], challenger['id'])
         self.assertEqual(result['zero_cost_validation_queue']['candidate_id'], challenger['id'])
         self.assertEqual(result['zero_cost_validation_queue']['experiment']['max_cost'], 0)
