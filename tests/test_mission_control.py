@@ -48,7 +48,9 @@ class MissionControlTests(unittest.TestCase):
         self.assertEqual(intelligence['mode'], 'continuous_opportunity_optimization')
         self.assertEqual(intelligence['execution_gate'], 'candidate_only')
         self.assertGreater(len(intelligence['top_candidates']), 0)
-        self.assertEqual(result['plan'][-1]['action'], 'validate_top_business_model_candidate')
+        actions = [step['action'] for step in result['plan']]
+        self.assertIn('validate_top_business_model_candidate', actions)
+        self.assertEqual(intelligence['portfolio_competition']['mode'], 'internal_recommendation_only')
 
     def test_business_model_evidence_persists_across_runs(self):
         conn = mission_control.connect(self.path)
@@ -77,6 +79,32 @@ class MissionControlTests(unittest.TestCase):
         self.assertTrue(any(candidate['id'] == 'directory' for candidate in candidates))
         directory = next(candidate for candidate in candidates if candidate['id'] == 'directory')
         self.assertIn(directory['experiment_state'], {'continue_validation', 'scale_candidate'})
+
+    def test_portfolio_competition_keeps_validated_winner_under_challenge(self):
+        conn = mission_control.connect(self.path)
+        mission_control.upsert_business_model_evidence(
+            conn,
+            'directory',
+            observed_revenue=1500,
+            observed_cost=100,
+            conversion_rate=0.30,
+            evidence_quality=1.0,
+            sample_size=30,
+        )
+        conn.close()
+
+        result = mission_control.run(self.path)
+        competition = result['business_model_intelligence']['portfolio_competition']
+        self.assertEqual(competition['mode'], 'internal_recommendation_only')
+        self.assertIsNotNone(competition['incumbent'])
+        self.assertEqual(competition['incumbent']['id'], 'directory')
+        self.assertIsNotNone(competition['challenger'])
+        self.assertNotEqual(competition['challenger']['id'], 'directory')
+        self.assertIn(competition['recommended_action'], {
+            'challenge_incumbent', 'protect_and_scale_incumbent', 'run_head_to_head_validation'
+        })
+        self.assertEqual(competition['material_action_gate'], 'owner_and_policy_gates_unchanged')
+        self.assertEqual(result['plan'][-1]['action'], competition['recommended_action'])
 
 
 if __name__ == '__main__':
