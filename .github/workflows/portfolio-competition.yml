@@ -1,0 +1,27 @@
+name: APEX Portfolio Competition
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/portfolio_competition.py'
+      - 'tests/test_portfolio_competition.py'
+      - '.github/workflows/portfolio-competition.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/portfolio_competition.py'
+      - 'tests/test_portfolio_competition.py'
+      - '.github/workflows/portfolio-competition.yml'
+
+jobs:
+  portfolio-competition:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile portfolio competition
+        run: python -m py_compile scripts/portfolio_competition.py
+      - name: Test champion-challenger selection
+        run: python -m unittest discover -s tests -p 'test_portfolio_competition.py' -v
