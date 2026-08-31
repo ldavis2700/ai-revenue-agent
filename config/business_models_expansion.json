@@ -1,0 +1,1 @@
+{"schema_version":1,"purpose":"Extended legitimate business-model archetypes for APEX discovery and ranking.","models":[{"id":"ai_agent_implementation","category":"services","name":"AI agent implementation service","revenue_type":"project_plus_retainer","speed_to_revenue":9,"margin":9,"startup_cost":2,"automation":8,"scalability":8,"owner_effort":4,"compliance_risk":3}]}
