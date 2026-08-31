@@ -48,6 +48,13 @@ class MissionControlTests(unittest.TestCase):
         self.assertEqual(intelligence['mode'], 'continuous_opportunity_optimization')
         self.assertEqual(intelligence['execution_gate'], 'candidate_only')
         self.assertGreater(len(intelligence['top_candidates']), 0)
+        competition = intelligence['portfolio_competition']
+        self.assertEqual(competition['execution_gate'], 'recommendation_only')
+        self.assertIn(competition['recommended_action'], {
+            'discover_or_repair_candidates', 'validate_challenger', 'continue_measuring_champion',
+            'run_bounded_head_to_head_validation', 'protect_winner_and_probe_challenger'})
+        actions = [item['action'] for item in result['plan']]
+        self.assertIn('evaluate_portfolio_competition', actions)
         self.assertEqual(result['plan'][-1]['action'], 'validate_top_business_model_candidate')
 
     def test_business_model_evidence_persists_across_runs(self):
@@ -77,6 +84,9 @@ class MissionControlTests(unittest.TestCase):
         self.assertTrue(any(candidate['id'] == 'directory' for candidate in candidates))
         directory = next(candidate for candidate in candidates if candidate['id'] == 'directory')
         self.assertIn(directory['experiment_state'], {'continue_validation', 'scale_candidate'})
+        competition = result['business_model_intelligence']['portfolio_competition']
+        self.assertIsNotNone(competition.get('champion'))
+        self.assertIsNotNone(competition.get('challenger'))
 
 
 if __name__ == '__main__':
