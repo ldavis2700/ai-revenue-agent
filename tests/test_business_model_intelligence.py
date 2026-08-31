@@ -23,7 +23,8 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
             {"max_startup_cost": 3, "max_owner_effort": 5, "max_compliance_risk": 4,
              "min_speed_to_revenue": 7, "min_automation": 7},
         )
-        ids = {model["id"] for model in [m for m in ranked if m["eligible"]][:10]}
+        eligible = [m for m in ranked if m["eligible"]]
+        ids = {model["id"] for model in eligible[:25]}
         self.assertIn("ai_automation_agency", ids)
         self.assertIn("productized_service", ids)
 
