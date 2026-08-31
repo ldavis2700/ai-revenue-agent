@@ -1,4 +1,5 @@
 import importlib.util
+from datetime import datetime, timezone
 from pathlib import Path
 import unittest
 
@@ -67,6 +68,54 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
         self.assertGreater(directory["pursuit_score"], baseline_score)
         self.assertGreater(directory["observed_profit"], 0)
         self.assertIn("maximize durable risk-adjusted owner wealth", plan["objective"])
+
+    def test_old_evidence_decays_influence(self):
+        catalog = module.load_catalog(ROOT / "config" / "business_models.json")
+        ranked = module.rank_models(catalog["models"], {})
+        now = datetime(2026, 8, 31, tzinfo=timezone.utc)
+        recent = module.pursuit_plan(
+            ranked,
+            {"directory": {"observed_revenue": 1000, "observed_cost": 50,
+                           "conversion_rate": 0.25, "evidence_quality": 1,
+                           "observed_at": "2026-08-31T00:00:00Z", "sample_size": 20}},
+            40,
+            now=now,
+        )
+        stale = module.pursuit_plan(
+            ranked,
+            {"directory": {"observed_revenue": 1000, "observed_cost": 50,
+                           "conversion_rate": 0.25, "evidence_quality": 1,
+                           "observed_at": "2026-05-03T00:00:00Z", "sample_size": 20}},
+            40,
+            now=now,
+        )
+        recent_directory = next(m for m in recent["pursue"] if m["id"] == "directory")
+        stale_directory = next(m for m in stale["pursue"] if m["id"] == "directory")
+        self.assertGreater(recent_directory["evidence_freshness"], stale_directory["evidence_freshness"])
+        self.assertGreater(recent_directory["pursuit_score"], stale_directory["pursuit_score"])
+
+    def test_small_samples_are_tempered_and_winners_become_scale_candidates(self):
+        catalog = module.load_catalog(ROOT / "config" / "business_models.json")
+        ranked = module.rank_models(catalog["models"], {})
+        now = datetime(2026, 8, 31, tzinfo=timezone.utc)
+        plan = module.pursuit_plan(
+            ranked,
+            {
+                "directory": {"observed_revenue": 1200, "observed_cost": 100,
+                              "conversion_rate": 0.3, "evidence_quality": 1,
+                              "observed_at": "2026-08-31T00:00:00Z", "sample_size": 20},
+                "digital_templates": {"observed_revenue": 500, "observed_cost": 10,
+                                      "conversion_rate": 0.5, "evidence_quality": 1,
+                                      "observed_at": "2026-08-31T00:00:00Z", "sample_size": 2},
+            },
+            40,
+            now=now,
+        )
+        directory = next(m for m in plan["pursue"] if m["id"] == "directory")
+        templates = next(m for m in plan["pursue"] if m["id"] == "digital_templates")
+        self.assertEqual(directory["experiment_state"], "scale_candidate")
+        self.assertEqual(templates["experiment_state"], "validate")
+        self.assertGreater(directory["evidence_reliability"], templates["evidence_reliability"])
 
 
 if __name__ == "__main__":
