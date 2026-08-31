@@ -1,0 +1,40 @@
+name: APEX Business Model Intelligence
+
+on:
+  pull_request:
+    paths:
+      - 'config/business_models.json'
+      - 'scripts/business_model_intelligence.py'
+      - 'tests/test_business_model_intelligence.py'
+      - '.github/workflows/business-model-intelligence.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'config/business_models.json'
+      - 'scripts/business_model_intelligence.py'
+      - 'tests/test_business_model_intelligence.py'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile intelligence engine
+        run: python -m py_compile scripts/business_model_intelligence.py
+      - name: Run intelligence tests
+        run: python -m unittest discover -s tests -p 'test_business_model_intelligence.py' -v
+      - name: Exercise low-cost autonomous portfolio ranking
+        run: |
+          python scripts/business_model_intelligence.py --limit 8 --max-startup-cost 3 --max-owner-effort 5 --max-compliance-risk 4 --min-speed-to-revenue 5 --min-automation 6 > /tmp/apex-models.json
+          python - <<'PY'
+          import json
+          data=json.load(open('/tmp/apex-models.json'))
+          assert data['catalog_size'] >= 35
+          assert data['count'] > 0
+          assert data['guardrails']['recommendation_only'] is True
+          assert data['guardrails']['automatic_spend'] is False
+          assert all(item['eligible'] for item in data['candidates'])
+          PY
