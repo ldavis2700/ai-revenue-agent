@@ -32,6 +32,21 @@ def checkout_url(lead, template=CHECKOUT_URL_TEMPLATE, amount=OFFER_PRICE, offer
     return template.format(**values)
 
 
+def reply_state(kinds):
+    """Return the safest next reply state from explicit persisted evidence.
+
+    A generic reply remains owner-review only. Autonomous closing may advance only
+    when an upstream authenticated classifier or operator has persisted the
+    explicit affirmative_purchase_intent event. This prevents ambiguous text
+    from being treated as consent to buy.
+    """
+    if 'affirmative_purchase_intent' in kinds:
+        return 'interested'
+    if 'reply' in kinds:
+        return 'review_reply'
+    return None
+
+
 def main():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -77,6 +92,20 @@ def main():
                 ),
             })
             continue
+        reply = reply_state(kinds)
+        if reply == 'interested':
+            url = checkout_url(lead)
+            actions.append({
+                'lead_id': lead['id'],
+                'action': 'send_checkout' if url else 'human_close',
+                'reason': 'prospect has explicit persisted affirmative purchase intent',
+                'company': lead['company'],
+                'email': lead['email'],
+                'checkout_url': url,
+                'amount': float(OFFER_PRICE),
+                'offer': OFFER_NAME,
+            })
+            continue
         if 'interested' in kinds:
             url = checkout_url(lead)
             actions.append({
@@ -90,8 +119,8 @@ def main():
                 'offer': OFFER_NAME,
             })
             continue
-        if 'reply' in kinds:
-            actions.append({'lead_id': lead['id'], 'action': 'review_reply', 'reason': 'prospect replied', 'company': lead['company']})
+        if reply == 'review_reply':
+            actions.append({'lead_id': lead['id'], 'action': 'review_reply', 'reason': 'prospect replied but purchase intent is not explicit', 'company': lead['company']})
             continue
         sent_events = [e for e in events if e['event_type'] in {'sent', 'followup_sent'}]
         if not sent_events:
