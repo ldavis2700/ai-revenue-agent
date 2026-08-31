@@ -53,6 +53,16 @@ class ExperimentQueueTests(unittest.TestCase):
         self.assertEqual(result['status'], 'stopped')
         self.assertEqual(result['outcome'], 'cost_cap_exceeded')
 
+    def test_zero_cost_cap_means_zero_spend(self):
+        queued = experiment_queue.enqueue_experiment(
+            self.conn, 'directory', 'Organic validation works', 'conversion_rate', 0.10,
+            max_cost=0, max_samples=20)
+        experiment_queue.start_experiment(self.conn, queued['id'])
+        result = experiment_queue.record_measurement(
+            self.conn, queued['id'], observed_value=0.02, observed_cost=0.01, sample_size=2)
+        self.assertEqual(result['status'], 'stopped')
+        self.assertEqual(result['outcome'], 'cost_cap_exceeded')
+
     def test_sample_cap_finishes_without_false_win(self):
         queued = experiment_queue.enqueue_experiment(
             self.conn, 'paid_api', 'API converts', 'conversion_rate', 0.25,
