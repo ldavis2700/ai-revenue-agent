@@ -3,7 +3,14 @@
 import json
 import os
 import sqlite3
+import sys
 from datetime import datetime, timezone
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+from business_model_intelligence import load_catalog, pursuit_plan, rank_models
 
 DB_PATH = os.getenv('REVENUE_DB_PATH', '/files/data/revenue_agent.db')
 KILL_SWITCH = os.getenv('REVENUE_AGENT_KILL_SWITCH', 'false').lower() == 'true'
@@ -62,7 +69,32 @@ def objective_score(metrics):
         - metrics['refunds'], 2)
 
 
-def build_plan(metrics):
+def business_model_snapshot():
+    """Return APEX's current opportunity portfolio without authorizing external action."""
+    constraints = {
+        'max_startup_cost': int(os.getenv('APEX_MAX_STARTUP_COST', '3')),
+        'max_owner_effort': int(os.getenv('APEX_MAX_OWNER_EFFORT', '5')),
+        'max_compliance_risk': int(os.getenv('APEX_MAX_COMPLIANCE_RISK', '4')),
+        'min_speed_to_revenue': int(os.getenv('APEX_MIN_SPEED_TO_REVENUE', '5')),
+        'min_automation': int(os.getenv('APEX_MIN_AUTOMATION', '6')),
+    }
+    evidence_raw = os.getenv('APEX_BUSINESS_MODEL_EVIDENCE_JSON', '').strip()
+    evidence = json.loads(evidence_raw) if evidence_raw else {}
+    catalog = load_catalog()
+    ranked = rank_models(catalog['models'], constraints)
+    pursuit = pursuit_plan(ranked, evidence, int(os.getenv('APEX_PURSUIT_LIMIT', '3')))
+    return {
+        'catalog_size': len(catalog['models']),
+        'constraints': constraints,
+        'top_candidates': pursuit['pursue'],
+        'mode': pursuit['mode'],
+        'objective': pursuit['objective'],
+        'standing_directives': pursuit['standing_directives'],
+        'execution_gate': 'candidate_only',
+    }
+
+
+def build_plan(metrics, model_intelligence=None):
     plan = []
     if metrics['eligible_leads'] == 0:
         plan.append({'priority': 1, 'action': 'connect_approved_lead_source', 'mode': 'prepare',
@@ -84,6 +116,17 @@ def build_plan(metrics):
                      'reason': 'At least one verified sale identifies a segment worth testing.'})
     plan.append({'priority': 2, 'action': 'generate_funnel_report', 'mode': 'execute_internal',
                  'reason': 'Keep every decision tied to measured outcomes.'})
+    if model_intelligence and model_intelligence.get('top_candidates'):
+        top = model_intelligence['top_candidates'][0]
+        plan.append({
+            'priority': 3,
+            'action': 'validate_top_business_model_candidate',
+            'mode': 'analyze',
+            'candidate_id': top['id'],
+            'candidate_name': top['name'],
+            'pursuit_score': top['pursuit_score'],
+            'reason': 'Continuously compare current operations against higher-potential legitimate business models.',
+        })
     return plan
 
 
@@ -93,7 +136,8 @@ def run(path=DB_PATH):
     used = scalar(conn, 'SELECT COUNT(*) FROM agent_mission_runs WHERE run_day=?', (today,))
     allowed = not KILL_SWITCH and EXECUTION_ENABLED and DAILY_RUN_CAP > used
     metrics = snapshot(conn)
-    plan = build_plan(metrics)
+    model_intelligence = business_model_snapshot()
+    plan = build_plan(metrics, model_intelligence)
     mode = 'execution_authorized' if allowed else 'analysis_and_preparation_only'
     result = {
         'generated_at': now_iso(),
@@ -107,6 +151,7 @@ def run(path=DB_PATH):
         },
         'metrics': metrics,
         'objective_score': objective_score(metrics),
+        'business_model_intelligence': model_intelligence,
         'plan': plan,
         'approval_required_for': ['outbound_send', 'spending', 'contracts', 'automatic_charge',
                                   'customer_system_change', 'irreversible_production_change'],
