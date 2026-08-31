@@ -103,7 +103,8 @@ def record_measurement(conn: sqlite3.Connection, experiment_id: int, observed_va
     status = 'running'
     outcome = None
 
-    if row['max_cost'] > 0 and cost > row['max_cost']:
+    # max_cost=0 is an explicit zero-spend experiment, not an unlimited budget.
+    if cost > row['max_cost']:
         status, outcome = 'stopped', 'cost_cap_exceeded'
     elif value >= row['target_value']:
         status, outcome = 'completed', 'target_achieved'
