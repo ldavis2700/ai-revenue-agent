@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -112,13 +113,59 @@ def portfolio(ranked: list[dict[str, Any]], limit: int = 10) -> dict[str, Any]:
         "automatic_production_deploy": False, "automatic_unsolicited_outreach": False}}
 
 
+def _parse_observed_at(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def evidence_freshness(evidence: dict[str, Any], now: datetime | None = None,
+                       half_life_days: float = 30.0) -> float:
+    """Decay old observations so yesterday's winner does not remain privileged forever."""
+    observed_at = _parse_observed_at(evidence.get("observed_at"))
+    if observed_at is None:
+        return 1.0
+    now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    age_days = max(0.0, (now - observed_at).total_seconds() / 86400.0)
+    half_life_days = max(1.0, float(half_life_days))
+    return round(0.5 ** (age_days / half_life_days), 4)
+
+
+def evidence_reliability(evidence: dict[str, Any]) -> float:
+    """Temper small samples while keeping backward compatibility for uncounted legacy evidence."""
+    if "sample_size" not in evidence:
+        return 1.0
+    sample_size = max(0.0, float(evidence.get("sample_size", 0) or 0))
+    return round(min(1.0, sample_size / 20.0), 4)
+
+
+def experiment_state(profit: float, conversion: float, effective_quality: float,
+                     sample_size: float | None) -> str:
+    if effective_quality < 0.2:
+        return "validate"
+    if profit < 0 and effective_quality >= 0.5:
+        return "deprioritize"
+    if profit > 0 and conversion > 0 and effective_quality >= 0.7 and (sample_size is None or sample_size >= 10):
+        return "scale_candidate"
+    if profit > 0:
+        return "continue_validation"
+    return "validate"
+
+
 def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]] | None = None,
-                 pursue_limit: int = 3) -> dict[str, Any]:
+                 pursue_limit: int = 3, now: datetime | None = None,
+                 evidence_half_life_days: float = 30.0) -> dict[str, Any]:
     """Turn rankings into a standing, evidence-driven pursuit posture.
 
     Observed economics can promote/demote models without changing hard safety gates.
-    Expected keys per active model: observed_revenue, observed_cost, conversion_rate,
-    evidence_quality (0..1). Missing evidence is treated conservatively.
+    Supported evidence keys: observed_revenue, observed_cost, conversion_rate,
+    evidence_quality (0..1), observed_at (ISO-8601), and sample_size.
     """
     active = active or {}
     enriched = []
@@ -128,11 +175,23 @@ def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]]
         cost = max(0.0, float(evidence.get("observed_cost", 0) or 0))
         conversion = min(1.0, max(0.0, float(evidence.get("conversion_rate", 0) or 0)))
         quality = min(1.0, max(0.0, float(evidence.get("evidence_quality", 0) or 0)))
+        freshness = evidence_freshness(evidence, now, evidence_half_life_days)
+        reliability = evidence_reliability(evidence)
+        effective_quality = round(quality * freshness * reliability, 4)
         profit = revenue - cost
-        evidence_bonus = quality * min(8.0, max(-8.0, profit / 100.0 + conversion * 5.0))
+        evidence_bonus = effective_quality * min(8.0, max(-8.0, profit / 100.0 + conversion * 5.0))
         pursuit_score = round(model["apex_score"] + evidence_bonus, 2)
-        enriched.append({**model, "pursuit_score": pursuit_score, "observed_profit": round(profit, 2),
-                         "evidence_quality": quality})
+        sample_size = None if "sample_size" not in evidence else max(0.0, float(evidence.get("sample_size", 0) or 0))
+        enriched.append({
+            **model,
+            "pursuit_score": pursuit_score,
+            "observed_profit": round(profit, 2),
+            "evidence_quality": quality,
+            "evidence_freshness": freshness,
+            "evidence_reliability": reliability,
+            "effective_evidence_quality": effective_quality,
+            "experiment_state": experiment_state(profit, conversion, effective_quality, sample_size),
+        })
     enriched.sort(key=lambda item: (item["eligible"], item["pursuit_score"]), reverse=True)
     pursue = [m for m in enriched if m["eligible"]][:max(1, pursue_limit)]
     return {
@@ -142,6 +201,7 @@ def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]]
         "standing_directives": [
             "continuously compare active models with newly discovered legitimate opportunities",
             "favor validated revenue, profit, recurring economics, automation, scalability, and low owner effort",
+            "discount stale or weak evidence so historical winners must keep earning priority",
             "run bounded validation before materially scaling uncertain opportunities",
             "increase attention to winners and retire or redesign persistent underperformers",
             "preserve customer trust, privacy, platform rules, law, and long-term business value",
@@ -161,6 +221,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Rank and prime APEX business-model opportunities")
     parser.add_argument("--catalog", default=str(DEFAULT_CATALOG)); parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--pursue-limit", type=int, default=3); parser.add_argument("--evidence-json")
+    parser.add_argument("--evidence-half-life-days", type=float, default=30.0)
     parser.add_argument("--max-startup-cost", type=int, default=3); parser.add_argument("--max-owner-effort", type=int, default=5)
     parser.add_argument("--max-compliance-risk", type=int, default=4); parser.add_argument("--min-speed-to-revenue", type=int, default=5)
     parser.add_argument("--min-automation", type=int, default=6); args = parser.parse_args()
@@ -169,7 +230,8 @@ def main() -> None:
     evidence = json.loads(args.evidence_json) if args.evidence_json else {}
     output.update({"schema_version": catalog.get("schema_version", 1), "catalog_size": len(catalog["models"]),
                    "constraints": constraints, "top_ranked": ranked[:max(1, args.limit)],
-                   "pursuit_plan": pursuit_plan(ranked, evidence, args.pursue_limit),
+                   "pursuit_plan": pursuit_plan(ranked, evidence, args.pursue_limit,
+                                                evidence_half_life_days=args.evidence_half_life_days),
                    "hard_exclusions": catalog.get("hard_exclusions", [])})
     print(json.dumps(output, indent=2))
 
