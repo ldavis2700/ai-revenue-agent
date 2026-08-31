@@ -121,6 +121,58 @@ def upsert_business_model_evidence(conn, model_id, observed_revenue=0, observed_
     conn.commit()
 
 
+def portfolio_competition(candidates, challenger_margin=0.75):
+    """Compare the best evidence-backed incumbent with the strongest unproven challenger.
+
+    This returns an internal recommendation only. It never authorizes spend, outreach,
+    contracts, deployment, charging, or customer-system changes.
+    """
+    incumbents = [c for c in candidates if float(c.get('effective_evidence_quality', 0) or 0) > 0]
+    challengers = [c for c in candidates if float(c.get('effective_evidence_quality', 0) or 0) <= 0]
+    incumbent = max(incumbents, key=lambda c: c.get('pursuit_score', 0), default=None)
+    challenger = max(challengers, key=lambda c: c.get('pursuit_score', 0), default=None)
+
+    if incumbent is None and challenger is None:
+        action = 'discover_candidates'
+        score_gap = None
+    elif incumbent is None:
+        action = 'validate_best_challenger'
+        score_gap = None
+    elif challenger is None:
+        action = 'discover_new_challenger' if incumbent.get('experiment_state') == 'deprioritize' else 'continue_best_incumbent'
+        score_gap = None
+    else:
+        score_gap = round(float(challenger['pursuit_score']) - float(incumbent['pursuit_score']), 2)
+        if incumbent.get('experiment_state') == 'deprioritize':
+            action = 'replace_incumbent'
+        elif score_gap > challenger_margin:
+            action = 'challenge_incumbent'
+        elif incumbent.get('experiment_state') == 'scale_candidate' and score_gap < -challenger_margin:
+            action = 'protect_and_scale_incumbent'
+        else:
+            action = 'run_head_to_head_validation'
+
+    def compact(candidate):
+        if candidate is None:
+            return None
+        return {
+            'id': candidate['id'],
+            'name': candidate['name'],
+            'pursuit_score': candidate['pursuit_score'],
+            'experiment_state': candidate.get('experiment_state', 'validate'),
+            'effective_evidence_quality': candidate.get('effective_evidence_quality', 0),
+        }
+
+    return {
+        'mode': 'internal_recommendation_only',
+        'incumbent': compact(incumbent),
+        'challenger': compact(challenger),
+        'score_gap_challenger_minus_incumbent': score_gap,
+        'recommended_action': action,
+        'material_action_gate': 'owner_and_policy_gates_unchanged',
+    }
+
+
 def business_model_snapshot(conn=None):
     """Return APEX's current opportunity portfolio without authorizing external action."""
     constraints = {
@@ -136,14 +188,23 @@ def business_model_snapshot(conn=None):
         evidence.update(json.loads(evidence_raw))
     catalog = load_catalog()
     ranked = rank_models(catalog['models'], constraints)
+    pursue_limit = int(os.getenv('APEX_PURSUIT_LIMIT', '3'))
+    comparison_limit = max(pursue_limit, int(os.getenv('APEX_COMPARISON_POOL_LIMIT', '12')))
     pursuit = pursuit_plan(
-        ranked, evidence, int(os.getenv('APEX_PURSUIT_LIMIT', '3')),
+        ranked, evidence, comparison_limit,
         evidence_half_life_days=float(os.getenv('APEX_EVIDENCE_HALF_LIFE_DAYS', '30')))
+    comparison_pool = pursuit['pursue']
+    competition = portfolio_competition(
+        comparison_pool,
+        challenger_margin=float(os.getenv('APEX_CHALLENGER_MARGIN', '0.75')),
+    )
     return {
         'catalog_size': len(catalog['models']),
         'constraints': constraints,
         'evidence_models': len(evidence),
-        'top_candidates': pursuit['pursue'],
+        'top_candidates': comparison_pool[:max(1, pursue_limit)],
+        'comparison_pool_size': len(comparison_pool),
+        'portfolio_competition': competition,
         'mode': pursuit['mode'],
         'objective': pursuit['objective'],
         'standing_directives': pursuit['standing_directives'],
@@ -184,6 +245,15 @@ def build_plan(metrics, model_intelligence=None):
             'pursuit_score': top['pursuit_score'],
             'experiment_state': top.get('experiment_state', 'validate'),
             'reason': 'Continuously compare current operations against higher-potential legitimate business models.',
+        })
+        competition = model_intelligence.get('portfolio_competition') or {}
+        plan.append({
+            'priority': 4,
+            'action': competition.get('recommended_action', 'discover_candidates'),
+            'mode': 'analyze',
+            'incumbent': competition.get('incumbent'),
+            'challenger': competition.get('challenger'),
+            'reason': 'Keep proven models under continuous competition from credible new opportunities.',
         })
     return plan
 
