@@ -12,6 +12,7 @@ if SCRIPT_DIR not in sys.path:
 
 from business_model_intelligence import load_catalog, pursuit_plan, rank_models
 from portfolio_competition import compare_candidates
+import experiment_queue
 
 DB_PATH = os.getenv('REVENUE_DB_PATH', '/files/data/revenue_agent.db')
 KILL_SWITCH = os.getenv('REVENUE_AGENT_KILL_SWITCH', 'false').lower() == 'true'
@@ -154,7 +155,49 @@ def business_model_snapshot(conn=None):
     }
 
 
-def build_plan(metrics, model_intelligence=None):
+def ensure_zero_cost_validation(path, model_intelligence):
+    """Ensure one bounded zero-spend experiment exists for the best current challenger/candidate."""
+    competition = (model_intelligence or {}).get('portfolio_competition') or {}
+    candidate = competition.get('challenger')
+    if not candidate:
+        candidates = (model_intelligence or {}).get('top_candidates') or []
+        candidate = candidates[0] if candidates else None
+
+    qconn = experiment_queue.connect(path)
+    try:
+        if not candidate or candidate.get('experiment_state') == 'deprioritize':
+            return {
+                'candidate_id': None,
+                'experiment': None,
+                'queue': experiment_queue.queue_summary(qconn),
+                'execution_gate': 'recommendation_only',
+            }
+
+        target = min(1.0, max(0.0, float(os.getenv('APEX_ZERO_COST_VALIDATION_TARGET', '0.05'))))
+        max_samples = max(1.0, float(os.getenv('APEX_ZERO_COST_VALIDATION_MAX_SAMPLES', '20')))
+        model_id = candidate['id']
+        model_name = candidate.get('name', model_id)
+        queued = experiment_queue.enqueue_experiment(
+            qconn,
+            model_id=model_id,
+            hypothesis=f'{model_name} can produce measurable demand without paid acquisition.',
+            success_metric='conversion_rate',
+            target_value=target,
+            priority=10 if competition.get('challenger') else 20,
+            max_cost=0,
+            max_samples=max_samples,
+        )
+        return {
+            'candidate_id': model_id,
+            'experiment': queued,
+            'queue': experiment_queue.queue_summary(qconn),
+            'execution_gate': 'recommendation_only',
+        }
+    finally:
+        qconn.close()
+
+
+def build_plan(metrics, model_intelligence=None, validation_queue=None):
     plan = []
     if metrics['eligible_leads'] == 0:
         plan.append({'priority': 1, 'action': 'connect_approved_lead_source', 'mode': 'prepare',
@@ -203,6 +246,19 @@ def build_plan(metrics, model_intelligence=None):
             'experiment_state': top.get('experiment_state', 'validate'),
             'reason': 'Continuously compare current operations against higher-potential legitimate business models.',
         })
+    if validation_queue and validation_queue.get('experiment'):
+        experiment = validation_queue['experiment']
+        plan.append({
+            'priority': 5,
+            'action': 'prepare_next_zero_cost_validation',
+            'mode': 'prepare',
+            'candidate_id': validation_queue.get('candidate_id'),
+            'experiment_id': experiment.get('id'),
+            'experiment_status': experiment.get('status'),
+            'max_cost': experiment.get('max_cost'),
+            'max_samples': experiment.get('max_samples'),
+            'reason': 'Turn portfolio intelligence into a bounded, measurable zero-spend validation queue.',
+        })
     return plan
 
 
@@ -213,7 +269,8 @@ def run(path=DB_PATH):
     allowed = not KILL_SWITCH and EXECUTION_ENABLED and DAILY_RUN_CAP > used
     metrics = snapshot(conn)
     model_intelligence = business_model_snapshot(conn)
-    plan = build_plan(metrics, model_intelligence)
+    validation_queue = ensure_zero_cost_validation(path, model_intelligence)
+    plan = build_plan(metrics, model_intelligence, validation_queue)
     mode = 'execution_authorized' if allowed else 'analysis_and_preparation_only'
     result = {
         'generated_at': now_iso(),
@@ -228,6 +285,7 @@ def run(path=DB_PATH):
         'metrics': metrics,
         'objective_score': objective_score(metrics),
         'business_model_intelligence': model_intelligence,
+        'zero_cost_validation_queue': validation_queue,
         'plan': plan,
         'approval_required_for': ['outbound_send', 'spending', 'contracts', 'automatic_charge',
                                   'customer_system_change', 'irreversible_production_change'],
