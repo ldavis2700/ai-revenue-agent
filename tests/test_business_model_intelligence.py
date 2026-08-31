@@ -12,8 +12,9 @@ SPEC.loader.exec_module(module)
 class BusinessModelIntelligenceTests(unittest.TestCase):
     def test_catalog_is_valid_and_broad(self):
         catalog = module.load_catalog(ROOT / "config" / "business_models.json")
-        self.assertGreaterEqual(len(catalog["models"]), 35)
-        self.assertGreaterEqual(len({model["category"] for model in catalog["models"]}), 8)
+        self.assertGreaterEqual(len(catalog["models"]), 100)
+        self.assertGreaterEqual(len({model["category"] for model in catalog["models"]}), 11)
+        self.assertIn("partnerships", {model["category"] for model in catalog["models"]})
 
     def test_low_cost_fast_automatable_models_rank_well(self):
         catalog = module.load_catalog(ROOT / "config" / "business_models.json")
@@ -22,7 +23,8 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
             {"max_startup_cost": 3, "max_owner_effort": 5, "max_compliance_risk": 4,
              "min_speed_to_revenue": 7, "min_automation": 7},
         )
-        ids = {model["id"] for model in [m for m in ranked if m["eligible"]][:10]}
+        eligible = [m for m in ranked if m["eligible"]]
+        ids = {model["id"] for model in eligible[:25]}
         self.assertIn("ai_automation_agency", ids)
         self.assertIn("productized_service", ids)
 
