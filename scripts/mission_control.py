@@ -11,6 +11,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from business_model_intelligence import load_catalog, pursuit_plan, rank_models
+from portfolio_competition import compare_candidates
 
 DB_PATH = os.getenv('REVENUE_DB_PATH', '/files/data/revenue_agent.db')
 KILL_SWITCH = os.getenv('REVENUE_AGENT_KILL_SWITCH', 'false').lower() == 'true'
@@ -139,11 +140,13 @@ def business_model_snapshot(conn=None):
     pursuit = pursuit_plan(
         ranked, evidence, int(os.getenv('APEX_PURSUIT_LIMIT', '3')),
         evidence_half_life_days=float(os.getenv('APEX_EVIDENCE_HALF_LIFE_DAYS', '30')))
+    competition = compare_candidates(pursuit['pursue'])
     return {
         'catalog_size': len(catalog['models']),
         'constraints': constraints,
         'evidence_models': len(evidence),
         'top_candidates': pursuit['pursue'],
+        'portfolio_competition': competition,
         'mode': pursuit['mode'],
         'objective': pursuit['objective'],
         'standing_directives': pursuit['standing_directives'],
@@ -173,10 +176,25 @@ def build_plan(metrics, model_intelligence=None):
                      'reason': 'At least one verified sale identifies a segment worth testing.'})
     plan.append({'priority': 2, 'action': 'generate_funnel_report', 'mode': 'execute_internal',
                  'reason': 'Keep every decision tied to measured outcomes.'})
+    if model_intelligence:
+        competition = model_intelligence.get('portfolio_competition') or {}
+        if competition.get('recommended_action'):
+            champion = competition.get('champion') or {}
+            challenger = competition.get('challenger') or {}
+            plan.append({
+                'priority': 3,
+                'action': 'evaluate_portfolio_competition',
+                'mode': 'analyze',
+                'posture': competition.get('posture'),
+                'recommended_action': competition.get('recommended_action'),
+                'champion_id': champion.get('id'),
+                'challenger_id': challenger.get('id'),
+                'reason': 'Protect measured winners while continuously probing credible alternatives.',
+            })
     if model_intelligence and model_intelligence.get('top_candidates'):
         top = model_intelligence['top_candidates'][0]
         plan.append({
-            'priority': 3,
+            'priority': 4,
             'action': 'validate_top_business_model_candidate',
             'mode': 'analyze',
             'candidate_id': top['id'],
