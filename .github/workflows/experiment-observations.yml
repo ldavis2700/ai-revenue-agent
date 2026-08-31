@@ -1,0 +1,27 @@
+name: APEX Experiment Observations
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/experiment_observations.py'
+      - 'tests/test_experiment_observations.py'
+      - '.github/workflows/experiment-observations.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/experiment_observations.py'
+      - 'tests/test_experiment_observations.py'
+      - '.github/workflows/experiment-observations.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile observation ledger
+        run: python -m py_compile scripts/experiment_observations.py
+      - name: Test append-only experiment history
+        run: python -m unittest discover -s tests -p 'test_experiment_observations.py' -v
