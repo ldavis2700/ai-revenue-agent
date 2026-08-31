@@ -41,6 +41,15 @@ class MissionControlTests(unittest.TestCase):
         result = mission_control.run(self.path)
         self.assertEqual(result['plan'][0]['action'], 'connect_approved_lead_source')
 
+    def test_business_model_intelligence_is_always_primed(self):
+        result = mission_control.run(self.path)
+        intelligence = result['business_model_intelligence']
+        self.assertGreaterEqual(intelligence['catalog_size'], 35)
+        self.assertEqual(intelligence['mode'], 'continuous_opportunity_optimization')
+        self.assertEqual(intelligence['execution_gate'], 'candidate_only')
+        self.assertGreater(len(intelligence['top_candidates']), 0)
+        self.assertEqual(result['plan'][-1]['action'], 'validate_top_business_model_candidate')
+
 
 if __name__ == '__main__':
     unittest.main()
