@@ -12,10 +12,19 @@ on:
       - 'scripts/portfolio_competition.py'
       - 'tests/test_portfolio_competition.py'
       - '.github/workflows/portfolio-competition.yml'
+  schedule:
+    - cron: '47 */6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: apex-portfolio-competition
+  cancel-in-progress: false
 
 jobs:
   portfolio-competition:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,3 +34,25 @@ jobs:
         run: python -m py_compile scripts/portfolio_competition.py
       - name: Test champion-challenger selection
         run: python -m unittest discover -s tests -p 'test_portfolio_competition.py' -v
+      - name: Generate current intelligence snapshot
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: python scripts/business_model_intelligence.py --limit 8 --pursue-limit 5 > /tmp/apex-intelligence.json
+      - name: Run current champion-challenger competition
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: python scripts/portfolio_competition.py --intelligence-json /tmp/apex-intelligence.json > /tmp/apex-competition.json
+      - name: Verify execution remains recommendation-only
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          python - <<'PY'
+          import json
+          result=json.load(open('/tmp/apex-competition.json'))
+          assert result['execution_gate'] == 'recommendation_only'
+          assert all(value is False for value in result['guardrails'].values())
+          PY
+      - name: Publish competition snapshot
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: apex-portfolio-competition-${{ github.run_id }}
+          path: /tmp/apex-competition.json
+          retention-days: 14
