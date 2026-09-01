@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from typing import Any
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
 
 import experiment_queue
 import mission_control
