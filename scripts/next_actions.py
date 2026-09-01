@@ -62,6 +62,8 @@ def main():
         if 'managed_plan_active' in kinds:
             continue
         if 'managed_plan_interested' in kinds:
+            if 'managed_checkout_sent' in kinds:
+                continue
             managed_offer = f'{OFFER_NAME} Managed Plan'
             url = checkout_url(lead, MANAGED_CHECKOUT_URL_TEMPLATE, MANAGED_MONTHLY_PRICE, managed_offer)
             actions.append({
@@ -94,6 +96,8 @@ def main():
             continue
         reply = reply_state(kinds)
         if reply == 'interested':
+            if 'checkout_sent' in kinds:
+                continue
             url = checkout_url(lead)
             actions.append({
                 'lead_id': lead['id'],
@@ -107,6 +111,8 @@ def main():
             })
             continue
         if 'interested' in kinds:
+            if 'checkout_sent' in kinds:
+                continue
             url = checkout_url(lead)
             actions.append({
                 'lead_id': lead['id'],
