@@ -105,7 +105,7 @@ jobs:
           assert json.load(open('/tmp/sms_blocked.json'))['allowed'] is False
           assert json.load(open('/tmp/sms_allowed.json'))['allowed'] is True
           PY
-      - name: Smoke test checkout generation and interested action
+      - name: Smoke test checkout requires explicit purchase intent
         env:
           REVENUE_DB_PATH: /tmp/revenue_agent.db
           CHECKOUT_URL_TEMPLATE: "https://pay.example.test/checkout?lead={lead_id}&email={email}&amount={amount}&offer={offer}"
@@ -118,14 +118,18 @@ jobs:
           )
           python scripts/checkout_link.py "$LEAD_ID" --email jane@example.com > /tmp/checkout.json
           python scripts/record_event.py "$LEAD_ID" interested
-          python scripts/next_actions.py > /tmp/actions.json
+          python scripts/next_actions.py > /tmp/interest-actions.json
+          python scripts/record_event.py "$LEAD_ID" affirmative_purchase_intent
+          python scripts/next_actions.py > /tmp/purchase-actions.json
           python - <<'PY'
           import json
           checkout=json.load(open('/tmp/checkout.json'))
-          actions=json.load(open('/tmp/actions.json'))
+          interest=json.load(open('/tmp/interest-actions.json'))
+          purchase=json.load(open('/tmp/purchase-actions.json'))
           assert checkout['ready'] is True
-          assert actions['actions'][0]['action'] == 'send_checkout'
-          assert 'pay.example.test' in actions['actions'][0]['checkout_url']
+          assert interest['actions'][0]['action'] == 'review_reply'
+          assert purchase['actions'][0]['action'] == 'send_checkout'
+          assert 'pay.example.test' in purchase['actions'][0]['checkout_url']
           PY
       - name: Smoke test idempotent payment and reporting
         env:
