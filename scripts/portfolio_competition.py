@@ -2,6 +2,9 @@
 """Select a measured champion and bounded challenger from APEX business-model candidates."""
 from __future__ import annotations
 
+import argparse
+import json
+from pathlib import Path
 from typing import Any
 
 VALIDATED_STATES = {"continue_validation", "scale_candidate"}
@@ -64,3 +67,24 @@ def compare_candidates(candidates: list[dict[str, Any]]) -> dict[str, Any]:
         result["challenger_minus_champion_score"] = round(
             float(challenger.get("pursuit_score", 0)) - float(champion.get("pursuit_score", 0)), 2)
     return result
+
+
+def candidates_from_intelligence(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract the evidence-enriched pursuit candidates from an intelligence snapshot."""
+    pursuit = payload.get("pursuit_plan", {}).get("pursue")
+    if isinstance(pursuit, list):
+        return pursuit
+    candidates = payload.get("candidates")
+    return candidates if isinstance(candidates, list) else []
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Compare APEX champion and challenger opportunities")
+    parser.add_argument("--intelligence-json", required=True, help="Path to a business-model intelligence snapshot")
+    args = parser.parse_args()
+    payload = json.loads(Path(args.intelligence_json).read_text(encoding="utf-8"))
+    print(json.dumps(compare_candidates(candidates_from_intelligence(payload)), indent=2))
+
+
+if __name__ == "__main__":
+    main()
