@@ -28,7 +28,7 @@ jobs:
     permissions:
       contents: read
     env:
-      REVENUE_DB_PATH: /tmp/apex-mission-control.db
+      REVENUE_DB_PATH: /tmp/apex-state/apex-mission-control.db
       REVENUE_AGENT_EXECUTION_ENABLED: 'false'
       REVENUE_AGENT_DAILY_RUN_CAP: '0'
       REVENUE_AGENT_KILL_SWITCH: 'false'
@@ -41,6 +41,17 @@ jobs:
         run: python -m py_compile scripts/mission_control.py scripts/experiment_queue.py scripts/portfolio_competition.py scripts/business_model_intelligence.py
       - name: Test zero-cost queue integration
         run: python -m unittest discover -s tests -p 'test_mission_control_experiment_queue.py' -v
+      - name: Restore Mission Control memory
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/apex-state
+          key: apex-mission-control-state-${{ github.run_id }}
+          restore-keys: |
+            apex-mission-control-state-
+      - name: Prepare Mission Control state directory
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: mkdir -p /tmp/apex-state
       - name: Generate safety-gated Mission Control plan
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: |
@@ -56,6 +67,12 @@ jobs:
           assert data['business_model_intelligence']['execution_gate'] == 'candidate_only'
           assert data['zero_cost_validation_queue']['execution_gate'] == 'recommendation_only'
           PY
+      - name: Save Mission Control memory
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/apex-state
+          key: apex-mission-control-state-${{ github.run_id }}
       - name: Publish Mission Control plan
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
