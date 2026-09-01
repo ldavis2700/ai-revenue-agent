@@ -96,6 +96,31 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
         self.assertGreater(recent_directory["evidence_freshness"], stale_directory["evidence_freshness"])
         self.assertGreater(recent_directory["pursuit_score"], stale_directory["pursuit_score"])
 
+    def test_invalid_or_future_observation_cannot_promote_a_model(self):
+        catalog = module.load_catalog(ROOT / "config" / "business_models.json")
+        ranked = module.rank_models(catalog["models"], {})
+        now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        for observed_at in (None, "", "not-a-date", 123, "2026-09-02T00:00:00Z"):
+            with self.subTest(observed_at=observed_at):
+                plan = module.pursuit_plan(ranked, {"directory": {
+                    "observed_revenue": 1200, "observed_cost": 100,
+                    "conversion_rate": 0.3, "evidence_quality": 1,
+                    "sample_size": 20, "observed_at": observed_at,
+                }}, 200, now=now)
+                model = next(m for m in plan["pursue"] if m["id"] == "directory")
+                self.assertEqual(model["evidence_freshness"], 0.0)
+                self.assertEqual(model["pursuit_score"], model["apex_score"])
+                self.assertEqual(model["experiment_state"], "validate")
+                self.assertEqual(model["execution_gate"], "candidate_only")
+
+    def test_legacy_missing_timestamp_and_valid_timezone_keep_compatibility(self):
+        now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        self.assertEqual(module.evidence_freshness({}, now=now), 1.0)
+        self.assertEqual(module.evidence_freshness(
+            {"observed_at": "2026-08-31T17:00:00-07:00"}, now=now), 1.0)
+        self.assertEqual(module.evidence_freshness(
+            {"observed_at": "2026-08-02T00:00:00Z"}, now=now), 0.5)
+
     def test_small_samples_are_tempered_and_winners_become_scale_candidates(self):
         catalog = module.load_catalog(ROOT / "config" / "business_models.json")
         ranked = module.rank_models(catalog["models"], {})

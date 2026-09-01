@@ -140,11 +140,17 @@ def _parse_observed_at(value: Any) -> datetime | None:
 def evidence_freshness(evidence: dict[str, Any], now: datetime | None = None,
                        half_life_days: float = 30.0) -> float:
     """Decay old observations so yesterday's winner does not remain privileged forever."""
-    observed_at = _parse_observed_at(evidence.get("observed_at"))
-    if observed_at is None:
+    # Preserve undated legacy observations, but never reward an explicitly
+    # supplied timestamp that is invalid or lies in the future.
+    if "observed_at" not in evidence:
         return 1.0
+    observed_at = _parse_observed_at(evidence["observed_at"])
+    if observed_at is None:
+        return 0.0
     now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    age_days = max(0.0, (now - observed_at).total_seconds() / 86400.0)
+    if observed_at > now:
+        return 0.0
+    age_days = (now - observed_at).total_seconds() / 86400.0
     half_life_days = max(1.0, float(half_life_days))
     return round(0.5 ** (age_days / half_life_days), 4)
 
