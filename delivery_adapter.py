@@ -11,6 +11,12 @@ from datetime import datetime, timezone
 DB_PATH = os.getenv("REVENUE_DB_PATH", "/files/data/revenue_agent.db")
 ALLOWED_ACTIONS = {"send_initial", "send_followup", "send_checkout", "send_managed_checkout"}
 OWNED_INBOUND_SOURCE = "owned_inbound_opt_in"
+EVENT_BY_ACTION = {
+    "send_initial": "sent",
+    "send_followup": "followup_sent",
+    "send_checkout": "checkout_sent",
+    "send_managed_checkout": "managed_checkout_sent",
+}
 
 
 def now_iso():
@@ -97,13 +103,14 @@ def deliver(action, path=DB_PATH, transport=None):
             "INSERT INTO autonomous_delivery_receipts VALUES (?,?,?,?,?)",
             (key, action.get("lead_id"), action.get("action"), "delivered", created_at),
         )
+        event_type = EVENT_BY_ACTION[action.get("action")]
         conn.execute(
             "INSERT INTO events (lead_id,event_type,value,metadata,created_at) VALUES (?,?,?,?,?)",
             (
                 action.get("lead_id"),
-                "followup_sent" if action.get("action") == "send_followup" else "sent",
+                event_type,
                 0,
-                json.dumps({"autonomous": True, "idempotency_key": key}),
+                json.dumps({"autonomous": True, "idempotency_key": key, "action": action.get("action")}),
                 created_at,
             ),
         )
