@@ -6,6 +6,7 @@ on:
       - 'scripts/mission_control.py'
       - 'scripts/experiment_queue.py'
       - 'scripts/experiment_learning.py'
+      - 'scripts/experiment_observations.py'
       - 'tests/test_mission_control_experiment_queue.py'
       - 'tests/test_experiment_learning.py'
       - '.github/workflows/mission-control-experiment-queue.yml'
@@ -15,6 +16,7 @@ on:
       - 'scripts/mission_control.py'
       - 'scripts/experiment_queue.py'
       - 'scripts/experiment_learning.py'
+      - 'scripts/experiment_observations.py'
       - 'tests/test_mission_control_experiment_queue.py'
       - 'tests/test_experiment_learning.py'
       - '.github/workflows/mission-control-experiment-queue.yml'
@@ -41,11 +43,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Compile Mission Control, queue, and learner
-        run: python -m py_compile scripts/mission_control.py scripts/experiment_queue.py scripts/experiment_learning.py scripts/portfolio_competition.py scripts/business_model_intelligence.py
+      - name: Compile Mission Control, queue, learner, and observation ledger
+        run: python -m py_compile scripts/mission_control.py scripts/experiment_queue.py scripts/experiment_learning.py scripts/experiment_observations.py scripts/portfolio_competition.py scripts/business_model_intelligence.py
       - name: Test zero-cost queue integration
         run: python -m unittest discover -s tests -p 'test_mission_control_experiment_queue.py' -v
-      - name: Test completed-experiment learning
+      - name: Test append-only completed-experiment learning
         run: python -m unittest discover -s tests -p 'test_experiment_learning.py' -v
       - name: Restore Mission Control memory
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -58,7 +60,7 @@ jobs:
       - name: Prepare Mission Control state directory
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: mkdir -p /tmp/apex-state
-      - name: Fold completed experiments into evidence
+      - name: Fold completed experiments into immutable evidence history
         if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: |
           python scripts/experiment_learning.py > /tmp/apex-experiment-learning.json

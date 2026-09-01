@@ -11,6 +11,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
+import experiment_observations
 import experiment_queue
 import mission_control
 
@@ -30,10 +31,32 @@ def _existing_evidence(conn, model_id: str) -> dict[str, Any]:
     return dict(row) if row is not None else {}
 
 
+def _seed_legacy_evidence_if_needed(mconn, oconn, model_id: str) -> None:
+    """Preserve pre-ledger aggregate evidence before observations become authoritative."""
+    history = experiment_observations.observation_history(oconn, model_id, limit=1)
+    if history:
+        return
+    prior = _existing_evidence(mconn, model_id)
+    if not prior:
+        return
+    experiment_observations.append_observation(
+        oconn,
+        model_id,
+        observed_revenue=max(0.0, float(prior.get('observed_revenue') or 0)),
+        observed_cost=max(0.0, float(prior.get('observed_cost') or 0)),
+        conversion_rate=min(1.0, max(0.0, float(prior.get('conversion_rate') or 0))),
+        evidence_quality=min(1.0, max(0.0, float(prior.get('evidence_quality') or 0))),
+        sample_size=None if prior.get('sample_size') is None else max(0.0, float(prior.get('sample_size') or 0)),
+        source='legacy_evidence_seed',
+        observed_at=prior.get('observed_at') or mission_control.now_iso(),
+    )
+
+
 def harvest_completed_experiments(path: str = DB_PATH) -> dict[str, Any]:
     """Promote measured conversion evidence from completed experiments exactly once."""
     mconn = mission_control.connect(path)
     qconn = experiment_queue.connect(path)
+    oconn = experiment_observations.connect(path)
     try:
         _ensure_sync_table(mconn)
         rows = qconn.execute('''SELECT e.* FROM business_model_experiments e
@@ -43,34 +66,47 @@ def harvest_completed_experiments(path: str = DB_PATH) -> dict[str, Any]:
         processed = []
         for row in rows:
             item = dict(row)
-            prior = _existing_evidence(mconn, item['model_id'])
-            prior_samples = max(0.0, float(prior.get('sample_size') or 0))
-            new_samples = max(0.0, float(item.get('sample_size') or 0))
-            total_samples = prior_samples + new_samples
-            prior_rate = min(1.0, max(0.0, float(prior.get('conversion_rate') or 0)))
-            new_rate = min(1.0, max(0.0, float(item.get('observed_value') or 0)))
-            if total_samples > 0:
-                combined_rate = ((prior_rate * prior_samples) + (new_rate * new_samples)) / total_samples
-            else:
-                combined_rate = max(prior_rate, new_rate)
-            quality = max(
-                min(1.0, max(0.0, float(prior.get('evidence_quality') or 0))),
-                min(1.0, total_samples / 20.0),
-            )
+            _seed_legacy_evidence_if_needed(mconn, oconn, item['model_id'])
+
+            # Crash-safe idempotency: if the immutable observation already exists, reuse it
+            # rather than duplicating evidence before the sync marker is written.
+            existing = oconn.execute(
+                "SELECT id FROM business_model_observations WHERE experiment_id=? AND source='completed_experiment' LIMIT 1",
+                (item['id'],),
+            ).fetchone()
+            if existing is None:
+                samples = max(0.0, float(item.get('sample_size') or 0))
+                experiment_observations.append_observation(
+                    oconn,
+                    item['model_id'],
+                    experiment_id=item['id'],
+                    observed_cost=max(0.0, float(item.get('observed_cost') or 0)),
+                    conversion_rate=min(1.0, max(0.0, float(item.get('observed_value') or 0))),
+                    evidence_quality=min(1.0, samples / 20.0),
+                    sample_size=samples,
+                    source='completed_experiment',
+                    observed_at=item.get('completed_at') or mission_control.now_iso(),
+                )
+
+            aggregate = experiment_observations.aggregate_observations(oconn, item['model_id'])
             mission_control.upsert_business_model_evidence(
                 mconn,
                 item['model_id'],
-                observed_revenue=max(0.0, float(prior.get('observed_revenue') or 0)),
-                observed_cost=max(0.0, float(prior.get('observed_cost') or 0)) + max(0.0, float(item.get('observed_cost') or 0)),
-                conversion_rate=combined_rate,
-                evidence_quality=quality,
-                sample_size=total_samples,
-                observed_at=item.get('completed_at') or mission_control.now_iso(),
+                observed_revenue=aggregate['observed_revenue'],
+                observed_cost=aggregate['observed_cost'],
+                conversion_rate=aggregate['conversion_rate'],
+                evidence_quality=aggregate['evidence_quality'],
+                sample_size=aggregate['sample_size'],
+                observed_at=aggregate['observed_at'] or mission_control.now_iso(),
             )
             mconn.execute('INSERT INTO experiment_evidence_sync (experiment_id,synced_at) VALUES (?,?)',
                           (item['id'], mission_control.now_iso()))
             mconn.commit()
-            processed.append({'experiment_id': item['id'], 'model_id': item['model_id']})
+            processed.append({
+                'experiment_id': item['id'],
+                'model_id': item['model_id'],
+                'observation_count': aggregate['observation_count'],
+            })
         return {
             'processed': len(processed),
             'experiments': processed,
@@ -78,6 +114,7 @@ def harvest_completed_experiments(path: str = DB_PATH) -> dict[str, Any]:
             'external_actions_allowed': False,
         }
     finally:
+        oconn.close()
         qconn.close()
         mconn.close()
 
