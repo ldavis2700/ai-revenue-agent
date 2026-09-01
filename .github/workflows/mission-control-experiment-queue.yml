@@ -13,10 +13,25 @@ on:
       - 'scripts/mission_control.py'
       - 'scripts/experiment_queue.py'
       - 'tests/test_mission_control_experiment_queue.py'
+      - '.github/workflows/mission-control-experiment-queue.yml'
+  schedule:
+    - cron: '47 */6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: apex-mission-control
+  cancel-in-progress: false
 
 jobs:
-  test:
+  mission-control:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      REVENUE_DB_PATH: /tmp/apex-mission-control.db
+      REVENUE_AGENT_EXECUTION_ENABLED: 'false'
+      REVENUE_AGENT_DAILY_RUN_CAP: '0'
+      REVENUE_AGENT_KILL_SWITCH: 'false'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -26,3 +41,25 @@ jobs:
         run: python -m py_compile scripts/mission_control.py scripts/experiment_queue.py scripts/portfolio_competition.py scripts/business_model_intelligence.py
       - name: Test zero-cost queue integration
         run: python -m unittest discover -s tests -p 'test_mission_control_experiment_queue.py' -v
+      - name: Generate safety-gated Mission Control plan
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          python scripts/mission_control.py > /tmp/apex-mission-control.json
+          python - <<'PY'
+          import json
+          data=json.load(open('/tmp/apex-mission-control.json'))
+          gate=data['execution_gate']
+          assert gate['external_actions_allowed'] is False
+          assert gate['spending_allowed'] is False
+          assert gate['automatic_charging_allowed'] is False
+          assert data['mode'] == 'analysis_and_preparation_only'
+          assert data['business_model_intelligence']['execution_gate'] == 'candidate_only'
+          assert data['zero_cost_validation_queue']['execution_gate'] == 'recommendation_only'
+          PY
+      - name: Publish Mission Control plan
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: apex-mission-control-${{ github.run_id }}
+          path: /tmp/apex-mission-control.json
+          retention-days: 14
