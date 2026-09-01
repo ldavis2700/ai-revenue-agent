@@ -13,10 +13,19 @@ on:
       - 'config/business_models.json'
       - 'scripts/business_model_intelligence.py'
       - 'tests/test_business_model_intelligence.py'
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: apex-business-model-intelligence
+  cancel-in-progress: false
 
 jobs:
   validate:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -38,3 +47,10 @@ jobs:
           assert data['guardrails']['automatic_spend'] is False
           assert all(item['eligible'] for item in data['candidates'])
           PY
+      - name: Publish intelligence snapshot
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: apex-business-model-intelligence-${{ github.run_id }}
+          path: /tmp/apex-models.json
+          retention-days: 14
