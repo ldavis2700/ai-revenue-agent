@@ -55,6 +55,41 @@ class DeliveryAdapterTests(unittest.TestCase):
         self.assertEqual(conn.execute("SELECT COUNT(*) FROM events WHERE event_type='sent'").fetchone()[0], 1)
         conn.close()
 
+    @patch.dict(os.environ, {
+        "DELIVERY_ENABLED": "true",
+        "DELIVERY_WEBHOOK_URL": "https://delivery.example.test/send",
+        "DELIVERY_WEBHOOK_TOKEN": "secret",
+    }, clear=False)
+    def test_checkout_delivery_records_checkout_specific_event(self):
+        checkout = {
+            **self.action,
+            "action": "send_checkout",
+            "checkout_url": "https://checkout.example.test/session",
+        }
+        result = deliver(checkout, self.path, lambda request: Response())
+        self.assertEqual(result["status"], "delivered")
+        conn = sqlite3.connect(self.path)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM events WHERE event_type='checkout_sent'").fetchone()[0], 1)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM events WHERE event_type='sent'").fetchone()[0], 0)
+        conn.close()
+
+    @patch.dict(os.environ, {
+        "DELIVERY_ENABLED": "true",
+        "DELIVERY_WEBHOOK_URL": "https://delivery.example.test/send",
+        "DELIVERY_WEBHOOK_TOKEN": "secret",
+    }, clear=False)
+    def test_managed_checkout_delivery_records_specific_event(self):
+        checkout = {
+            **self.action,
+            "action": "send_managed_checkout",
+            "checkout_url": "https://checkout.example.test/managed-session",
+        }
+        result = deliver(checkout, self.path, lambda request: Response())
+        self.assertEqual(result["status"], "delivered")
+        conn = sqlite3.connect(self.path)
+        self.assertEqual(conn.execute("SELECT COUNT(*) FROM events WHERE event_type='managed_checkout_sent'").fetchone()[0], 1)
+        conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()
