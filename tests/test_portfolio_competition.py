@@ -1,6 +1,6 @@
 import unittest
 
-from scripts.portfolio_competition import compare_candidates
+from scripts.portfolio_competition import candidates_from_intelligence, compare_candidates
 
 
 class PortfolioCompetitionTests(unittest.TestCase):
@@ -31,6 +31,15 @@ class PortfolioCompetitionTests(unittest.TestCase):
         self.assertIsNone(result["champion"])
         self.assertEqual(result["challenger"]["id"], "a")
         self.assertEqual(result["recommended_action"], "validate_challenger")
+
+    def test_prefers_evidence_enriched_pursuit_candidates(self):
+        pursuit = [{"id": "evidence", "pursuit_score": 91, "experiment_state": "validate"}]
+        snapshot = {"pursuit_plan": {"pursue": pursuit}, "candidates": [{"id": "static"}]}
+        self.assertEqual(candidates_from_intelligence(snapshot), pursuit)
+
+    def test_falls_back_to_candidate_list(self):
+        candidates = [{"id": "static"}]
+        self.assertEqual(candidates_from_intelligence({"candidates": candidates}), candidates)
 
 
 if __name__ == "__main__":
