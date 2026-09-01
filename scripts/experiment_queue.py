@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import math
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any
@@ -47,6 +48,14 @@ def _as_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
 
+def _finite_float(value: float, field: str) -> float:
+    """Reject invalid measurements before bounds checks or persistent writes."""
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f'{field} must be finite')
+    return number
+
+
 def enqueue_experiment(conn: sqlite3.Connection, model_id: str, hypothesis: str,
                        success_metric: str, target_value: float, priority: int = 100,
                        max_cost: float = 0, max_samples: float | None = None) -> dict[str, Any]:
@@ -57,11 +66,14 @@ def enqueue_experiment(conn: sqlite3.Connection, model_id: str, hypothesis: str,
     if existing is not None:
         return {**dict(existing), 'duplicate_active': True, 'execution_gate': 'recommendation_only'}
 
+    target = _finite_float(target_value, 'target_value')
+    cost_cap = max(0.0, _finite_float(max_cost, 'max_cost'))
+    sample_cap = None if max_samples is None else max(0.0, _finite_float(max_samples, 'max_samples'))
     conn.execute('''INSERT INTO business_model_experiments
         (model_id,hypothesis,success_metric,target_value,priority,max_cost,max_samples,status,created_at)
         VALUES (?,?,?,?,?,?,?,'queued',?)''',
-        (model_id, hypothesis, success_metric, float(target_value), int(priority),
-         max(0.0, float(max_cost)), None if max_samples is None else max(0.0, float(max_samples)), now_iso()))
+        (model_id, hypothesis, success_metric, target, int(priority),
+         cost_cap, sample_cap, now_iso()))
     conn.commit()
     row = conn.execute('SELECT * FROM business_model_experiments WHERE id=last_insert_rowid()').fetchone()
     return {**dict(row), 'duplicate_active': False, 'execution_gate': 'recommendation_only'}
@@ -97,9 +109,9 @@ def record_measurement(conn: sqlite3.Connection, experiment_id: int, observed_va
     if row['status'] in FINAL_STATES:
         return {**dict(row), 'execution_gate': 'recommendation_only'}
 
-    value = float(observed_value)
-    cost = max(0.0, float(observed_cost))
-    samples = max(0.0, float(sample_size))
+    value = _finite_float(observed_value, 'observed_value')
+    cost = max(0.0, _finite_float(observed_cost, 'observed_cost'))
+    samples = max(0.0, _finite_float(sample_size, 'sample_size'))
     status = 'running'
     outcome = None
 
