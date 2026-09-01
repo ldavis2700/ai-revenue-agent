@@ -73,6 +73,50 @@ class ExperimentQueueTests(unittest.TestCase):
         self.assertEqual(result['status'], 'completed')
         self.assertEqual(result['outcome'], 'sample_cap_reached_without_target')
 
+    def test_nonfinite_limits_are_rejected_without_inserting_experiments(self):
+        for field in ('target_value', 'max_cost', 'max_samples'):
+            for value in (float('nan'), float('inf'), float('-inf'), 'NaN', 'Infinity', '-Infinity'):
+                with self.subTest(field=field, value=value):
+                    limits = dict(target_value=0.1, max_cost=0, max_samples=20)
+                    limits[field] = value
+                    with self.assertRaisesRegex(ValueError, field + ' must be finite'):
+                        experiment_queue.enqueue_experiment(
+                            self.conn, 'invalid-limits', 'Bounded test', 'conversion_rate', **limits)
+                    count = self.conn.execute('SELECT COUNT(*) FROM business_model_experiments').fetchone()[0]
+                    self.assertEqual(count, 0)
+
+    def test_nonfinite_measurements_preserve_previous_state(self):
+        queued = experiment_queue.enqueue_experiment(
+            self.conn, 'directory', 'Measured demand', 'conversion_rate', 0.10,
+            max_cost=0, max_samples=20)
+        experiment_queue.start_experiment(self.conn, queued['id'])
+        experiment_queue.record_measurement(
+            self.conn, queued['id'], observed_value=0.02, observed_cost=0, sample_size=2)
+        before = dict(self.conn.execute(
+            'SELECT * FROM business_model_experiments WHERE id=?', (queued['id'],)).fetchone())
+        for field in ('observed_value', 'observed_cost', 'sample_size'):
+            for value in (float('nan'), float('inf'), float('-inf'), 'NaN', 'Infinity', '-Infinity'):
+                with self.subTest(field=field, value=value):
+                    measurement = dict(observed_value=0.03, observed_cost=0, sample_size=3)
+                    measurement[field] = value
+                    with self.assertRaisesRegex(ValueError, field + ' must be finite'):
+                        experiment_queue.record_measurement(self.conn, queued['id'], **measurement)
+                    after = dict(self.conn.execute(
+                        'SELECT * FROM business_model_experiments WHERE id=?', (queued['id'],)).fetchone())
+                    self.assertEqual(after, before)
+
+    def test_finite_numeric_strings_and_existing_negative_bounds_are_preserved(self):
+        queued = experiment_queue.enqueue_experiment(
+            self.conn, 'directory', 'Measured demand', 'conversion_rate', '0.10',
+            max_cost='-1', max_samples='20')
+        self.assertEqual(queued['max_cost'], 0)
+        result = experiment_queue.record_measurement(
+            self.conn, queued['id'], observed_value='0.02', observed_cost='-2', sample_size='-3')
+        self.assertEqual(result['status'], 'running')
+        self.assertEqual(result['observed_cost'], 0)
+        self.assertEqual(result['sample_size'], 0)
+        self.assertEqual(result['execution_gate'], 'recommendation_only')
+
 
 if __name__ == '__main__':
     unittest.main()
