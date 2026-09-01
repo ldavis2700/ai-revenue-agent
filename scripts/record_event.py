@@ -15,7 +15,7 @@ def now_iso():
 def main():
     parser = argparse.ArgumentParser(description='Record a revenue lifecycle event for a lead.')
     parser.add_argument('lead_id')
-    parser.add_argument('event_type', choices=['sent', 'followup_sent', 'delivered', 'reply', 'interested', 'not_interested', 'meeting', 'sale', 'refund', 'opt_out'])
+    parser.add_argument('event_type', choices=['sent', 'followup_sent', 'delivered', 'reply', 'interested', 'affirmative_purchase_intent', 'not_interested', 'meeting', 'sale', 'refund', 'opt_out'])
     parser.add_argument('--value', type=float, default=0)
     parser.add_argument('--metadata', default='{}')
     args = parser.parse_args()
@@ -34,6 +34,7 @@ def main():
         'followup_sent': 'followed_up',
         'reply': 'replied',
         'interested': 'interested',
+        'affirmative_purchase_intent': 'purchase_intent',
         'not_interested': 'closed_lost',
         'meeting': 'meeting',
         'sale': 'won',

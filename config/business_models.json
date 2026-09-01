@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "purpose": "Seed taxonomy for APEX business-model discovery. This is an extensible set of legitimate archetypes, not a claim of literal completeness.",
+  "scoring_scale": "1-10 where higher is more of the named property; for startup_cost, owner_effort, and compliance_risk lower is better.",
+  "models": [
+    {"id":"ai_automation_agency","category":"services","name":"AI automation agency","revenue_type":"project_plus_recurring","speed_to_revenue":9,"margin":9,"startup_cost":2,"automation":8,"scalability":8,"owner_effort":4,"compliance_risk":2},
+    {"id":"productized_service","category":"services","name":"Productized service","revenue_type":"project_or_subscription","speed_to_revenue":9,"margin":8,"startup_cost":2,"automation":7,"scalability":7,"owner_effort":4,"compliance_risk":2},
+    {"id":"consulting","category":"services","name":"Remote consulting","revenue_type":"project_or_retainer","speed_to_revenue":8,"margin":9,"startup_cost":1,"automation":4,"scalability":5,"owner_effort":7,"compliance_risk":2},
+    {"id":"freelance_specialist","category":"services","name":"Freelance specialist services","revenue_type":"project","speed_to_revenue":9,"margin":8,"startup_cost":1,"automation":4,"scalability":4,"owner_effort":7,"compliance_risk":2},
+    {"id":"managed_service","category":"services","name":"Managed recurring service","revenue_type":"subscription","speed_to_revenue":8,"margin":8,"startup_cost":2,"automation":7,"scalability":7,"owner_effort":5,"compliance_risk":2},
+    {"id":"lead_generation","category":"services","name":"Lead generation service","revenue_type":"retainer_or_per_lead","speed_to_revenue":8,"margin":8,"startup_cost":2,"automation":8,"scalability":8,"owner_effort":4,"compliance_risk":4},
+    {"id":"appointment_setting","category":"services","name":"Consent-based appointment setting","revenue_type":"retainer_or_per_booking","speed_to_revenue":8,"margin":8,"startup_cost":2,"automation":7,"scalability":7,"owner_effort":4,"compliance_risk":4},
+    {"id":"white_label_service","category":"services","name":"White-label fulfillment","revenue_type":"project_plus_recurring","speed_to_revenue":7,"margin":7,"startup_cost":2,"automation":7,"scalability":8,"owner_effort":4,"compliance_risk":2},
+
+    {"id":"micro_saas","category":"software","name":"Micro-SaaS","revenue_type":"subscription","speed_to_revenue":5,"margin":9,"startup_cost":4,"automation":10,"scalability":10,"owner_effort":4,"compliance_risk":3},
+    {"id":"vertical_saas","category":"software","name":"Vertical SaaS","revenue_type":"subscription","speed_to_revenue":4,"margin":9,"startup_cost":5,"automation":10,"scalability":10,"owner_effort":5,"compliance_risk":3},
+    {"id":"api_as_product","category":"software","name":"Paid API","revenue_type":"usage_or_subscription","speed_to_revenue":5,"margin":9,"startup_cost":4,"automation":10,"scalability":10,"owner_effort":3,"compliance_risk":3},
+    {"id":"browser_extension","category":"software","name":"Paid browser extension","revenue_type":"one_time_or_subscription","speed_to_revenue":5,"margin":9,"startup_cost":3,"automation":9,"scalability":9,"owner_effort":3,"compliance_risk":3},
+    {"id":"mobile_app","category":"software","name":"Paid or subscription mobile app","revenue_type":"one_time_subscription_iap","speed_to_revenue":4,"margin":8,"startup_cost":5,"automation":9,"scalability":10,"owner_effort":5,"compliance_risk":4},
+    {"id":"plugin_addon","category":"software","name":"Paid plugin or add-on","revenue_type":"one_time_or_subscription","speed_to_revenue":5,"margin":9,"startup_cost":3,"automation":9,"scalability":9,"owner_effort":3,"compliance_risk":3},
+
+    {"id":"digital_templates","category":"digital_products","name":"Templates and toolkits","revenue_type":"one_time","speed_to_revenue":8,"margin":10,"startup_cost":1,"automation":9,"scalability":9,"owner_effort":2,"compliance_risk":1},
+    {"id":"ebooks_guides","category":"digital_products","name":"E-books and guides","revenue_type":"one_time","speed_to_revenue":7,"margin":10,"startup_cost":1,"automation":9,"scalability":9,"owner_effort":2,"compliance_risk":2},
+    {"id":"online_course","category":"digital_products","name":"Online course","revenue_type":"one_time_or_subscription","speed_to_revenue":6,"margin":9,"startup_cost":2,"automation":8,"scalability":9,"owner_effort":3,"compliance_risk":2},
+    {"id":"membership_community","category":"digital_products","name":"Paid membership community","revenue_type":"subscription","speed_to_revenue":6,"margin":9,"startup_cost":2,"automation":6,"scalability":8,"owner_effort":5,"compliance_risk":2},
+    {"id":"newsletter_paid","category":"publishing","name":"Paid newsletter","revenue_type":"subscription","speed_to_revenue":5,"margin":9,"startup_cost":1,"automation":7,"scalability":9,"owner_effort":4,"compliance_risk":2},
+    {"id":"research_reports","category":"publishing","name":"Paid research and reports","revenue_type":"one_time_or_subscription","speed_to_revenue":6,"margin":9,"startup_cost":2,"automation":7,"scalability":8,"owner_effort":4,"compliance_risk":3},
+
+    {"id":"affiliate_content","category":"audience","name":"Affiliate content business","revenue_type":"commission","speed_to_revenue":4,"margin":8,"startup_cost":1,"automation":8,"scalability":9,"owner_effort":3,"compliance_risk":3},
+    {"id":"sponsorship_media","category":"audience","name":"Sponsored media or creator business","revenue_type":"sponsorship","speed_to_revenue":4,"margin":8,"startup_cost":2,"automation":6,"scalability":8,"owner_effort":5,"compliance_risk":3},
+    {"id":"ad_supported_media","category":"audience","name":"Ad-supported content publishing","revenue_type":"advertising","speed_to_revenue":3,"margin":7,"startup_cost":1,"automation":8,"scalability":9,"owner_effort":3,"compliance_risk":3},
+    {"id":"ugc_for_brands","category":"audience","name":"UGC production for brands","revenue_type":"project","speed_to_revenue":8,"margin":8,"startup_cost":2,"automation":5,"scalability":6,"owner_effort":6,"compliance_risk":2},
+
+    {"id":"marketplace","category":"platforms","name":"Two-sided marketplace","revenue_type":"commission_or_subscription","speed_to_revenue":3,"margin":8,"startup_cost":6,"automation":9,"scalability":10,"owner_effort":6,"compliance_risk":5},
+    {"id":"directory","category":"platforms","name":"Niche paid directory","revenue_type":"listing_subscription_sponsorship","speed_to_revenue":6,"margin":9,"startup_cost":2,"automation":8,"scalability":9,"owner_effort":3,"compliance_risk":2},
+    {"id":"job_board","category":"platforms","name":"Niche job board","revenue_type":"listing_subscription","speed_to_revenue":5,"margin":9,"startup_cost":2,"automation":8,"scalability":9,"owner_effort":3,"compliance_risk":3},
+    {"id":"comparison_site","category":"platforms","name":"Comparison or referral site","revenue_type":"affiliate_or_lead_fee","speed_to_revenue":5,"margin":9,"startup_cost":2,"automation":8,"scalability":9,"owner_effort":3,"compliance_risk":4},
+
+    {"id":"print_on_demand","category":"commerce","name":"Print-on-demand commerce","revenue_type":"transaction_margin","speed_to_revenue":5,"margin":5,"startup_cost":2,"automation":8,"scalability":8,"owner_effort":3,"compliance_risk":3},
+    {"id":"digital_commerce","category":"commerce","name":"Digital goods storefront","revenue_type":"transaction_margin","speed_to_revenue":7,"margin":9,"startup_cost":1,"automation":9,"scalability":9,"owner_effort":2,"compliance_risk":2},
+    {"id":"curated_ecommerce","category":"commerce","name":"Curated e-commerce brand","revenue_type":"transaction_margin","speed_to_revenue":5,"margin":5,"startup_cost":5,"automation":7,"scalability":8,"owner_effort":5,"compliance_risk":4},
+    {"id":"subscription_box","category":"commerce","name":"Subscription commerce","revenue_type":"subscription_margin","speed_to_revenue":4,"margin":5,"startup_cost":6,"automation":6,"scalability":7,"owner_effort":6,"compliance_risk":4},
+
+    {"id":"licensing_ip","category":"licensing","name":"License original intellectual property","revenue_type":"royalty_or_license","speed_to_revenue":5,"margin":9,"startup_cost":2,"automation":8,"scalability":9,"owner_effort":3,"compliance_risk":3},
+    {"id":"software_reseller","category":"licensing","name":"Software reseller or referral partnership","revenue_type":"commission_or_margin","speed_to_revenue":7,"margin":7,"startup_cost":1,"automation":8,"scalability":8,"owner_effort":3,"compliance_risk":3},
+    {"id":"white_label_software","category":"licensing","name":"White-label software resale","revenue_type":"subscription_margin","speed_to_revenue":7,"margin":7,"startup_cost":2,"automation":9,"scalability":9,"owner_effort":3,"compliance_risk":3},
+
+    {"id":"data_subscription","category":"data","name":"Curated data subscription","revenue_type":"subscription","speed_to_revenue":5,"margin":9,"startup_cost":3,"automation":9,"scalability":9,"owner_effort":3,"compliance_risk":5},
+    {"id":"benchmarking_service","category":"data","name":"Benchmarking and analytics service","revenue_type":"subscription_or_project","speed_to_revenue":6,"margin":8,"startup_cost":3,"automation":8,"scalability":8,"owner_effort":4,"compliance_risk":4},
+    {"id":"monitoring_alerts","category":"data","name":"Monitoring and alert subscription","revenue_type":"subscription","speed_to_revenue":6,"margin":9,"startup_cost":3,"automation":10,"scalability":9,"owner_effort":2,"compliance_risk":3},
+
+    {"id":"paid_webinars","category":"education","name":"Paid webinar or workshop","revenue_type":"ticket_or_sponsorship","speed_to_revenue":7,"margin":9,"startup_cost":1,"automation":5,"scalability":7,"owner_effort":6,"compliance_risk":2},
+    {"id":"cohort_program","category":"education","name":"Cohort-based program","revenue_type":"tuition","speed_to_revenue":6,"margin":8,"startup_cost":2,"automation":5,"scalability":6,"owner_effort":7,"compliance_risk":2},
+    {"id":"certification_program","category":"education","name":"Private skills certification program","revenue_type":"tuition_or_exam_fee","speed_to_revenue":5,"margin":8,"startup_cost":3,"automation":7,"scalability":8,"owner_effort":4,"compliance_risk":4}
+  ],
+  "hard_exclusions": [
+    "fraud or deception",
+    "spam or unlawful unsolicited outreach",
+    "counterfeit or stolen goods",
+    "malware, credential theft, or unauthorized surveillance",
+    "illegal or unlicensed regulated financial activity",
+    "illegal gambling or prohibited wagering",
+    "illegal drugs, weapons, or other prohibited goods",
+    "copyright piracy or unauthorized resale of protected content"
+  ]
+}

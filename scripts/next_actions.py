@@ -32,6 +32,21 @@ def checkout_url(lead, template=CHECKOUT_URL_TEMPLATE, amount=OFFER_PRICE, offer
     return template.format(**values)
 
 
+def reply_state(kinds):
+    """Return the safest next reply state from explicit persisted evidence.
+
+    A generic reply or legacy interest signal remains owner-review only.
+    Autonomous closing may advance only when an upstream authenticated classifier
+    or operator has persisted the explicit affirmative_purchase_intent event.
+    This prevents ambiguous interest from being treated as consent to buy.
+    """
+    if 'affirmative_purchase_intent' in kinds:
+        return 'interested'
+    if 'reply' in kinds or 'interested' in kinds:
+        return 'review_reply'
+    return None
+
+
 def main():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -47,6 +62,8 @@ def main():
         if 'managed_plan_active' in kinds:
             continue
         if 'managed_plan_interested' in kinds:
+            if 'managed_checkout_sent' in kinds:
+                continue
             managed_offer = f'{OFFER_NAME} Managed Plan'
             url = checkout_url(lead, MANAGED_CHECKOUT_URL_TEMPLATE, MANAGED_MONTHLY_PRICE, managed_offer)
             actions.append({
@@ -77,12 +94,15 @@ def main():
                 ),
             })
             continue
-        if 'interested' in kinds:
+        reply = reply_state(kinds)
+        if reply == 'interested':
+            if 'checkout_sent' in kinds:
+                continue
             url = checkout_url(lead)
             actions.append({
                 'lead_id': lead['id'],
                 'action': 'send_checkout' if url else 'human_close',
-                'reason': 'prospect expressed interest',
+                'reason': 'prospect has explicit persisted affirmative purchase intent',
                 'company': lead['company'],
                 'email': lead['email'],
                 'checkout_url': url,
@@ -90,8 +110,8 @@ def main():
                 'offer': OFFER_NAME,
             })
             continue
-        if 'reply' in kinds:
-            actions.append({'lead_id': lead['id'], 'action': 'review_reply', 'reason': 'prospect replied', 'company': lead['company']})
+        if reply == 'review_reply':
+            actions.append({'lead_id': lead['id'], 'action': 'review_reply', 'reason': 'prospect replied or expressed interest but purchase intent is not explicit', 'company': lead['company']})
             continue
         sent_events = [e for e in events if e['event_type'] in {'sent', 'followup_sent'}]
         if not sent_events:

@@ -1,0 +1,25 @@
+name: APEX Experiment Queue
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/experiment_queue.py'
+      - 'tests/test_experiment_queue.py'
+      - '.github/workflows/experiment-queue.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/experiment_queue.py'
+      - 'tests/test_experiment_queue.py'
+      - '.github/workflows/experiment-queue.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test bounded experiment queue
+        run: python -m unittest discover -s tests -p 'test_experiment_queue.py' -v

@@ -41,6 +41,56 @@ class MissionControlTests(unittest.TestCase):
         result = mission_control.run(self.path)
         self.assertEqual(result['plan'][0]['action'], 'connect_approved_lead_source')
 
+    def test_business_model_intelligence_is_always_primed(self):
+        result = mission_control.run(self.path)
+        intelligence = result['business_model_intelligence']
+        self.assertGreaterEqual(intelligence['catalog_size'], 100)
+        self.assertEqual(intelligence['mode'], 'continuous_opportunity_optimization')
+        self.assertEqual(intelligence['execution_gate'], 'candidate_only')
+        self.assertGreater(len(intelligence['top_candidates']), 0)
+        competition = intelligence['portfolio_competition']
+        self.assertEqual(competition['execution_gate'], 'recommendation_only')
+        self.assertIn(competition['recommended_action'], {
+            'discover_or_repair_candidates', 'validate_challenger', 'continue_measuring_champion',
+            'run_bounded_head_to_head_validation', 'protect_winner_and_probe_challenger'})
+        actions = [item['action'] for item in result['plan']]
+        self.assertIn('evaluate_portfolio_competition', actions)
+        self.assertIn('validate_top_business_model_candidate', actions)
+        self.assertIn('prepare_next_zero_cost_validation', actions)
+
+    def test_business_model_evidence_persists_across_runs(self):
+        conn = mission_control.connect(self.path)
+        baseline = mission_control.business_model_snapshot(conn)
+        seed = baseline['top_candidates'][0]
+        mission_control.upsert_business_model_evidence(
+            conn,
+            seed['id'],
+            observed_revenue=1200,
+            observed_cost=100,
+            conversion_rate=0.30,
+            evidence_quality=0.95,
+            sample_size=25,
+            observed_at=mission_control.now_iso(),
+        )
+        conn.close()
+
+        reopened = mission_control.connect(self.path)
+        stored = mission_control.load_persisted_evidence(reopened)
+        reopened.close()
+        self.assertIn(seed['id'], stored)
+        self.assertEqual(stored[seed['id']]['observed_revenue'], 1200)
+        self.assertEqual(stored[seed['id']]['sample_size'], 25)
+
+        result = mission_control.run(self.path)
+        self.assertEqual(result['business_model_intelligence']['evidence_models'], 1)
+        candidates = result['business_model_intelligence']['top_candidates']
+        self.assertTrue(any(candidate['id'] == seed['id'] for candidate in candidates))
+        measured = next(candidate for candidate in candidates if candidate['id'] == seed['id'])
+        self.assertIn(measured['experiment_state'], {'continue_validation', 'scale_candidate'})
+        competition = result['business_model_intelligence']['portfolio_competition']
+        self.assertIsNotNone(competition.get('champion'))
+        self.assertIsNotNone(competition.get('challenger'))
+
 
 if __name__ == '__main__':
     unittest.main()

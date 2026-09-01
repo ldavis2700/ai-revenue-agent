@@ -1,0 +1,102 @@
+name: APEX Mission Control Experiment Queue
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/mission_control.py'
+      - 'scripts/experiment_queue.py'
+      - 'scripts/experiment_learning.py'
+      - 'scripts/experiment_observations.py'
+      - 'tests/test_mission_control_experiment_queue.py'
+      - 'tests/test_experiment_learning.py'
+      - '.github/workflows/mission-control-experiment-queue.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/mission_control.py'
+      - 'scripts/experiment_queue.py'
+      - 'scripts/experiment_learning.py'
+      - 'scripts/experiment_observations.py'
+      - 'tests/test_mission_control_experiment_queue.py'
+      - 'tests/test_experiment_learning.py'
+      - '.github/workflows/mission-control-experiment-queue.yml'
+  schedule:
+    - cron: '47 */6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: apex-mission-control
+  cancel-in-progress: false
+
+jobs:
+  mission-control:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      REVENUE_DB_PATH: /tmp/apex-state/apex-mission-control.db
+      REVENUE_AGENT_EXECUTION_ENABLED: 'false'
+      REVENUE_AGENT_DAILY_RUN_CAP: '0'
+      REVENUE_AGENT_KILL_SWITCH: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile Mission Control, queue, learner, and observation ledger
+        run: python -m py_compile scripts/mission_control.py scripts/experiment_queue.py scripts/experiment_learning.py scripts/experiment_observations.py scripts/portfolio_competition.py scripts/business_model_intelligence.py
+      - name: Test zero-cost queue integration
+        run: python -m unittest discover -s tests -p 'test_mission_control_experiment_queue.py' -v
+      - name: Test append-only completed-experiment learning
+        run: python -m unittest discover -s tests -p 'test_experiment_learning.py' -v
+      - name: Restore Mission Control memory
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/apex-state
+          key: apex-mission-control-state-${{ github.run_id }}
+          restore-keys: |
+            apex-mission-control-state-
+      - name: Prepare Mission Control state directory
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: mkdir -p /tmp/apex-state
+      - name: Fold completed experiments into immutable evidence history
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          python scripts/experiment_learning.py > /tmp/apex-experiment-learning.json
+          python - <<'PY'
+          import json
+          data=json.load(open('/tmp/apex-experiment-learning.json'))
+          assert data['execution_gate'] == 'internal_learning_only'
+          assert data['external_actions_allowed'] is False
+          PY
+      - name: Generate safety-gated Mission Control plan
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          python scripts/mission_control.py > /tmp/apex-mission-control.json
+          python - <<'PY'
+          import json
+          data=json.load(open('/tmp/apex-mission-control.json'))
+          gate=data['execution_gate']
+          assert gate['external_actions_allowed'] is False
+          assert gate['spending_allowed'] is False
+          assert gate['automatic_charging_allowed'] is False
+          assert data['mode'] == 'analysis_and_preparation_only'
+          assert data['business_model_intelligence']['execution_gate'] == 'candidate_only'
+          assert data['zero_cost_validation_queue']['execution_gate'] == 'recommendation_only'
+          PY
+      - name: Save Mission Control memory
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/apex-state
+          key: apex-mission-control-state-${{ github.run_id }}
+      - name: Publish Mission Control learning artifacts
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: apex-mission-control-${{ github.run_id }}
+          path: |
+            /tmp/apex-mission-control.json
+            /tmp/apex-experiment-learning.json
+          retention-days: 14
