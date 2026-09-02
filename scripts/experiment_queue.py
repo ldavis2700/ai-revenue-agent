@@ -69,14 +69,28 @@ def enqueue_experiment(conn: sqlite3.Connection, model_id: str, hypothesis: str,
     target = _finite_float(target_value, 'target_value')
     cost_cap = max(0.0, _finite_float(max_cost, 'max_cost'))
     sample_cap = None if max_samples is None else max(0.0, _finite_float(max_samples, 'max_samples'))
-    conn.execute('''INSERT INTO business_model_experiments
+    # The initial lookup is only a fast path. Check again in the write statement
+    # so two connections cannot both enqueue an active experiment for this model.
+    inserted = conn.execute('''INSERT INTO business_model_experiments
         (model_id,hypothesis,success_metric,target_value,priority,max_cost,max_samples,status,created_at)
-        VALUES (?,?,?,?,?,?,?,'queued',?)''',
+        SELECT ?,?,?,?,?,?,?,'queued',?
+        WHERE NOT EXISTS (
+            SELECT 1 FROM business_model_experiments
+            WHERE model_id=? AND status IN ('queued','running')
+        )''',
         (model_id, hypothesis, success_metric, target, int(priority),
-         cost_cap, sample_cap, now_iso()))
+         cost_cap, sample_cap, now_iso(), model_id))
+    duplicate = inserted.rowcount == 0
+    # Read the selected row while the write transaction still holds its lock.
+    if duplicate:
+        row = conn.execute(
+            "SELECT * FROM business_model_experiments WHERE model_id=? AND status IN ('queued','running') "
+            "ORDER BY id DESC LIMIT 1", (model_id,)).fetchone()
+    else:
+        row = conn.execute('SELECT * FROM business_model_experiments WHERE id=?',
+                           (inserted.lastrowid,)).fetchone()
     conn.commit()
-    row = conn.execute('SELECT * FROM business_model_experiments WHERE id=last_insert_rowid()').fetchone()
-    return {**dict(row), 'duplicate_active': False, 'execution_gate': 'recommendation_only'}
+    return {**dict(row), 'duplicate_active': duplicate, 'execution_gate': 'recommendation_only'}
 
 
 def next_experiment(conn: sqlite3.Connection) -> dict[str, Any] | None:
