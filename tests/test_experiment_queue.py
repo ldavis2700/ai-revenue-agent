@@ -33,6 +33,62 @@ class ExperimentQueueTests(unittest.TestCase):
         nxt = experiment_queue.next_experiment(self.conn)
         self.assertEqual(nxt['model_id'], 'directory')
 
+    def test_overlapping_enqueues_preserve_one_active_experiment(self):
+        for running in (False, True):
+            with self.subTest(running=running):
+                # Seed a different last_insert_rowid on the delayed connection.
+                experiment_queue.enqueue_experiment(
+                    self.conn, 'unrelated-' + str(running), 'Unrelated', 'rate', 1)
+                model = 'overlap-' + str(running)
+                other = experiment_queue.connect(self.path)
+                winner = []
+                base = self.conn
+
+                class InterleavedConnection:
+                    def execute(self, sql, parameters=()):
+                        if sql.lstrip().startswith('INSERT') and not winner:
+                            accepted = experiment_queue.enqueue_experiment(
+                                other, model, 'Accepted hypothesis', 'rate', 0.2,
+                                priority=5, max_cost=0, max_samples=10)
+                            if running:
+                                experiment_queue.start_experiment(other, accepted['id'])
+                                accepted = {**dict(other.execute(
+                                    'SELECT * FROM business_model_experiments WHERE id=?',
+                                    (accepted['id'],)).fetchone()),
+                                    'duplicate_active': False,
+                                    'execution_gate': 'recommendation_only'}
+                            winner.append(accepted)
+                        return base.execute(sql, parameters)
+
+                    def commit(self):
+                        return base.commit()
+
+                try:
+                    delayed = experiment_queue.enqueue_experiment(
+                        InterleavedConnection(), model, 'Stale hypothesis', 'rate', 0.5,
+                        priority=99, max_cost=0, max_samples=50)
+                    self.assertEqual(delayed, {**winner[0], 'duplicate_active': True})
+                    count = self.conn.execute(
+                        'SELECT COUNT(*) FROM business_model_experiments WHERE model_id=?',
+                        (model,)).fetchone()[0]
+                    self.assertEqual(count, 1)
+                finally:
+                    other.close()
+
+    def test_new_experiment_allowed_after_previous_one_finishes(self):
+        for cost in (0, 1):
+            with self.subTest(cost=cost):
+                model = 'finished-' + str(cost)
+                first = experiment_queue.enqueue_experiment(
+                    self.conn, model, 'First', 'rate', 0.1)
+                experiment_queue.record_measurement(self.conn, first['id'], 0.2, cost)
+                second = experiment_queue.enqueue_experiment(
+                    self.conn, model, 'Second', 'rate', 0.3)
+                self.assertNotEqual(first['id'], second['id'])
+                self.assertFalse(second['duplicate_active'])
+                self.assertEqual(second['hypothesis'], 'Second')
+                self.assertEqual(second['status'], 'queued')
+
     def test_target_achievement_completes_experiment(self):
         queued = experiment_queue.enqueue_experiment(
             self.conn, 'directory', 'Directory converts', 'conversion_rate', 0.10,
