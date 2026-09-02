@@ -228,6 +228,74 @@ class ExperimentLearningTests(unittest.TestCase):
         self.assertEqual(conn.execute('SELECT sample_size FROM business_model_evidence').fetchone()[0], 20)
         conn.close()
 
+    def _assert_invalid_harvest_is_atomic(self, field):
+        with sqlite3.connect(self.path) as conn:
+            before_evidence = conn.execute('SELECT * FROM business_model_evidence ORDER BY model_id').fetchall()
+            before_experiments = conn.execute('SELECT * FROM business_model_experiments ORDER BY id').fetchall()
+        with self.assertRaisesRegex(ValueError, field + ' must be finite'):
+            experiment_learning.harvest_completed_experiments(self.path)
+        with sqlite3.connect(self.path) as conn:
+            self.assertEqual(conn.execute('SELECT * FROM business_model_evidence ORDER BY model_id').fetchall(), before_evidence)
+            self.assertEqual(conn.execute('SELECT * FROM business_model_experiments ORDER BY id').fetchall(), before_experiments)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM business_model_observations').fetchone()[0], 0)
+            self.assertEqual(conn.execute('SELECT COUNT(*) FROM experiment_evidence_sync').fetchone()[0], 0)
+
+    def test_nonfinite_legacy_evidence_is_not_sanitized_into_learning(self):
+        # Direct writes represent pre-validation/imported rows. SQLite converts
+        # a bound float NaN to NULL, so use its supported TEXT storage for NaN.
+        fields = ('observed_revenue', 'observed_cost', 'conversion_rate', 'evidence_quality', 'sample_size')
+        for field in fields:
+            for invalid in (float('inf'), float('-inf'), 'NaN'):
+                with self.subTest(field=field, invalid=invalid):
+                    with tempfile.TemporaryDirectory() as directory:
+                        self.path = os.path.join(directory, 'legacy.db')
+                        self._completed_experiment('first-valid')
+                        self._completed_experiment('legacy-invalid')
+                        conn = mission_control.connect(self.path)
+                        mission_control.upsert_business_model_evidence(conn, 'legacy-invalid', sample_size=10)
+                        # field is a fixed local test allowlist, never external SQL.
+                        conn.execute(f'UPDATE business_model_evidence SET {field}=? WHERE model_id=?',
+                                     (invalid, 'legacy-invalid'))
+                        conn.commit()
+                        conn.close()
+                        self._assert_invalid_harvest_is_atomic(field)
+
+    def test_nonfinite_completed_measurements_are_not_sanitized_into_learning(self):
+        for field, expected_field in (('observed_value', 'conversion_rate'),
+                                      ('observed_cost', 'observed_cost'), ('sample_size', 'sample_size')):
+            for invalid in (float('inf'), float('-inf'), 'NaN'):
+                with self.subTest(field=field, invalid=invalid):
+                    with tempfile.TemporaryDirectory() as directory:
+                        self.path = os.path.join(directory, 'measurement.db')
+                        mission_control.connect(self.path).close()
+                        self._completed_experiment('first-valid')
+                        bad = self._completed_experiment('measurement-invalid')
+                        with sqlite3.connect(self.path) as conn:
+                            conn.execute(f'UPDATE business_model_experiments SET {field}=? WHERE id=?',
+                                         (invalid, bad['id']))
+                        self._assert_invalid_harvest_is_atomic(expected_field)
+
+    def test_finite_historical_bounds_remain_compatible(self):
+        queued = self._completed_experiment('bounded-model')
+        conn = mission_control.connect(self.path)
+        mission_control.upsert_business_model_evidence(conn, 'bounded-model')
+        conn.execute('''UPDATE business_model_evidence SET observed_revenue=-10,
+            observed_cost=-2, conversion_rate=2, evidence_quality=2, sample_size=-4''')
+        conn.execute('''UPDATE business_model_experiments SET observed_value=2,
+            observed_cost=-1, sample_size=-2 WHERE id=?''', (queued['id'],))
+        conn.commit()
+        conn.close()
+        self.assertEqual(experiment_learning.harvest_completed_experiments(self.path)['processed'], 1)
+        conn = experiment_observations.connect(self.path)
+        summary = experiment_observations.aggregate_observations(conn, 'bounded-model')
+        conn.close()
+        self.assertEqual(summary['observation_count'], 2)
+        self.assertEqual(summary['observed_revenue'], 0)
+        self.assertEqual(summary['observed_cost'], 0)
+        self.assertEqual(summary['conversion_rate'], 1)
+        self.assertEqual(summary['evidence_quality'], 0.5)
+        self.assertEqual(summary['sample_size'], 0)
+
 
 if __name__ == '__main__':
     unittest.main()
