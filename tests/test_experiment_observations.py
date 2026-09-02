@@ -57,6 +57,35 @@ class ExperimentObservationTests(unittest.TestCase):
         self.assertEqual(row['evidence_quality'], 0)
         self.assertEqual(row['sample_size'], 0)
 
+    def test_nonfinite_inputs_cannot_change_history_or_aggregate(self):
+        experiment_observations.append_observation(
+            self.conn, 'directory', observed_revenue=100, observed_cost=10,
+            conversion_rate=0.1, evidence_quality=0.8, sample_size=10)
+        history = experiment_observations.observation_history(self.conn, 'directory')
+        aggregate = experiment_observations.aggregate_observations(self.conn, 'directory')
+        for field in ('observed_revenue', 'observed_cost', 'conversion_rate',
+                      'evidence_quality', 'sample_size'):
+            for invalid in (float('nan'), float('inf'), float('-inf'),
+                            'NaN', 'Infinity', '-Infinity'):
+                with self.subTest(field=field, invalid=invalid):
+                    with self.assertRaisesRegex(ValueError, field + ' must be finite'):
+                        experiment_observations.append_observation(
+                            self.conn, 'directory', **{field: invalid})
+                    self.assertEqual(experiment_observations.observation_history(
+                        self.conn, 'directory'), history)
+                    self.assertEqual(experiment_observations.aggregate_observations(
+                        self.conn, 'directory'), aggregate)
+
+    def test_finite_numeric_strings_and_unknown_sample_size_remain_supported(self):
+        row = experiment_observations.append_observation(
+            self.conn, 'directory', observed_revenue='12.5', observed_cost='2',
+            conversion_rate='0.25', evidence_quality='0.8', sample_size=None)
+        self.assertEqual(row['observed_revenue'], 12.5)
+        self.assertEqual(row['observed_cost'], 2)
+        self.assertEqual(row['conversion_rate'], 0.25)
+        self.assertEqual(row['evidence_quality'], 0.8)
+        self.assertIsNone(row['sample_size'])
+
 
 if __name__ == '__main__':
     unittest.main()

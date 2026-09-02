@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import math
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any
@@ -38,22 +39,32 @@ def connect(path: str = DB_PATH) -> sqlite3.Connection:
     return conn
 
 
+def _finite_float(value: float, field: str) -> float:
+    """Reject non-finite evidence before clamping or writing immutable history."""
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f'{field} must be finite')
+    return number
+
+
 def append_observation(conn: sqlite3.Connection, model_id: str, *, experiment_id: int | None = None,
                        property_id: str | None = None, observed_revenue: float = 0,
                        observed_cost: float = 0, conversion_rate: float = 0,
                        evidence_quality: float = 0, sample_size: float | None = None,
                        source: str = 'experiment', observed_at: str | None = None) -> dict[str, Any]:
     """Persist one immutable measured observation without overwriting prior evidence."""
+    revenue = max(0.0, _finite_float(observed_revenue, 'observed_revenue'))
+    cost = max(0.0, _finite_float(observed_cost, 'observed_cost'))
+    conversion = min(1.0, max(0.0, _finite_float(conversion_rate, 'conversion_rate')))
+    quality = min(1.0, max(0.0, _finite_float(evidence_quality, 'evidence_quality')))
+    samples = None if sample_size is None else max(0.0, _finite_float(sample_size, 'sample_size'))
     observed_at = observed_at or now_iso()
     created_at = now_iso()
     conn.execute('''INSERT INTO business_model_observations
         (model_id,experiment_id,property_id,observed_revenue,observed_cost,conversion_rate,
          evidence_quality,sample_size,source,observed_at,created_at)
         VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
-        (model_id, experiment_id, property_id, max(0.0, float(observed_revenue)),
-         max(0.0, float(observed_cost)), min(1.0, max(0.0, float(conversion_rate))),
-         min(1.0, max(0.0, float(evidence_quality))),
-         None if sample_size is None else max(0.0, float(sample_size)),
+        (model_id, experiment_id, property_id, revenue, cost, conversion, quality, samples,
          source, observed_at, created_at))
     conn.commit()
     row = conn.execute('SELECT * FROM business_model_observations WHERE id=last_insert_rowid()').fetchone()
