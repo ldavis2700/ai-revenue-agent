@@ -114,7 +114,14 @@ def aggregate_observations(conn: sqlite3.Connection, model_id: str) -> dict[str,
             'observed_at': None,
         }
 
-    total_samples = sum(max(0.0, float(row['sample_size'] or 0)) for row in rows)
+    # Finite inputs can still overflow when combined. Reject unrepresentable
+    # totals before deriving rates; never emit NaN/Infinity as measured evidence.
+    total_revenue = _finite_float(sum(float(row['observed_revenue']) for row in rows),
+                                  'aggregate observed_revenue')
+    total_cost = _finite_float(sum(float(row['observed_cost']) for row in rows),
+                               'aggregate observed_cost')
+    total_samples = _finite_float(sum(max(0.0, float(row['sample_size'] or 0)) for row in rows),
+                                  'aggregate sample_size')
     if total_samples > 0:
         conversion_rate = sum(float(row['conversion_rate']) * max(0.0, float(row['sample_size'] or 0)) for row in rows) / total_samples
         evidence_quality = sum(float(row['evidence_quality']) * max(0.0, float(row['sample_size'] or 0)) for row in rows) / total_samples
@@ -125,10 +132,10 @@ def aggregate_observations(conn: sqlite3.Connection, model_id: str) -> dict[str,
     return {
         'model_id': model_id,
         'observation_count': len(rows),
-        'observed_revenue': round(sum(float(row['observed_revenue']) for row in rows), 2),
-        'observed_cost': round(sum(float(row['observed_cost']) for row in rows), 2),
-        'conversion_rate': round(conversion_rate, 6),
-        'evidence_quality': round(evidence_quality, 6),
+        'observed_revenue': round(total_revenue, 2),
+        'observed_cost': round(total_cost, 2),
+        'conversion_rate': round(_finite_float(conversion_rate, 'aggregate conversion_rate'), 6),
+        'evidence_quality': round(_finite_float(evidence_quality, 'aggregate evidence_quality'), 6),
         'sample_size': round(total_samples, 2),
         'observed_at': rows[-1]['observed_at'],
     }

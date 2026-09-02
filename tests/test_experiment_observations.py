@@ -1,4 +1,5 @@
 import os
+import json
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -132,6 +133,52 @@ class ExperimentObservationTests(unittest.TestCase):
                     self.conn, 'directory', observed_at=observed_at)
                 self.assertEqual(row['observed_at'], fixed_now)
                 self.assertEqual(row['created_at'], fixed_now)
+
+    def test_finite_observations_cannot_return_overflowed_totals(self):
+        for field in ('observed_revenue', 'observed_cost', 'sample_size'):
+            with self.subTest(field=field):
+                for _ in range(2):
+                    experiment_observations.append_observation(
+                        self.conn, field, **{field: 1e308})
+                before = experiment_observations.observation_history(self.conn, field)
+                changes = self.conn.total_changes
+                with self.assertRaisesRegex(ValueError, 'aggregate ' + field + ' must be finite'):
+                    experiment_observations.aggregate_observations(self.conn, field)
+                self.assertEqual(self.conn.total_changes, changes)
+                self.assertEqual(experiment_observations.observation_history(
+                    self.conn, field), before)
+
+    def test_large_representable_totals_and_weighted_rates_remain_valid(self):
+        for rate in (0.25, 0.75):
+            experiment_observations.append_observation(
+                self.conn, 'large', observed_revenue=8e307, observed_cost=4e307,
+                sample_size=8e307, conversion_rate=rate, evidence_quality=rate)
+        result = experiment_observations.aggregate_observations(self.conn, 'large')
+        self.assertEqual(result['observed_revenue'], 1.6e308)
+        self.assertEqual(result['observed_cost'], 8e307)
+        self.assertEqual(result['sample_size'], 1.6e308)
+        self.assertEqual(result['conversion_rate'], 0.5)
+        self.assertEqual(result['evidence_quality'], 0.5)
+        json.dumps(result, allow_nan=False)
+
+    def test_nonfinite_legacy_rate_cannot_escape_in_summary(self):
+        for field in ('conversion_rate', 'evidence_quality'):
+            for samples in (None, 1):
+                model = field + str(samples)
+                row = experiment_observations.append_observation(
+                    self.conn, model, sample_size=samples)
+                # Simulate historical data predating the finite-input guard.
+                self.conn.execute(f'UPDATE business_model_observations SET {field}=? WHERE id=?',
+                                  (float('inf'), row['id']))
+                self.conn.commit()
+                before = experiment_observations.observation_history(self.conn, model)
+                changes = self.conn.total_changes
+                with self.subTest(field=field, samples=samples):
+                    with self.assertRaisesRegex(ValueError, 'aggregate ' + field + ' must be finite'):
+                        experiment_observations.aggregate_observations(self.conn, model)
+                    self.assertEqual(self.conn.total_changes, changes)
+                    self.assertEqual(experiment_observations.observation_history(
+                        self.conn, model), before)
 
 
 if __name__ == '__main__':
