@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Create one auditable, safety-gated operating plan for AI Revenue Agent."""
 import json
+import math
 import os
 import sqlite3
 import sys
@@ -99,10 +100,24 @@ def load_persisted_evidence(conn):
     return evidence
 
 
+def _finite_evidence_value(value, field):
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f'{field} must be finite')
+    return number
+
+
 def upsert_business_model_evidence(conn, model_id, observed_revenue=0, observed_cost=0,
                                    conversion_rate=0, evidence_quality=0, sample_size=None,
                                    observed_at=None):
     """Persist measured economics for future Mission Control runs."""
+    # Validate before clamping: min/max can conceal NaN or infinity as a
+    # plausible measurement. No invalid insert may overwrite prior evidence.
+    revenue = max(0, _finite_evidence_value(observed_revenue, 'observed_revenue'))
+    cost = max(0, _finite_evidence_value(observed_cost, 'observed_cost'))
+    conversion = min(1, max(0, _finite_evidence_value(conversion_rate, 'conversion_rate')))
+    quality = min(1, max(0, _finite_evidence_value(evidence_quality, 'evidence_quality')))
+    samples = None if sample_size is None else max(0, _finite_evidence_value(sample_size, 'sample_size'))
     observed_at = observed_at or now_iso()
     updated_at = now_iso()
     conn.execute('''INSERT INTO business_model_evidence
@@ -117,9 +132,7 @@ def upsert_business_model_evidence(conn, model_id, observed_revenue=0, observed_
           sample_size=excluded.sample_size,
           observed_at=excluded.observed_at,
           updated_at=excluded.updated_at''',
-        (model_id, max(0, float(observed_revenue)), max(0, float(observed_cost)),
-         min(1, max(0, float(conversion_rate))), min(1, max(0, float(evidence_quality))),
-         None if sample_size is None else max(0, float(sample_size)), observed_at, updated_at))
+        (model_id, revenue, cost, conversion, quality, samples, observed_at, updated_at))
     conn.commit()
 
 
