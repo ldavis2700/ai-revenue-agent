@@ -1,6 +1,7 @@
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from scripts import experiment_observations
 
@@ -85,6 +86,52 @@ class ExperimentObservationTests(unittest.TestCase):
         self.assertEqual(row['conversion_rate'], 0.25)
         self.assertEqual(row['evidence_quality'], 0.8)
         self.assertIsNone(row['sample_size'])
+
+    def test_invalid_timestamps_do_not_change_the_ledger(self):
+        fixed_now = '2026-09-02T10:00:00+00:00'
+        with patch.object(experiment_observations, 'now_iso', return_value=fixed_now):
+            experiment_observations.append_observation(self.conn, 'directory', observed_revenue=100)
+            before = experiment_observations.observation_history(self.conn, 'directory')
+            aggregate = experiment_observations.aggregate_observations(self.conn, 'directory')
+            changes = self.conn.total_changes
+            for invalid in ('', 'garbage', '2026-02-30T00:00:00+00:00',
+                            '2026-09-02', '2026-09-02T09:00:00',
+                            '2026-09-02T10:00:00.000001+00:00',
+                            '2026-09-02T12:00:00+01:00',
+                            0, False, [], {}, float('nan')):
+                with self.subTest(invalid=invalid):
+                    with self.assertRaisesRegex(ValueError, 'observed_at'):
+                        experiment_observations.append_observation(
+                            self.conn, 'directory', observed_revenue=999,
+                            observed_at=invalid)
+                    self.assertEqual(self.conn.total_changes, changes)
+                    self.assertEqual(experiment_observations.observation_history(
+                        self.conn, 'directory'), before)
+                    self.assertEqual(experiment_observations.aggregate_observations(
+                        self.conn, 'directory'), aggregate)
+
+    def test_offsets_are_normalized_before_chronological_ordering(self):
+        with patch.object(experiment_observations, 'now_iso',
+                          return_value='2026-09-02T10:00:00+00:00'):
+            older = experiment_observations.append_observation(
+                self.conn, 'directory', observed_at='2026-09-02T09:30:00+02:00')
+            newer = experiment_observations.append_observation(
+                self.conn, 'directory', observed_at='2026-09-02T08:00:00Z')
+            self.assertEqual(older['observed_at'], '2026-09-02T07:30:00+00:00')
+            self.assertEqual(newer['observed_at'], '2026-09-02T08:00:00+00:00')
+            history = experiment_observations.observation_history(self.conn, 'directory')
+            self.assertEqual([row['id'] for row in history], [newer['id'], older['id']])
+            self.assertEqual(experiment_observations.aggregate_observations(
+                self.conn, 'directory')['observed_at'], newer['observed_at'])
+
+    def test_omitted_timestamp_and_exact_now_remain_valid(self):
+        fixed_now = '2026-09-02T10:00:00+00:00'
+        with patch.object(experiment_observations, 'now_iso', return_value=fixed_now):
+            for observed_at in (None, fixed_now, '2026-09-02T12:00:00+02:00'):
+                row = experiment_observations.append_observation(
+                    self.conn, 'directory', observed_at=observed_at)
+                self.assertEqual(row['observed_at'], fixed_now)
+                self.assertEqual(row['created_at'], fixed_now)
 
 
 if __name__ == '__main__':
