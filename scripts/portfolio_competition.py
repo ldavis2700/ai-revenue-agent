@@ -4,11 +4,66 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 from typing import Any
 
 VALIDATED_STATES = {"continue_validation", "scale_candidate"}
 RETIRED_STATES = {"deprioritize"}
+
+
+def _finite_number(value: Any, field: str) -> float:
+    """Parse one numeric recommendation input without accepting booleans/NaN/infinity."""
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be a finite number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a finite number") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{field} must be a finite number")
+    return number
+
+
+def _validated_candidates(candidates: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Normalize safe comparison inputs and identify records that were rejected."""
+    valid: list[dict[str, Any]] = []
+    rejected: list[str] = []
+    for index, candidate in enumerate(candidates):
+        candidate_id = (
+            candidate.get("id") if isinstance(candidate, dict) else None
+        )
+        rejection_id = (
+            candidate_id.strip()
+            if isinstance(candidate_id, str) and candidate_id.strip()
+            else f"<candidate:{index}>"
+        )
+        try:
+            if not isinstance(candidate, dict):
+                raise ValueError("candidate must be an object")
+            if not isinstance(candidate_id, str) or not candidate_id.strip():
+                raise ValueError("candidate id must be a non-empty string")
+            eligibility = candidate.get("eligible", True)
+            if not isinstance(eligibility, bool):
+                raise ValueError("eligible must be a boolean")
+            score = _finite_number(candidate.get("pursuit_score", 0), "pursuit_score")
+            quality = _finite_number(
+                candidate.get("effective_evidence_quality", 0),
+                "effective_evidence_quality",
+            )
+            if not 0 <= quality <= 1:
+                raise ValueError("effective_evidence_quality must be between 0 and 1")
+        except ValueError:
+            rejected.append(rejection_id)
+            continue
+        valid.append({
+            **candidate,
+            "id": candidate_id.strip(),
+            "eligible": eligibility,
+            "pursuit_score": score,
+            "effective_evidence_quality": quality,
+        })
+    return valid, rejected
 
 
 def compare_candidates(candidates: list[dict[str, Any]]) -> dict[str, Any]:
@@ -18,7 +73,8 @@ def compare_candidates(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     is the highest-scoring distinct eligible candidate. This never authorizes spend, outreach,
     contracts, charging, deployment, or customer-system changes.
     """
-    eligible = [c for c in candidates if c.get("eligible", True) and c.get("experiment_state") not in RETIRED_STATES]
+    candidates, rejected = _validated_candidates(candidates)
+    eligible = [c for c in candidates if c["eligible"] and c.get("experiment_state") not in RETIRED_STATES]
     measured = [
         c for c in eligible
         if c.get("experiment_state") in VALIDATED_STATES and float(c.get("effective_evidence_quality", 0) or 0) > 0
@@ -55,6 +111,8 @@ def compare_candidates(candidates: list[dict[str, Any]]) -> dict[str, Any]:
         "champion": champion,
         "challenger": challenger,
         "execution_gate": "recommendation_only",
+        "rejected_candidate_count": len(rejected),
+        "rejected_candidate_ids": rejected,
         "guardrails": {
             "automatic_spend": False,
             "automatic_outreach": False,
