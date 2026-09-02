@@ -69,7 +69,8 @@ def append_observation(conn: sqlite3.Connection, model_id: str, *, experiment_id
                        property_id: str | None = None, observed_revenue: float = 0,
                        observed_cost: float = 0, conversion_rate: float = 0,
                        evidence_quality: float = 0, sample_size: float | None = None,
-                       source: str = 'experiment', observed_at: str | None = None) -> dict[str, Any]:
+                       source: str = 'experiment', observed_at: str | None = None,
+                       commit: bool = True) -> dict[str, Any]:
     """Persist one immutable measured observation without overwriting prior evidence."""
     revenue = max(0.0, _finite_float(observed_revenue, 'observed_revenue'))
     cost = max(0.0, _finite_float(observed_cost, 'observed_cost'))
@@ -84,7 +85,8 @@ def append_observation(conn: sqlite3.Connection, model_id: str, *, experiment_id
         VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
         (model_id, experiment_id, property_id, revenue, cost, conversion, quality, samples,
          source, observed_at, created_at))
-    conn.commit()
+    if commit:
+        conn.commit()
     row = conn.execute('SELECT * FROM business_model_observations WHERE id=last_insert_rowid()').fetchone()
     return dict(row)
 

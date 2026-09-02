@@ -109,7 +109,7 @@ def _finite_evidence_value(value, field):
 
 def upsert_business_model_evidence(conn, model_id, observed_revenue=0, observed_cost=0,
                                    conversion_rate=0, evidence_quality=0, sample_size=None,
-                                   observed_at=None):
+                                   observed_at=None, *, commit=True):
     """Persist measured economics for future Mission Control runs."""
     # Validate before clamping: min/max can conceal NaN or infinity as a
     # plausible measurement. No invalid insert may overwrite prior evidence.
@@ -133,7 +133,8 @@ def upsert_business_model_evidence(conn, model_id, observed_revenue=0, observed_
           observed_at=excluded.observed_at,
           updated_at=excluded.updated_at''',
         (model_id, revenue, cost, conversion, quality, samples, observed_at, updated_at))
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def business_model_snapshot(conn=None):
