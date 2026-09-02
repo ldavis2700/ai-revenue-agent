@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import sys
 from typing import Any
@@ -42,11 +43,13 @@ def _seed_legacy_evidence_if_needed(mconn, oconn, model_id: str) -> None:
     experiment_observations.append_observation(
         oconn,
         model_id,
-        observed_revenue=max(0.0, float(prior.get('observed_revenue') or 0)),
-        observed_cost=max(0.0, float(prior.get('observed_cost') or 0)),
-        conversion_rate=min(1.0, max(0.0, float(prior.get('conversion_rate') or 0))),
-        evidence_quality=min(1.0, max(0.0, float(prior.get('evidence_quality') or 0))),
-        sample_size=None if prior.get('sample_size') is None else max(0.0, float(prior.get('sample_size') or 0)),
+        # The ledger validates finiteness before applying its bounds. Clamping
+        # here first could disguise historical NaN/infinity as plausible data.
+        observed_revenue=prior.get('observed_revenue') or 0,
+        observed_cost=prior.get('observed_cost') or 0,
+        conversion_rate=prior.get('conversion_rate') or 0,
+        evidence_quality=prior.get('evidence_quality') or 0,
+        sample_size=None if prior.get('sample_size') is None else prior.get('sample_size') or 0,
         source='legacy_evidence_seed',
         observed_at=prior.get('observed_at') or mission_control.now_iso(),
         commit=False,
@@ -79,13 +82,16 @@ def harvest_completed_experiments(path: str = DB_PATH) -> dict[str, Any]:
                 (item['id'],),
             ).fetchone()
             if existing is None:
-                samples = max(0.0, float(item.get('sample_size') or 0))
+                samples = float(item.get('sample_size') or 0)
+                if not math.isfinite(samples):
+                    raise ValueError('sample_size must be finite')
+                samples = max(0.0, samples)
                 experiment_observations.append_observation(
                     mconn,
                     item['model_id'],
                     experiment_id=item['id'],
-                    observed_cost=max(0.0, float(item.get('observed_cost') or 0)),
-                    conversion_rate=min(1.0, max(0.0, float(item.get('observed_value') or 0))),
+                    observed_cost=item.get('observed_cost') or 0,
+                    conversion_rate=item.get('observed_value') or 0,
                     evidence_quality=min(1.0, samples / 20.0),
                     sample_size=samples,
                     source='completed_experiment',
