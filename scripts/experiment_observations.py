@@ -47,6 +47,24 @@ def _finite_float(value: float, field: str) -> float:
     return number
 
 
+def _observation_timestamp(value: str | None, created_at: str) -> str:
+    """Validate new evidence time and store one sortable UTC representation."""
+    if value is None:
+        value = created_at
+    try:
+        if not isinstance(value, str):
+            raise ValueError('timestamp must be a string')
+        observed = datetime.fromisoformat(value)
+        if observed.tzinfo is None or observed.utcoffset() is None:
+            raise ValueError('timestamp must include a timezone')
+        observed = observed.astimezone(timezone.utc)
+        if observed > datetime.fromisoformat(created_at):
+            raise ValueError('timestamp is in the future')
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError('observed_at must be a timezone-aware ISO timestamp no later than now') from error
+    return observed.isoformat()
+
+
 def append_observation(conn: sqlite3.Connection, model_id: str, *, experiment_id: int | None = None,
                        property_id: str | None = None, observed_revenue: float = 0,
                        observed_cost: float = 0, conversion_rate: float = 0,
@@ -58,8 +76,8 @@ def append_observation(conn: sqlite3.Connection, model_id: str, *, experiment_id
     conversion = min(1.0, max(0.0, _finite_float(conversion_rate, 'conversion_rate')))
     quality = min(1.0, max(0.0, _finite_float(evidence_quality, 'evidence_quality')))
     samples = None if sample_size is None else max(0.0, _finite_float(sample_size, 'sample_size'))
-    observed_at = observed_at or now_iso()
     created_at = now_iso()
+    observed_at = _observation_timestamp(observed_at, created_at)
     conn.execute('''INSERT INTO business_model_observations
         (model_id,experiment_id,property_id,observed_revenue,observed_cost,conversion_rate,
          evidence_quality,sample_size,source,observed_at,created_at)
