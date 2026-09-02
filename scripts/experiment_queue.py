@@ -93,7 +93,8 @@ def start_experiment(conn: sqlite3.Connection, experiment_id: int) -> dict[str, 
     if row is None:
         return None
     if row['status'] == 'queued':
-        conn.execute("UPDATE business_model_experiments SET status='running', started_at=? WHERE id=?",
+        conn.execute("UPDATE business_model_experiments SET status='running', started_at=? "
+                     "WHERE id=? AND status='queued'",
                      (now_iso(), experiment_id))
         conn.commit()
     row = conn.execute('SELECT * FROM business_model_experiments WHERE id=?', (experiment_id,)).fetchone()
@@ -124,9 +125,11 @@ def record_measurement(conn: sqlite3.Connection, experiment_id: int, observed_va
         status, outcome = 'completed', 'sample_cap_reached_without_target'
 
     completed_at = now_iso() if status in FINAL_STATES else None
+    # Another connection may have finalized the experiment after our SELECT.
+    # Keep the stopping decision and its evidence immutable in the UPDATE itself.
     conn.execute('''UPDATE business_model_experiments
         SET observed_value=?, observed_cost=?, sample_size=?, status=?, outcome=?, completed_at=?
-        WHERE id=?''',
+        WHERE id=? AND status IN ('queued','running')''',
         (value, cost, samples, status, outcome, completed_at, experiment_id))
     conn.commit()
     updated = conn.execute('SELECT * FROM business_model_experiments WHERE id=?', (experiment_id,)).fetchone()

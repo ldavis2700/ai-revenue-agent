@@ -117,6 +117,53 @@ class ExperimentQueueTests(unittest.TestCase):
         self.assertEqual(result['sample_size'], 0)
         self.assertEqual(result['execution_gate'], 'recommendation_only')
 
+    def _assert_terminal_state_survives_interleaving(self, operation):
+        # Pause immediately before a stale UPDATE, after its initial SELECT.
+        # A second real SQLite connection records a terminal outcome first.
+        scenarios = [(0.20, 0, 2, 'target_achieved'),
+                     (0.02, 1, 2, 'cost_cap_exceeded'),
+                     (0.02, 0, 20, 'sample_cap_reached_without_target')]
+        for value, cost, samples, outcome in scenarios:
+            with self.subTest(operation=operation, outcome=outcome):
+                queued = experiment_queue.enqueue_experiment(
+                    self.conn, operation + outcome, 'Bounded validation',
+                    'conversion_rate', 0.10, max_cost=0, max_samples=20)
+                other = experiment_queue.connect(self.path)
+                self.addCleanup(other.close)
+                terminal = []
+                base = self.conn
+
+                class InterleavedConnection:
+                    def execute(self, sql, parameters=()):
+                        if sql.lstrip().startswith('UPDATE') and not terminal:
+                            terminal.append(experiment_queue.record_measurement(
+                                other, queued['id'], value, cost, samples))
+                        return base.execute(sql, parameters)
+
+                    def commit(self):
+                        return base.commit()
+
+                connection = InterleavedConnection()
+                if operation == 'start':
+                    result = experiment_queue.start_experiment(connection, queued['id'])
+                else:
+                    result = experiment_queue.record_measurement(
+                        connection, queued['id'], 0.01, 0, 1)
+                self.assertEqual(len(terminal), 1)
+                self.assertEqual(terminal[0]['outcome'], outcome)
+                self.assertEqual(result, terminal[0])
+                stored = dict(self.conn.execute(
+                    'SELECT * FROM business_model_experiments WHERE id=?',
+                    (queued['id'],)).fetchone())
+                self.assertEqual(stored, {k: v for k, v in terminal[0].items()
+                                          if k != 'execution_gate'})
+
+    def test_stale_start_cannot_reopen_terminal_experiment(self):
+        self._assert_terminal_state_survives_interleaving('start')
+
+    def test_stale_measurement_cannot_reopen_terminal_experiment(self):
+        self._assert_terminal_state_survives_interleaving('measurement')
+
 
 if __name__ == '__main__':
     unittest.main()
