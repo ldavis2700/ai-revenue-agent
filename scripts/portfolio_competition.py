@@ -18,7 +18,7 @@ def _finite_number(value: Any, field: str) -> float:
         raise ValueError(f"{field} must be a finite number")
     try:
         number = float(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(f"{field} must be a finite number") from exc
     if not math.isfinite(number):
         raise ValueError(f"{field} must be a finite number")
@@ -72,6 +72,9 @@ def compare_candidates(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     A champion must have measured evidence and a non-retired experiment state. A challenger
     is the highest-scoring distinct eligible candidate. This never authorizes spend, outreach,
     contracts, charging, deployment, or customer-system changes.
+
+    Raises ValueError if the selected scores have an unrepresentable difference, rather
+    than emitting an infinite metric or recommending from a clamped/fabricated gap.
     """
     candidates, rejected = _validated_candidates(candidates)
     eligible = [c for c in candidates if c["eligible"] and c.get("experiment_state") not in RETIRED_STATES]
@@ -94,7 +97,10 @@ def compare_candidates(candidates: list[dict[str, Any]]) -> dict[str, Any]:
         posture = "champion_only"
         action = "continue_measuring_champion"
     else:
-        gap = round(float(challenger.get("pursuit_score", 0)) - float(champion.get("pursuit_score", 0)), 2)
+        gap = round(_finite_number(
+            challenger["pursuit_score"] - champion["pursuit_score"],
+            "score difference",
+        ), 2)
         if gap >= 2.0:
             posture = "challenger_advantage"
             action = "run_bounded_head_to_head_validation"
@@ -122,8 +128,7 @@ def compare_candidates(candidates: list[dict[str, Any]]) -> dict[str, Any]:
         },
     }
     if champion is not None and challenger is not None:
-        result["challenger_minus_champion_score"] = round(
-            float(challenger.get("pursuit_score", 0)) - float(champion.get("pursuit_score", 0)), 2)
+        result["challenger_minus_champion_score"] = gap
     return result
 
 
