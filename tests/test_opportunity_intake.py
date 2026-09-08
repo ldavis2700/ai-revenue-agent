@@ -154,6 +154,68 @@ class OpportunityIntakeTests(unittest.TestCase):
             connection.close()
         self.assertEqual((count, receipt_count), (0, 0))
 
+    def test_pipeline_transition_is_evidence_backed_and_idempotent(self):
+        result = opportunity_intake.ingest([candidate()], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            first = opportunity_intake.record_transition(
+                path, opportunity_id, "qualified", "proposal_ready", "proposal:demo-v1", now=NOW)
+            second = opportunity_intake.record_transition(
+                path, opportunity_id, "qualified", "proposal_ready", "proposal:demo-v1", now=NOW)
+            connection = sqlite3.connect(path)
+            state, stored = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities").fetchone()
+            transition = connection.execute(
+                "SELECT from_state,to_state,evidence_id,evidence_hash FROM opportunity_transitions").fetchone()
+            connection.close()
+        self.assertTrue(first["changed"])
+        self.assertFalse(second["changed"])
+        self.assertEqual(state, "proposal_ready")
+        self.assertEqual(json.loads(stored)["pipeline_state"], "proposal_ready")
+        self.assertEqual(transition[:3], ("qualified", "proposal_ready", "proposal:demo-v1"))
+        self.assertEqual(len(transition[3]), 64)
+
+    def test_pipeline_transition_rejects_skips_stale_state_and_missing_evidence(self):
+        result = opportunity_intake.ingest([candidate()], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            for expected, target, evidence, reason in (
+                    ("qualified", "submitted", "provider/1", "transition_not_allowed"),
+                    ("qualified", "proposal_ready", "", "transition_fields_required"),
+                    ("qualified", "proposal_ready", "provider/1", "transition_evidence_invalid")):
+                with self.assertRaisesRegex(ValueError, reason):
+                    opportunity_intake.record_transition(
+                        path, opportunity_id, expected, target, evidence, now=NOW)
+            opportunity_intake.record_transition(
+                path, opportunity_id, "qualified", "proposal_ready", "proposal:1", now=NOW)
+            with self.assertRaisesRegex(ValueError, "pipeline_state_conflict"):
+                opportunity_intake.record_transition(
+                    path, opportunity_id, "qualified", "unqualified", "screen:2", now=NOW)
+
+    def test_pipeline_transition_rolls_back_if_receipt_insert_fails(self):
+        result = opportunity_intake.ingest([candidate()], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            connection = sqlite3.connect(path)
+            connection.execute("""CREATE TRIGGER reject_transition BEFORE INSERT ON opportunity_transitions
+                                BEGIN SELECT RAISE(ABORT, 'receipt failure'); END""")
+            connection.commit()
+            connection.close()
+            with self.assertRaises(sqlite3.IntegrityError):
+                opportunity_intake.record_transition(
+                    path, opportunity_id, "qualified", "proposal_ready", "proposal:1", now=NOW)
+            connection = sqlite3.connect(path)
+            state = connection.execute(
+                "SELECT pipeline_state FROM opportunities WHERE id=?", (opportunity_id,)).fetchone()[0]
+            connection.close()
+        self.assertEqual(state, "qualified")
+
     def test_ranking_favors_close_ready_high_confidence_work(self):
         slow = candidate(external_id="slow", time_to_cash_days=60, execution_confidence=0.7,
                          buyer_intent=0.5, win_probability=0.4)

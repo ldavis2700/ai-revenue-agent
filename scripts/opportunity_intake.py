@@ -24,6 +24,32 @@ PROHIBITED_CATEGORIES = {
     "adult", "credential_theft", "deceptive_reviews", "fraud", "malware",
     "regulated_financial_advice", "spam", "surveillance",
 }
+PIPELINE_TRANSITIONS = {
+    "payment_rail_blocked": {"qualified"},
+    "qualified": {"proposal_ready", "unqualified", "expired"},
+    "proposal_ready": {"submitted", "unqualified", "expired"},
+    "submitted": {"response_received", "unqualified", "expired"},
+    "response_received": {"contracted", "unqualified"},
+    "contracted": {"executing"},
+    "executing": {"qa_passed"},
+    "qa_passed": {"delivered"},
+    "delivered": {"invoiced"},
+    "invoiced": {"collected"},
+}
+PIPELINE_EVIDENCE_PREFIXES = {
+    "qualified": ("payment_rail:",),
+    "proposal_ready": ("proposal:",),
+    "submitted": ("submission:",),
+    "response_received": ("reply:",),
+    "contracted": ("contract:",),
+    "executing": ("contract:",),
+    "qa_passed": ("qa:",),
+    "delivered": ("delivery:",),
+    "invoiced": ("invoice:",),
+    "collected": ("verified_payment:",),
+    "unqualified": ("screen:",),
+    "expired": ("expiry:",),
+}
 
 
 def utc_now():
@@ -263,12 +289,75 @@ def open_ledger(path):
         payload_hash TEXT NOT NULL,
         recorded_at TEXT NOT NULL
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS opportunity_transitions (
+        transition_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        from_state TEXT NOT NULL,
+        to_state TEXT NOT NULL,
+        evidence_id TEXT NOT NULL,
+        evidence_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id)
+    )""")
     return connection
 
 
 def receipt_id(opportunity_id, decision, reason, source_index, digest):
     value = f"{opportunity_id or ''}|{decision}|{reason}|{source_index}|{digest}"
     return "oppr_" + hashlib.sha256(value.encode()).hexdigest()[:24]
+
+
+def transition_id(opportunity_id, from_state, to_state, evidence_id):
+    value = f"{opportunity_id}|{from_state}|{to_state}|{evidence_id}"
+    return "oppt_" + hashlib.sha256(value.encode()).hexdigest()[:24]
+
+
+def record_transition(path, opportunity_id, expected_state, to_state, evidence_id, *, now=None):
+    """Record one evidence-backed, no-skip pipeline transition atomically.
+
+    This changes ledger state only. It never submits, contacts, contracts, delivers,
+    invoices, or charges through an external provider.
+    """
+    values = (opportunity_id, expected_state, to_state, evidence_id)
+    if not all(isinstance(value, str) and value.strip() for value in values):
+        raise ValueError("transition_fields_required")
+    opportunity_id, expected_state, to_state, evidence_id = (value.strip() for value in values)
+    if to_state not in PIPELINE_TRANSITIONS.get(expected_state, set()):
+        raise ValueError("transition_not_allowed")
+    if not evidence_id.startswith(PIPELINE_EVIDENCE_PREFIXES[to_state]):
+        raise ValueError("transition_evidence_invalid")
+    recorded_at = (now or utc_now()).isoformat()
+    evidence_hash = hashlib.sha256(evidence_id.encode()).hexdigest()
+    tid = transition_id(opportunity_id, expected_state, to_state, evidence_id)
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state, payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            if row[0] == to_state:
+                existing = connection.execute(
+                    "SELECT 1 FROM opportunity_transitions WHERE transition_id=?", (tid,)).fetchone()
+                if existing:
+                    return {"transition_id": tid, "changed": False, "state": to_state}
+            if row[0] != expected_state:
+                raise ValueError("pipeline_state_conflict")
+            payload = json.loads(row[1])
+            payload["pipeline_state"] = to_state
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?, payload_json=?, updated_at=? WHERE id=?",
+                (to_state, json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                 recorded_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, expected_state, to_state, evidence_id,
+                    evidence_hash, recorded_at))
+        return {"transition_id": tid, "changed": True, "state": to_state}
+    finally:
+        connection.close()
 
 
 def persist(result, path=DEFAULT_DB_PATH, *, now=None):
