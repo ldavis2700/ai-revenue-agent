@@ -299,6 +299,15 @@ def open_ledger(path):
         recorded_at TEXT NOT NULL,
         FOREIGN KEY(opportunity_id) REFERENCES opportunities(id)
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS proposal_artifacts (
+        proposal_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        artifact_hash TEXT NOT NULL,
+        artifact_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        UNIQUE(opportunity_id, artifact_hash)
+    )""")
     return connection
 
 
@@ -310,6 +319,115 @@ def receipt_id(opportunity_id, decision, reason, source_index, digest):
 def transition_id(opportunity_id, from_state, to_state, evidence_id):
     value = f"{opportunity_id}|{from_state}|{to_state}|{evidence_id}"
     return "oppt_" + hashlib.sha256(value.encode()).hexdigest()[:24]
+
+
+def _proposal_text(value, field, maximum):
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field}_required")
+    value = value.strip()
+    if len(value) > maximum:
+        raise ValueError(f"{field}_too_long")
+    return value
+
+
+def prepare_proposal(path, opportunity_id, proposal, *, now=None):
+    """Persist a truthful proposal and advance qualified work atomically.
+
+    Claims are optional, but every included claim needs an HTTPS evidence source
+    and an explicit verification timestamp. This prepares a proposal only; it
+    never submits, contacts, contracts, invoices, or charges.
+    """
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(proposal, dict):
+        raise ValueError("proposal_object_required")
+    opportunity_id = opportunity_id.strip()
+    scope = _proposal_text(proposal.get("scope"), "scope", 2000)
+    price_cents = finite_number(proposal, "price_cents", minimum=1)
+    if not price_cents.is_integer():
+        raise ValueError("price_cents_invalid")
+    milestones = proposal.get("milestones")
+    if not isinstance(milestones, list) or not 1 <= len(milestones) <= 8:
+        raise ValueError("milestones_invalid")
+    normalized_milestones = []
+    milestone_total = 0
+    for milestone in milestones:
+        if not isinstance(milestone, dict):
+            raise ValueError("milestone_invalid")
+        title = _proposal_text(milestone.get("title"), "milestone_title", 160)
+        deliverable = _proposal_text(milestone.get("deliverable"), "milestone_deliverable", 1000)
+        amount = finite_number(milestone, "amount_cents", minimum=1)
+        days = finite_number(milestone, "due_days", minimum=1, maximum=365)
+        if not amount.is_integer() or not days.is_integer():
+            raise ValueError("milestone_number_invalid")
+        milestone_total += int(amount)
+        normalized_milestones.append({"title": title, "deliverable": deliverable,
+                                      "amount_cents": int(amount), "due_days": int(days)})
+    if milestone_total != int(price_cents):
+        raise ValueError("milestone_total_mismatch")
+
+    claims = proposal.get("claims", [])
+    if not isinstance(claims, list) or len(claims) > 20:
+        raise ValueError("claims_invalid")
+    normalized_claims = []
+    for claim in claims:
+        if not isinstance(claim, dict):
+            raise ValueError("claim_invalid")
+        text = _proposal_text(claim.get("text"), "claim_text", 500)
+        source_url = canonical_url(
+            _proposal_text(claim.get("source_url"), "claim_source_url", 2000))
+        if urlsplit(source_url).scheme != "https":
+            raise ValueError("claim_source_url_https_required")
+        verified_at = parse_time(claim.get("verified_at"), "claim_verified_at")
+        recorded_at = now or utc_now()
+        if verified_at > recorded_at + MAX_FUTURE_SKEW:
+            raise ValueError("claim_verified_at_future")
+        normalized_claims.append({"text": text, "source_url": source_url,
+                                  "verified_at": verified_at.isoformat()})
+
+    artifact = {"opportunity_id": opportunity_id, "scope": scope,
+                "price_cents": int(price_cents), "milestones": normalized_milestones,
+                "claims": normalized_claims}
+    serialized = json.dumps(artifact, sort_keys=True, separators=(",", ":"))
+    artifact_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    proposal_id = "prop_" + artifact_hash[:24]
+    evidence_id = "proposal:" + proposal_id
+    created_at = (now or utc_now()).isoformat()
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            existing = connection.execute(
+                "SELECT 1 FROM proposal_artifacts WHERE proposal_id=?", (proposal_id,)).fetchone()
+            if row[0] == "proposal_ready" and existing:
+                return {"proposal_id": proposal_id, "changed": False, "state": row[0]}
+            if row[0] != "qualified":
+                raise ValueError("pipeline_state_conflict")
+            opportunity = json.loads(row[1])
+            if artifact["price_cents"] > opportunity["payout_cents"]:
+                raise ValueError("price_exceeds_opportunity_payout")
+            tid = transition_id(opportunity_id, "qualified", "proposal_ready", evidence_id)
+            connection.execute("""INSERT INTO proposal_artifacts
+                (proposal_id,opportunity_id,artifact_hash,artifact_json,created_at)
+                VALUES (?,?,?,?,?)""", (
+                    proposal_id, opportunity_id, artifact_hash, serialized, created_at))
+            opportunity["pipeline_state"] = "proposal_ready"
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                ("proposal_ready", json.dumps(opportunity, sort_keys=True, separators=(",", ":")),
+                 created_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, "qualified", "proposal_ready", evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), created_at))
+        return {"proposal_id": proposal_id, "changed": True, "state": "proposal_ready"}
+    finally:
+        connection.close()
 
 
 def record_transition(path, opportunity_id, expected_state, to_state, evidence_id, *, now=None):

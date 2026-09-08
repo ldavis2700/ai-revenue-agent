@@ -31,6 +31,11 @@ Configure with:
 9. Revenue reporting measures conversion rates and revenue per outreach.
 10. Successful setup customers can be moved into the managed monthly plan where appropriate.
 
+Paid-work opportunities use a separate evidence-gated ledger. `prepare_proposal`
+stores the complete scope, bounded price, balanced milestones, and only explicitly
+verified claims in the same transaction that advances an opportunity to
+`proposal_ready`. Saving a proposal does not submit it or contact a buyer.
+
 ## Mission control
 
 `scripts/mission_control.py` gives the agent a measurable operating mission instead of a vague instruction to "make money." It audits the live funnel, rewards only verified net revenue and conversion quality, chooses the current bottleneck, and records every plan in SQLite.
