@@ -273,6 +273,10 @@ class OpportunityIntakeTests(unittest.TestCase):
                     "amount_cents": 100001, "due_days": 7,
                 }]), "price_exceeds_opportunity_payout"),
                 (self.proposal(claims=[{"text": "Unsupported"}]), "claim_source_url_required"),
+                (self.proposal(claims=[{
+                    "text": "Insecure evidence", "source_url": "http://example.com/proof",
+                    "verified_at": NOW.isoformat(),
+                }]), "claim_source_url_https_required"),
             ]
             for proposal, reason in invalid:
                 with self.assertRaisesRegex(ValueError, reason):

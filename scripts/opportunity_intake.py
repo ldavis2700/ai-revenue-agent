@@ -376,6 +376,8 @@ def prepare_proposal(path, opportunity_id, proposal, *, now=None):
         text = _proposal_text(claim.get("text"), "claim_text", 500)
         source_url = canonical_url(
             _proposal_text(claim.get("source_url"), "claim_source_url", 2000))
+        if urlsplit(source_url).scheme != "https":
+            raise ValueError("claim_source_url_https_required")
         verified_at = parse_time(claim.get("verified_at"), "claim_verified_at")
         recorded_at = now or utc_now()
         if verified_at > recorded_at + MAX_FUTURE_SKEW:
