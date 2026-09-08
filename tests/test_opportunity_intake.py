@@ -93,6 +93,16 @@ class OpportunityIntakeTests(unittest.TestCase):
                        "evidence_url": "https://example.com/runs/123"}]}, now=NOW)
         return opportunity_id, qa["report_id"]
 
+    def advance_to_delivery(self, path):
+        opportunity_id, qa_id = self.advance_to_qa(path)
+        delivery = opportunity_intake.record_delivery(path, opportunity_id, qa_id, {
+            "provider": "marketplace", "external_delivery_id": "delivery-654",
+            "delivery_url": "https://example.com/deliveries/654",
+            "artifact_sha256": "a" * 64,
+            "delivered_at": (NOW + timedelta(minutes=1)).isoformat()},
+            now=NOW + timedelta(minutes=1))
+        return opportunity_id, delivery["receipt_id"]
+
     def test_normalizes_and_scores_valid_candidate(self):
         result = opportunity_intake.ingest([candidate()], now=NOW)
         item = result["opportunities"][0]
@@ -938,6 +948,90 @@ class OpportunityIntakeTests(unittest.TestCase):
             connection.close()
         self.assertEqual(count, 0)
         self.assertEqual(state, "qa_passed")
+
+    def test_invoice_receipt_atomically_advances_and_is_idempotent(self):
+        invoice = {"provider": "Marketplace", "external_invoice_id": "invoice-987",
+                   "invoice_url": "HTTPS://EXAMPLE.COM/invoices/987/",
+                   "amount_cents": 100000, "currency": "usd",
+                   "issued_at": (NOW + timedelta(minutes=2)).isoformat(),
+                   "due_at": (NOW + timedelta(days=7)).isoformat()}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, delivery_id = self.advance_to_delivery(path)
+            first = opportunity_intake.record_invoice(
+                path, opportunity_id, delivery_id, invoice, now=NOW + timedelta(minutes=2))
+            second = opportunity_intake.record_invoice(
+                path, opportunity_id, delivery_id, invoice, now=NOW + timedelta(minutes=2))
+            connection = sqlite3.connect(path)
+            receipt = connection.execute(
+                "SELECT delivery_receipt_id,invoice_url,amount_cents,currency,receipt_hash FROM invoice_receipts"
+            ).fetchone()
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            evidence = connection.execute(
+                "SELECT evidence_id FROM opportunity_transitions WHERE to_state='invoiced'"
+            ).fetchone()[0]
+            connection.close()
+        self.assertTrue(first["changed"])
+        self.assertFalse(second["changed"])
+        self.assertEqual(state, "invoiced")
+        self.assertEqual(receipt[:4], (delivery_id, "https://example.com/invoices/987", 100000, "USD"))
+        self.assertEqual(len(receipt[4]), 64)
+        self.assertEqual(evidence, "invoice:" + first["receipt_id"])
+
+    def test_invoice_rejects_bypass_mismatch_and_invalid_timing(self):
+        valid = {"provider": "marketplace", "external_invoice_id": "invoice-987",
+                 "invoice_url": "https://example.com/invoices/987",
+                 "amount_cents": 100000, "currency": "USD",
+                 "issued_at": (NOW + timedelta(minutes=2)).isoformat(),
+                 "due_at": (NOW + timedelta(days=7)).isoformat()}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, delivery_id = self.advance_to_delivery(path)
+            with self.assertRaisesRegex(ValueError, "invoice_receipt_required"):
+                opportunity_intake.record_transition(
+                    path, opportunity_id, "delivered", "invoiced", "invoice:free-form", now=NOW)
+            for invoice, reason in (
+                    (dict(valid, amount_cents=100001), "invoice_amount_exceeds_contract"),
+                    (dict(valid, currency="EUR"), "invoice_currency_mismatch"),
+                    (dict(valid, provider="other-provider"), "invoice_provider_mismatch"),
+                    (dict(valid, issued_at=NOW.isoformat()), "invoice_before_delivery"),
+                    (dict(valid, due_at=(NOW + timedelta(minutes=2)).isoformat()), "due_at_invalid")):
+                with self.assertRaisesRegex(ValueError, reason):
+                    opportunity_intake.record_invoice(
+                        path, opportunity_id, delivery_id, invoice,
+                        now=NOW + timedelta(minutes=2))
+            connection = sqlite3.connect(path)
+            count = connection.execute("SELECT COUNT(*) FROM invoice_receipts").fetchone()[0]
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(count, 0)
+        self.assertEqual(state, "delivered")
+
+    def test_invoice_rolls_back_if_transition_insert_fails(self):
+        invoice = {"provider": "marketplace", "external_invoice_id": "invoice-987",
+                   "invoice_url": "https://example.com/invoices/987",
+                   "amount_cents": 100000, "currency": "USD",
+                   "issued_at": (NOW + timedelta(minutes=2)).isoformat(),
+                   "due_at": (NOW + timedelta(days=7)).isoformat()}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, delivery_id = self.advance_to_delivery(path)
+            connection = sqlite3.connect(path)
+            connection.execute("""CREATE TRIGGER reject_invoice_transition BEFORE INSERT
+                                ON opportunity_transitions WHEN NEW.to_state = 'invoiced'
+                                BEGIN SELECT RAISE(ABORT, 'transition failure'); END""")
+            connection.commit()
+            connection.close()
+            with self.assertRaises(sqlite3.IntegrityError):
+                opportunity_intake.record_invoice(
+                    path, opportunity_id, delivery_id, invoice,
+                    now=NOW + timedelta(minutes=2))
+            connection = sqlite3.connect(path)
+            count = connection.execute("SELECT COUNT(*) FROM invoice_receipts").fetchone()[0]
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(count, 0)
+        self.assertEqual(state, "delivered")
 
     def test_ranking_favors_close_ready_high_confidence_work(self):
         slow = candidate(external_id="slow", time_to_cash_days=60, execution_confidence=0.7,
