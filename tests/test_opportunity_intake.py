@@ -160,6 +160,28 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(stale["opportunities_unchanged"], 1)
         self.assertEqual(title, "New")
 
+    def test_newer_observation_cannot_regress_an_advanced_pipeline_state(self):
+        original = candidate(observed_at=(NOW - timedelta(hours=2)).isoformat())
+        newer = candidate(title="Refreshed", observed_at=(NOW - timedelta(minutes=5)).isoformat())
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            result = opportunity_intake.ingest([original], now=NOW)
+            opportunity_intake.persist(result, path, now=NOW)
+            opportunity_id = result["opportunities"][0]["id"]
+            opportunity_intake.prepare_proposal(
+                path, opportunity_id, self.proposal(), now=NOW)
+            update = opportunity_intake.persist(
+                opportunity_intake.ingest([newer], now=NOW), path,
+                now=NOW + timedelta(minutes=1))
+            connection = sqlite3.connect(path)
+            state, stored, title = connection.execute(
+                "SELECT pipeline_state,payload_json,title FROM opportunities").fetchone()
+            connection.close()
+        self.assertEqual(update["opportunities_written"], 1)
+        self.assertEqual(state, "proposal_ready")
+        self.assertEqual(json.loads(stored)["pipeline_state"], "proposal_ready")
+        self.assertEqual(title, "Refreshed")
+
     def test_persistence_rolls_back_partial_batch_on_error(self):
         result = opportunity_intake.ingest([candidate(), candidate(external_id="second")], now=NOW)
         del result["opportunities"][1]["source"]
