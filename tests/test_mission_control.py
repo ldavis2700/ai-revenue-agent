@@ -37,6 +37,36 @@ class MissionControlTests(unittest.TestCase):
         self.assertGreater(result['objective_score'], 100)
         self.assertEqual(result['plan'][0]['action'], 'replicate_verified_winning_segment')
 
+    def test_settled_opportunity_payments_feed_mission_metrics_without_double_refunds(self):
+        conn = sqlite3.connect(self.path)
+        conn.execute('''CREATE TABLE payment_receipts (
+            receipt_id TEXT PRIMARY KEY,
+            gross_amount_cents INTEGER NOT NULL,
+            fee_amount_cents INTEGER NOT NULL,
+            net_amount_cents INTEGER NOT NULL
+        )''')
+        conn.executemany('INSERT INTO events VALUES (?,?,?)', [
+            ('l1', 'sent', 0), ('l1', 'sale', 100), ('l1', 'refund', 20)])
+        conn.execute("INSERT INTO payment_receipts VALUES ('payr_1',50000,2500,47500)")
+        conn.commit()
+        metrics = mission_control.snapshot(conn)
+        conn.close()
+        self.assertEqual(metrics['sales'], 2)
+        self.assertEqual(metrics['verified_collected_payments'], 1)
+        self.assertEqual(metrics['verified_opportunity_gross_revenue'], 500)
+        self.assertEqual(metrics['verified_opportunity_fees'], 25)
+        self.assertEqual(metrics['verified_opportunity_net_revenue'], 475)
+        self.assertEqual(metrics['verified_gross_revenue'], 600)
+        self.assertEqual(metrics['verified_net_revenue'], 555)
+        self.assertEqual(mission_control.objective_score(metrics), 655)
+
+    def test_missing_payment_table_remains_backward_compatible(self):
+        conn = sqlite3.connect(self.path)
+        metrics = mission_control.snapshot(conn)
+        conn.close()
+        self.assertEqual(metrics['verified_collected_payments'], 0)
+        self.assertEqual(metrics['verified_opportunity_net_revenue'], 0)
+
     def test_no_leads_prioritizes_approved_source(self):
         result = mission_control.run(self.path)
         self.assertEqual(result['plan'][0]['action'], 'connect_approved_lead_source')
