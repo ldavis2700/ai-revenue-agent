@@ -308,6 +308,20 @@ def open_ledger(path):
         FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
         UNIQUE(opportunity_id, artifact_hash)
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS submission_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        proposal_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        external_submission_id TEXT NOT NULL,
+        submission_url TEXT NOT NULL,
+        submitted_at TEXT NOT NULL,
+        receipt_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(proposal_id) REFERENCES proposal_artifacts(proposal_id),
+        UNIQUE(provider, external_submission_id)
+    )""")
     return connection
 
 
@@ -430,6 +444,85 @@ def prepare_proposal(path, opportunity_id, proposal, *, now=None):
         connection.close()
 
 
+def record_submission(path, opportunity_id, proposal_id, submission, *, now=None):
+    """Persist a provider receipt and advance a prepared proposal atomically.
+
+    This records an already completed submission; it does not contact a buyer or
+    bypass provider authentication. The proposal must be an artifact already
+    stored for this opportunity.
+    """
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(proposal_id, str) or not proposal_id.strip():
+        raise ValueError("proposal_id_required")
+    if not isinstance(submission, dict):
+        raise ValueError("submission_object_required")
+    opportunity_id = opportunity_id.strip()
+    proposal_id = proposal_id.strip()
+    provider = _proposal_text(submission.get("provider"), "submission_provider", 160)
+    external_id = _proposal_text(
+        submission.get("external_submission_id"), "external_submission_id", 500)
+    submission_url = canonical_url(
+        _proposal_text(submission.get("submission_url"), "submission_url", 2000))
+    if urlsplit(submission_url).scheme != "https":
+        raise ValueError("submission_url_https_required")
+    submitted_at = parse_time(submission.get("submitted_at"), "submitted_at")
+    recorded = now or utc_now()
+    if submitted_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("submitted_at_future")
+
+    receipt = {"opportunity_id": opportunity_id, "proposal_id": proposal_id,
+               "provider": provider, "external_submission_id": external_id,
+               "submission_url": submission_url, "submitted_at": submitted_at.isoformat()}
+    serialized = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+    receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    receipt_id = "subr_" + receipt_hash[:24]
+    evidence_id = "submission:" + receipt_id
+    recorded_at = recorded.isoformat()
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            proposal = connection.execute(
+                "SELECT opportunity_id FROM proposal_artifacts WHERE proposal_id=?",
+                (proposal_id,)).fetchone()
+            if proposal is None:
+                raise ValueError("proposal_not_found")
+            if proposal[0] != opportunity_id:
+                raise ValueError("proposal_opportunity_mismatch")
+            existing = connection.execute(
+                "SELECT 1 FROM submission_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
+            if row[0] == "submitted" and existing:
+                return {"receipt_id": receipt_id, "changed": False, "state": row[0]}
+            if row[0] != "proposal_ready":
+                raise ValueError("pipeline_state_conflict")
+            tid = transition_id(opportunity_id, "proposal_ready", "submitted", evidence_id)
+            connection.execute("""INSERT INTO submission_receipts
+                (receipt_id,opportunity_id,proposal_id,provider,external_submission_id,
+                 submission_url,submitted_at,receipt_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?,?,?)""", (
+                    receipt_id, opportunity_id, proposal_id, provider, external_id,
+                    submission_url, submitted_at.isoformat(), receipt_hash, recorded_at))
+            payload = json.loads(row[1])
+            payload["pipeline_state"] = "submitted"
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                ("submitted", json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                 recorded_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, "proposal_ready", "submitted", evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
+        return {"receipt_id": receipt_id, "changed": True, "state": "submitted"}
+    finally:
+        connection.close()
+
+
 def record_transition(path, opportunity_id, expected_state, to_state, evidence_id, *, now=None):
     """Record one evidence-backed, no-skip pipeline transition atomically.
 
@@ -442,6 +535,10 @@ def record_transition(path, opportunity_id, expected_state, to_state, evidence_i
     opportunity_id, expected_state, to_state, evidence_id = (value.strip() for value in values)
     if to_state not in PIPELINE_TRANSITIONS.get(expected_state, set()):
         raise ValueError("transition_not_allowed")
+    if to_state == "proposal_ready":
+        raise ValueError("proposal_artifact_required")
+    if to_state == "submitted":
+        raise ValueError("submission_receipt_required")
     if not evidence_id.startswith(PIPELINE_EVIDENCE_PREFIXES[to_state]):
         raise ValueError("transition_evidence_invalid")
     recorded_at = (now or utc_now()).isoformat()
