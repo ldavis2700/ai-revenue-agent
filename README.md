@@ -53,6 +53,9 @@ delivery; it records evidence but never creates a charge. Finally,
 `record_collected_payment` counts revenue only from a settled provider transaction
 linked to that invoice, with exact gross/currency matching and verified fee/net
 arithmetic; it never initiates a charge or changes a payout account.
+Mission Control includes those settled receipts in verified gross, fee, and net
+revenue metrics alongside legacy verified product-sale events, without counting
+the same refund twice in its objective score.
 
 ## Mission control
 

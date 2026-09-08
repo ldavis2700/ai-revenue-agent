@@ -59,16 +59,27 @@ def snapshot(conn):
     sent = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='sent'")
     replies = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='reply'")
     interested = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='interested'")
-    sales = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='sale'")
-    gross = scalar(conn, "SELECT COALESCE(SUM(value),0) FROM events WHERE event_type='sale'")
+    event_sales = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='sale'")
+    event_gross = scalar(conn, "SELECT COALESCE(SUM(value),0) FROM events WHERE event_type='sale'")
     refunds = scalar(conn, "SELECT COALESCE(SUM(value),0) FROM events WHERE event_type='refund'")
+    collected_payments = scalar(conn, "SELECT COUNT(*) FROM payment_receipts")
+    opportunity_gross = scalar(
+        conn, "SELECT COALESCE(SUM(gross_amount_cents),0) / 100.0 FROM payment_receipts")
+    opportunity_fees = scalar(
+        conn, "SELECT COALESCE(SUM(fee_amount_cents),0) / 100.0 FROM payment_receipts")
+    opportunity_net = scalar(
+        conn, "SELECT COALESCE(SUM(net_amount_cents),0) / 100.0 FROM payment_receipts")
     eligible = scalar(conn, "SELECT COUNT(*) FROM leads WHERE contact_allowed=1 AND score >= ?",
                       (int(os.getenv('MIN_LEAD_SCORE', '55')),))
     return {
         'eligible_leads': eligible, 'sent': sent, 'replies': replies,
-        'interested': interested, 'sales': sales,
-        'verified_gross_revenue': gross, 'refunds': refunds,
-        'verified_net_revenue': gross - refunds,
+        'interested': interested, 'sales': event_sales + collected_payments,
+        'verified_collected_payments': collected_payments,
+        'verified_opportunity_gross_revenue': opportunity_gross,
+        'verified_opportunity_fees': opportunity_fees,
+        'verified_opportunity_net_revenue': opportunity_net,
+        'verified_gross_revenue': event_gross + opportunity_gross, 'refunds': refunds,
+        'verified_net_revenue': event_gross - refunds + opportunity_net,
     }
 
 
@@ -78,8 +89,7 @@ def objective_score(metrics):
     return round(
         metrics['verified_net_revenue']
         + (metrics['interested'] / sent) * 25
-        + (metrics['sales'] / sent) * 50
-        - metrics['refunds'], 2)
+        + (metrics['sales'] / sent) * 50, 2)
 
 
 def load_persisted_evidence(conn):
