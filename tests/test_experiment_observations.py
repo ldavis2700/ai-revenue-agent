@@ -1,6 +1,8 @@
 import os
+import json
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from scripts import experiment_observations
 
@@ -56,6 +58,127 @@ class ExperimentObservationTests(unittest.TestCase):
         self.assertEqual(row['conversion_rate'], 1)
         self.assertEqual(row['evidence_quality'], 0)
         self.assertEqual(row['sample_size'], 0)
+
+    def test_nonfinite_inputs_cannot_change_history_or_aggregate(self):
+        experiment_observations.append_observation(
+            self.conn, 'directory', observed_revenue=100, observed_cost=10,
+            conversion_rate=0.1, evidence_quality=0.8, sample_size=10)
+        history = experiment_observations.observation_history(self.conn, 'directory')
+        aggregate = experiment_observations.aggregate_observations(self.conn, 'directory')
+        for field in ('observed_revenue', 'observed_cost', 'conversion_rate',
+                      'evidence_quality', 'sample_size'):
+            for invalid in (float('nan'), float('inf'), float('-inf'),
+                            'NaN', 'Infinity', '-Infinity'):
+                with self.subTest(field=field, invalid=invalid):
+                    with self.assertRaisesRegex(ValueError, field + ' must be finite'):
+                        experiment_observations.append_observation(
+                            self.conn, 'directory', **{field: invalid})
+                    self.assertEqual(experiment_observations.observation_history(
+                        self.conn, 'directory'), history)
+                    self.assertEqual(experiment_observations.aggregate_observations(
+                        self.conn, 'directory'), aggregate)
+
+    def test_finite_numeric_strings_and_unknown_sample_size_remain_supported(self):
+        row = experiment_observations.append_observation(
+            self.conn, 'directory', observed_revenue='12.5', observed_cost='2',
+            conversion_rate='0.25', evidence_quality='0.8', sample_size=None)
+        self.assertEqual(row['observed_revenue'], 12.5)
+        self.assertEqual(row['observed_cost'], 2)
+        self.assertEqual(row['conversion_rate'], 0.25)
+        self.assertEqual(row['evidence_quality'], 0.8)
+        self.assertIsNone(row['sample_size'])
+
+    def test_invalid_timestamps_do_not_change_the_ledger(self):
+        fixed_now = '2026-09-02T10:00:00+00:00'
+        with patch.object(experiment_observations, 'now_iso', return_value=fixed_now):
+            experiment_observations.append_observation(self.conn, 'directory', observed_revenue=100)
+            before = experiment_observations.observation_history(self.conn, 'directory')
+            aggregate = experiment_observations.aggregate_observations(self.conn, 'directory')
+            changes = self.conn.total_changes
+            for invalid in ('', 'garbage', '2026-02-30T00:00:00+00:00',
+                            '2026-09-02', '2026-09-02T09:00:00',
+                            '2026-09-02T10:00:00.000001+00:00',
+                            '2026-09-02T12:00:00+01:00',
+                            0, False, [], {}, float('nan')):
+                with self.subTest(invalid=invalid):
+                    with self.assertRaisesRegex(ValueError, 'observed_at'):
+                        experiment_observations.append_observation(
+                            self.conn, 'directory', observed_revenue=999,
+                            observed_at=invalid)
+                    self.assertEqual(self.conn.total_changes, changes)
+                    self.assertEqual(experiment_observations.observation_history(
+                        self.conn, 'directory'), before)
+                    self.assertEqual(experiment_observations.aggregate_observations(
+                        self.conn, 'directory'), aggregate)
+
+    def test_offsets_are_normalized_before_chronological_ordering(self):
+        with patch.object(experiment_observations, 'now_iso',
+                          return_value='2026-09-02T10:00:00+00:00'):
+            older = experiment_observations.append_observation(
+                self.conn, 'directory', observed_at='2026-09-02T09:30:00+02:00')
+            newer = experiment_observations.append_observation(
+                self.conn, 'directory', observed_at='2026-09-02T08:00:00Z')
+            self.assertEqual(older['observed_at'], '2026-09-02T07:30:00+00:00')
+            self.assertEqual(newer['observed_at'], '2026-09-02T08:00:00+00:00')
+            history = experiment_observations.observation_history(self.conn, 'directory')
+            self.assertEqual([row['id'] for row in history], [newer['id'], older['id']])
+            self.assertEqual(experiment_observations.aggregate_observations(
+                self.conn, 'directory')['observed_at'], newer['observed_at'])
+
+    def test_omitted_timestamp_and_exact_now_remain_valid(self):
+        fixed_now = '2026-09-02T10:00:00+00:00'
+        with patch.object(experiment_observations, 'now_iso', return_value=fixed_now):
+            for observed_at in (None, fixed_now, '2026-09-02T12:00:00+02:00'):
+                row = experiment_observations.append_observation(
+                    self.conn, 'directory', observed_at=observed_at)
+                self.assertEqual(row['observed_at'], fixed_now)
+                self.assertEqual(row['created_at'], fixed_now)
+
+    def test_finite_observations_cannot_return_overflowed_totals(self):
+        for field in ('observed_revenue', 'observed_cost', 'sample_size'):
+            with self.subTest(field=field):
+                for _ in range(2):
+                    experiment_observations.append_observation(
+                        self.conn, field, **{field: 1e308})
+                before = experiment_observations.observation_history(self.conn, field)
+                changes = self.conn.total_changes
+                with self.assertRaisesRegex(ValueError, 'aggregate ' + field + ' must be finite'):
+                    experiment_observations.aggregate_observations(self.conn, field)
+                self.assertEqual(self.conn.total_changes, changes)
+                self.assertEqual(experiment_observations.observation_history(
+                    self.conn, field), before)
+
+    def test_large_representable_totals_and_weighted_rates_remain_valid(self):
+        for rate in (0.25, 0.75):
+            experiment_observations.append_observation(
+                self.conn, 'large', observed_revenue=8e307, observed_cost=4e307,
+                sample_size=8e307, conversion_rate=rate, evidence_quality=rate)
+        result = experiment_observations.aggregate_observations(self.conn, 'large')
+        self.assertEqual(result['observed_revenue'], 1.6e308)
+        self.assertEqual(result['observed_cost'], 8e307)
+        self.assertEqual(result['sample_size'], 1.6e308)
+        self.assertEqual(result['conversion_rate'], 0.5)
+        self.assertEqual(result['evidence_quality'], 0.5)
+        json.dumps(result, allow_nan=False)
+
+    def test_nonfinite_legacy_rate_cannot_escape_in_summary(self):
+        for field in ('conversion_rate', 'evidence_quality'):
+            for samples in (None, 1):
+                model = field + str(samples)
+                row = experiment_observations.append_observation(
+                    self.conn, model, sample_size=samples)
+                # Simulate historical data predating the finite-input guard.
+                self.conn.execute(f'UPDATE business_model_observations SET {field}=? WHERE id=?',
+                                  (float('inf'), row['id']))
+                self.conn.commit()
+                before = experiment_observations.observation_history(self.conn, model)
+                changes = self.conn.total_changes
+                with self.subTest(field=field, samples=samples):
+                    with self.assertRaisesRegex(ValueError, 'aggregate ' + field + ' must be finite'):
+                        experiment_observations.aggregate_observations(self.conn, model)
+                    self.assertEqual(self.conn.total_changes, changes)
+                    self.assertEqual(experiment_observations.observation_history(
+                        self.conn, model), before)
 
 
 if __name__ == '__main__':

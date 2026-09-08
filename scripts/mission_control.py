@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Create one auditable, safety-gated operating plan for AI Revenue Agent."""
 import json
+import math
 import os
 import sqlite3
 import sys
@@ -58,16 +59,27 @@ def snapshot(conn):
     sent = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='sent'")
     replies = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='reply'")
     interested = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='interested'")
-    sales = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='sale'")
-    gross = scalar(conn, "SELECT COALESCE(SUM(value),0) FROM events WHERE event_type='sale'")
+    event_sales = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='sale'")
+    event_gross = scalar(conn, "SELECT COALESCE(SUM(value),0) FROM events WHERE event_type='sale'")
     refunds = scalar(conn, "SELECT COALESCE(SUM(value),0) FROM events WHERE event_type='refund'")
+    collected_payments = scalar(conn, "SELECT COUNT(*) FROM payment_receipts")
+    opportunity_gross = scalar(
+        conn, "SELECT COALESCE(SUM(gross_amount_cents),0) / 100.0 FROM payment_receipts")
+    opportunity_fees = scalar(
+        conn, "SELECT COALESCE(SUM(fee_amount_cents),0) / 100.0 FROM payment_receipts")
+    opportunity_net = scalar(
+        conn, "SELECT COALESCE(SUM(net_amount_cents),0) / 100.0 FROM payment_receipts")
     eligible = scalar(conn, "SELECT COUNT(*) FROM leads WHERE contact_allowed=1 AND score >= ?",
                       (int(os.getenv('MIN_LEAD_SCORE', '55')),))
     return {
         'eligible_leads': eligible, 'sent': sent, 'replies': replies,
-        'interested': interested, 'sales': sales,
-        'verified_gross_revenue': gross, 'refunds': refunds,
-        'verified_net_revenue': gross - refunds,
+        'interested': interested, 'sales': event_sales + collected_payments,
+        'verified_collected_payments': collected_payments,
+        'verified_opportunity_gross_revenue': opportunity_gross,
+        'verified_opportunity_fees': opportunity_fees,
+        'verified_opportunity_net_revenue': opportunity_net,
+        'verified_gross_revenue': event_gross + opportunity_gross, 'refunds': refunds,
+        'verified_net_revenue': event_gross - refunds + opportunity_net,
     }
 
 
@@ -77,8 +89,7 @@ def objective_score(metrics):
     return round(
         metrics['verified_net_revenue']
         + (metrics['interested'] / sent) * 25
-        + (metrics['sales'] / sent) * 50
-        - metrics['refunds'], 2)
+        + (metrics['sales'] / sent) * 50, 2)
 
 
 def load_persisted_evidence(conn):
@@ -99,10 +110,24 @@ def load_persisted_evidence(conn):
     return evidence
 
 
+def _finite_evidence_value(value, field):
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f'{field} must be finite')
+    return number
+
+
 def upsert_business_model_evidence(conn, model_id, observed_revenue=0, observed_cost=0,
                                    conversion_rate=0, evidence_quality=0, sample_size=None,
-                                   observed_at=None):
+                                   observed_at=None, *, commit=True):
     """Persist measured economics for future Mission Control runs."""
+    # Validate before clamping: min/max can conceal NaN or infinity as a
+    # plausible measurement. No invalid insert may overwrite prior evidence.
+    revenue = max(0, _finite_evidence_value(observed_revenue, 'observed_revenue'))
+    cost = max(0, _finite_evidence_value(observed_cost, 'observed_cost'))
+    conversion = min(1, max(0, _finite_evidence_value(conversion_rate, 'conversion_rate')))
+    quality = min(1, max(0, _finite_evidence_value(evidence_quality, 'evidence_quality')))
+    samples = None if sample_size is None else max(0, _finite_evidence_value(sample_size, 'sample_size'))
     observed_at = observed_at or now_iso()
     updated_at = now_iso()
     conn.execute('''INSERT INTO business_model_evidence
@@ -117,10 +142,9 @@ def upsert_business_model_evidence(conn, model_id, observed_revenue=0, observed_
           sample_size=excluded.sample_size,
           observed_at=excluded.observed_at,
           updated_at=excluded.updated_at''',
-        (model_id, max(0, float(observed_revenue)), max(0, float(observed_cost)),
-         min(1, max(0, float(conversion_rate))), min(1, max(0, float(evidence_quality))),
-         None if sample_size is None else max(0, float(sample_size)), observed_at, updated_at))
-    conn.commit()
+        (model_id, revenue, cost, conversion, quality, samples, observed_at, updated_at))
+    if commit:
+        conn.commit()
 
 
 def business_model_snapshot(conn=None):

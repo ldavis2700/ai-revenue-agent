@@ -37,6 +37,36 @@ class MissionControlTests(unittest.TestCase):
         self.assertGreater(result['objective_score'], 100)
         self.assertEqual(result['plan'][0]['action'], 'replicate_verified_winning_segment')
 
+    def test_settled_opportunity_payments_feed_mission_metrics_without_double_refunds(self):
+        conn = sqlite3.connect(self.path)
+        conn.execute('''CREATE TABLE payment_receipts (
+            receipt_id TEXT PRIMARY KEY,
+            gross_amount_cents INTEGER NOT NULL,
+            fee_amount_cents INTEGER NOT NULL,
+            net_amount_cents INTEGER NOT NULL
+        )''')
+        conn.executemany('INSERT INTO events VALUES (?,?,?)', [
+            ('l1', 'sent', 0), ('l1', 'sale', 100), ('l1', 'refund', 20)])
+        conn.execute("INSERT INTO payment_receipts VALUES ('payr_1',50000,2500,47500)")
+        conn.commit()
+        metrics = mission_control.snapshot(conn)
+        conn.close()
+        self.assertEqual(metrics['sales'], 2)
+        self.assertEqual(metrics['verified_collected_payments'], 1)
+        self.assertEqual(metrics['verified_opportunity_gross_revenue'], 500)
+        self.assertEqual(metrics['verified_opportunity_fees'], 25)
+        self.assertEqual(metrics['verified_opportunity_net_revenue'], 475)
+        self.assertEqual(metrics['verified_gross_revenue'], 600)
+        self.assertEqual(metrics['verified_net_revenue'], 555)
+        self.assertEqual(mission_control.objective_score(metrics), 655)
+
+    def test_missing_payment_table_remains_backward_compatible(self):
+        conn = sqlite3.connect(self.path)
+        metrics = mission_control.snapshot(conn)
+        conn.close()
+        self.assertEqual(metrics['verified_collected_payments'], 0)
+        self.assertEqual(metrics['verified_opportunity_net_revenue'], 0)
+
     def test_no_leads_prioritizes_approved_source(self):
         result = mission_control.run(self.path)
         self.assertEqual(result['plan'][0]['action'], 'connect_approved_lead_source')
@@ -90,6 +120,43 @@ class MissionControlTests(unittest.TestCase):
         competition = result['business_model_intelligence']['portfolio_competition']
         self.assertIsNotNone(competition.get('champion'))
         self.assertIsNotNone(competition.get('challenger'))
+
+    def test_nonfinite_evidence_cannot_insert_or_replace_measurements(self):
+        conn = mission_control.connect(self.path)
+        self.addCleanup(conn.close)
+        mission_control.upsert_business_model_evidence(
+            conn, 'existing', observed_revenue=100, observed_cost=10,
+            conversion_rate=0.2, evidence_quality=0.8, sample_size=20)
+        before = [dict(row) for row in conn.execute('SELECT * FROM business_model_evidence')]
+        changes = conn.total_changes
+        for model_id in ('existing', 'new'):
+            for field in ('observed_revenue', 'observed_cost', 'conversion_rate',
+                          'evidence_quality', 'sample_size'):
+                for value in (float('nan'), float('inf'), float('-inf'),
+                              'NaN', 'Infinity', '-Infinity'):
+                    with self.subTest(model_id=model_id, field=field, value=value):
+                        with self.assertRaisesRegex(ValueError, field + ' must be finite'):
+                            mission_control.upsert_business_model_evidence(
+                                conn, model_id, **{field: value})
+                        self.assertEqual(conn.total_changes, changes)
+                        self.assertEqual([dict(row) for row in conn.execute(
+                            'SELECT * FROM business_model_evidence')], before)
+
+    def test_finite_evidence_bounds_and_numeric_strings_remain_compatible(self):
+        conn = mission_control.connect(self.path)
+        self.addCleanup(conn.close)
+        mission_control.upsert_business_model_evidence(
+            conn, 'valid', observed_revenue='12.5', observed_cost='-2',
+            conversion_rate='2', evidence_quality='-1', sample_size='-4')
+        evidence = mission_control.load_persisted_evidence(conn)['valid']
+        self.assertEqual(evidence['observed_revenue'], 12.5)
+        self.assertEqual(evidence['observed_cost'], 0)
+        self.assertEqual(evidence['conversion_rate'], 1)
+        self.assertEqual(evidence['evidence_quality'], 0)
+        self.assertEqual(evidence['sample_size'], 0)
+        mission_control.upsert_business_model_evidence(conn, 'valid', sample_size=None)
+        self.assertIsNone(conn.execute(
+            'SELECT sample_size FROM business_model_evidence WHERE model_id=?', ('valid',)).fetchone()[0])
 
 
 if __name__ == '__main__':

@@ -31,6 +31,32 @@ Configure with:
 9. Revenue reporting measures conversion rates and revenue per outreach.
 10. Successful setup customers can be moved into the managed monthly plan where appropriate.
 
+Paid-work opportunities use a separate evidence-gated ledger. `prepare_proposal`
+stores the complete scope, bounded price, balanced milestones, and only explicitly
+verified claims in the same transaction that advances an opportunity to
+`proposal_ready`. `record_submission` then requires that stored proposal plus a
+provider submission ID, HTTPS receipt URL, and timestamp before atomically
+advancing it to `submitted`. `record_response` binds a claimed buyer reply to that
+submission and the same provider before advancing to `response_received`. Saving
+or recording evidence never contacts a buyer. `record_contract` can only record
+an externally accepted contract when it matches the proposal, currency, provider,
+and either preapproved standard terms or owner-approved terms with HTTPS evidence;
+it cannot accept or sign a contract. `start_execution` then requires a stored,
+contract-linked plan with explicit deliverables, acceptance criteria, and future
+deadlines before work can move into execution. `pass_qa` requires an immutable
+artifact SHA-256 plus passing test results backed by HTTPS evidence before work
+can be marked `qa_passed`. `record_delivery` then binds the provider delivery
+receipt to that exact QA-approved artifact checksum before advancing to
+`delivered`. `record_invoice` requires a delivery-linked provider invoice whose
+amount and currency remain within the verified contract and whose dates follow
+delivery; it records evidence but never creates a charge. Finally,
+`record_collected_payment` counts revenue only from a settled provider transaction
+linked to that invoice, with exact gross/currency matching and verified fee/net
+arithmetic; it never initiates a charge or changes a payout account.
+Mission Control includes those settled receipts in verified gross, fee, and net
+revenue metrics alongside legacy verified product-sale events, without counting
+the same refund twice in its objective score.
+
 ## Mission control
 
 `scripts/mission_control.py` gives the agent a measurable operating mission instead of a vague instruction to "make money." It audits the live funnel, rewards only verified net revenue and conversion quality, chooses the current bottleneck, and records every plan in SQLite.

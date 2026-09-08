@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import math
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any
@@ -38,24 +39,54 @@ def connect(path: str = DB_PATH) -> sqlite3.Connection:
     return conn
 
 
+def _finite_float(value: float, field: str) -> float:
+    """Reject non-finite evidence before clamping or writing immutable history."""
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f'{field} must be finite')
+    return number
+
+
+def _observation_timestamp(value: str | None, created_at: str) -> str:
+    """Validate new evidence time and store one sortable UTC representation."""
+    if value is None:
+        value = created_at
+    try:
+        if not isinstance(value, str):
+            raise ValueError('timestamp must be a string')
+        observed = datetime.fromisoformat(value)
+        if observed.tzinfo is None or observed.utcoffset() is None:
+            raise ValueError('timestamp must include a timezone')
+        observed = observed.astimezone(timezone.utc)
+        if observed > datetime.fromisoformat(created_at):
+            raise ValueError('timestamp is in the future')
+    except (TypeError, ValueError, OverflowError) as error:
+        raise ValueError('observed_at must be a timezone-aware ISO timestamp no later than now') from error
+    return observed.isoformat()
+
+
 def append_observation(conn: sqlite3.Connection, model_id: str, *, experiment_id: int | None = None,
                        property_id: str | None = None, observed_revenue: float = 0,
                        observed_cost: float = 0, conversion_rate: float = 0,
                        evidence_quality: float = 0, sample_size: float | None = None,
-                       source: str = 'experiment', observed_at: str | None = None) -> dict[str, Any]:
+                       source: str = 'experiment', observed_at: str | None = None,
+                       commit: bool = True) -> dict[str, Any]:
     """Persist one immutable measured observation without overwriting prior evidence."""
-    observed_at = observed_at or now_iso()
+    revenue = max(0.0, _finite_float(observed_revenue, 'observed_revenue'))
+    cost = max(0.0, _finite_float(observed_cost, 'observed_cost'))
+    conversion = min(1.0, max(0.0, _finite_float(conversion_rate, 'conversion_rate')))
+    quality = min(1.0, max(0.0, _finite_float(evidence_quality, 'evidence_quality')))
+    samples = None if sample_size is None else max(0.0, _finite_float(sample_size, 'sample_size'))
     created_at = now_iso()
+    observed_at = _observation_timestamp(observed_at, created_at)
     conn.execute('''INSERT INTO business_model_observations
         (model_id,experiment_id,property_id,observed_revenue,observed_cost,conversion_rate,
          evidence_quality,sample_size,source,observed_at,created_at)
         VALUES (?,?,?,?,?,?,?,?,?,?,?)''',
-        (model_id, experiment_id, property_id, max(0.0, float(observed_revenue)),
-         max(0.0, float(observed_cost)), min(1.0, max(0.0, float(conversion_rate))),
-         min(1.0, max(0.0, float(evidence_quality))),
-         None if sample_size is None else max(0.0, float(sample_size)),
+        (model_id, experiment_id, property_id, revenue, cost, conversion, quality, samples,
          source, observed_at, created_at))
-    conn.commit()
+    if commit:
+        conn.commit()
     row = conn.execute('SELECT * FROM business_model_observations WHERE id=last_insert_rowid()').fetchone()
     return dict(row)
 
@@ -85,7 +116,14 @@ def aggregate_observations(conn: sqlite3.Connection, model_id: str) -> dict[str,
             'observed_at': None,
         }
 
-    total_samples = sum(max(0.0, float(row['sample_size'] or 0)) for row in rows)
+    # Finite inputs can still overflow when combined. Reject unrepresentable
+    # totals before deriving rates; never emit NaN/Infinity as measured evidence.
+    total_revenue = _finite_float(sum(float(row['observed_revenue']) for row in rows),
+                                  'aggregate observed_revenue')
+    total_cost = _finite_float(sum(float(row['observed_cost']) for row in rows),
+                               'aggregate observed_cost')
+    total_samples = _finite_float(sum(max(0.0, float(row['sample_size'] or 0)) for row in rows),
+                                  'aggregate sample_size')
     if total_samples > 0:
         conversion_rate = sum(float(row['conversion_rate']) * max(0.0, float(row['sample_size'] or 0)) for row in rows) / total_samples
         evidence_quality = sum(float(row['evidence_quality']) * max(0.0, float(row['sample_size'] or 0)) for row in rows) / total_samples
@@ -96,10 +134,10 @@ def aggregate_observations(conn: sqlite3.Connection, model_id: str) -> dict[str,
     return {
         'model_id': model_id,
         'observation_count': len(rows),
-        'observed_revenue': round(sum(float(row['observed_revenue']) for row in rows), 2),
-        'observed_cost': round(sum(float(row['observed_cost']) for row in rows), 2),
-        'conversion_rate': round(conversion_rate, 6),
-        'evidence_quality': round(evidence_quality, 6),
+        'observed_revenue': round(total_revenue, 2),
+        'observed_cost': round(total_cost, 2),
+        'conversion_rate': round(_finite_float(conversion_rate, 'aggregate conversion_rate'), 6),
+        'evidence_quality': round(_finite_float(evidence_quality, 'aggregate evidence_quality'), 6),
         'sample_size': round(total_samples, 2),
         'observed_at': rows[-1]['observed_at'],
     }
