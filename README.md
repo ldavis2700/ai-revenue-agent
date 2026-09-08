@@ -38,7 +38,10 @@ verified claims in the same transaction that advances an opportunity to
 provider submission ID, HTTPS receipt URL, and timestamp before atomically
 advancing it to `submitted`. `record_response` binds a claimed buyer reply to that
 submission and the same provider before advancing to `response_received`. Saving
-or recording evidence never contacts a buyer.
+or recording evidence never contacts a buyer. `record_contract` can only record
+an externally accepted contract when it matches the proposal, currency, provider,
+and either preapproved standard terms or owner-approved terms with HTTPS evidence;
+it cannot accept or sign a contract.
 
 ## Mission control
 
