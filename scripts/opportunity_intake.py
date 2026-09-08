@@ -494,8 +494,11 @@ def persist(result, path=DEFAULT_DB_PATH, *, now=None):
                     ON CONFLICT(id) DO UPDATE SET
                       source=excluded.source, external_id=excluded.external_id,
                       url=excluded.url, title=excluded.title, score=excluded.score,
-                      action_mode=excluded.action_mode, pipeline_state=excluded.pipeline_state,
-                      observed_at=excluded.observed_at, payload_json=excluded.payload_json,
+                      action_mode=excluded.action_mode,
+                      pipeline_state=opportunities.pipeline_state,
+                      observed_at=excluded.observed_at,
+                      payload_json=json_set(excluded.payload_json, '$.pipeline_state',
+                                            opportunities.pipeline_state),
                       updated_at=excluded.updated_at
                     WHERE excluded.observed_at > opportunities.observed_at""", (
                         item["id"], item["source"], item["external_id"], item["url"],
