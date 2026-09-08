@@ -336,6 +336,26 @@ def open_ledger(path):
         FOREIGN KEY(submission_receipt_id) REFERENCES submission_receipts(receipt_id),
         UNIQUE(provider, external_message_id)
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS contract_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        response_receipt_id TEXT NOT NULL,
+        proposal_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        external_contract_id TEXT NOT NULL,
+        contract_url TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL,
+        currency TEXT NOT NULL,
+        contracted_at TEXT NOT NULL,
+        terms_authority TEXT NOT NULL,
+        authority_evidence_url TEXT NOT NULL,
+        receipt_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(response_receipt_id) REFERENCES response_receipts(receipt_id),
+        FOREIGN KEY(proposal_id) REFERENCES proposal_artifacts(proposal_id),
+        UNIQUE(provider, external_contract_id)
+    )""")
     return connection
 
 
@@ -614,6 +634,113 @@ def record_response(path, opportunity_id, submission_receipt_id, response, *, no
         connection.close()
 
 
+def record_contract(path, opportunity_id, response_receipt_id, contract, *, now=None):
+    """Record an externally accepted, authorized contract without accepting it."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(response_receipt_id, str) or not response_receipt_id.strip():
+        raise ValueError("response_receipt_id_required")
+    if not isinstance(contract, dict):
+        raise ValueError("contract_object_required")
+    opportunity_id = opportunity_id.strip()
+    response_receipt_id = response_receipt_id.strip()
+    provider = _proposal_text(contract.get("provider"), "contract_provider", 160)
+    external_id = _proposal_text(
+        contract.get("external_contract_id"), "external_contract_id", 500)
+    contract_url = canonical_url(
+        _proposal_text(contract.get("contract_url"), "contract_url", 2000))
+    authority_url = canonical_url(_proposal_text(
+        contract.get("authority_evidence_url"), "authority_evidence_url", 2000))
+    if urlsplit(contract_url).scheme != "https":
+        raise ValueError("contract_url_https_required")
+    if urlsplit(authority_url).scheme != "https":
+        raise ValueError("authority_evidence_url_https_required")
+    amount_cents = finite_number(contract, "amount_cents", minimum=1)
+    if not amount_cents.is_integer():
+        raise ValueError("amount_cents_invalid")
+    currency = _proposal_text(contract.get("currency"), "contract_currency", 3).upper()
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        raise ValueError("contract_currency_invalid")
+    terms_authority = _proposal_text(
+        contract.get("terms_authority"), "terms_authority", 80)
+    if terms_authority not in {"preapproved_standard_terms", "owner_approved_terms"}:
+        raise ValueError("terms_authority_invalid")
+    contracted_at = parse_time(contract.get("contracted_at"), "contracted_at")
+    recorded = now or utc_now()
+    if contracted_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("contracted_at_future")
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            response = connection.execute("""SELECT rr.opportunity_id,rr.provider,sr.proposal_id
+                FROM response_receipts rr JOIN submission_receipts sr
+                ON sr.receipt_id=rr.submission_receipt_id WHERE rr.receipt_id=?""",
+                (response_receipt_id,)).fetchone()
+            if response is None:
+                raise ValueError("response_receipt_not_found")
+            if response[0] != opportunity_id:
+                raise ValueError("response_opportunity_mismatch")
+            if response[1].casefold() != provider.casefold():
+                raise ValueError("contract_provider_mismatch")
+            proposal_id = response[2]
+            proposal = json.loads(connection.execute(
+                "SELECT artifact_json FROM proposal_artifacts WHERE proposal_id=?",
+                (proposal_id,)).fetchone()[0])
+            opportunity = json.loads(row[1])
+            if int(amount_cents) > proposal["price_cents"]:
+                raise ValueError("contract_amount_exceeds_proposal")
+            if currency != opportunity["currency"]:
+                raise ValueError("contract_currency_mismatch")
+            receipt = {"opportunity_id": opportunity_id,
+                       "response_receipt_id": response_receipt_id,
+                       "proposal_id": proposal_id, "provider": provider,
+                       "external_contract_id": external_id, "contract_url": contract_url,
+                       "amount_cents": int(amount_cents), "currency": currency,
+                       "contracted_at": contracted_at.isoformat(),
+                       "terms_authority": terms_authority,
+                       "authority_evidence_url": authority_url}
+            serialized = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            receipt_id = "contr_" + receipt_hash[:24]
+            evidence_id = "contract:" + receipt_id
+            recorded_at = recorded.isoformat()
+            existing = connection.execute(
+                "SELECT 1 FROM contract_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
+            if row[0] == "contracted" and existing:
+                return {"receipt_id": receipt_id, "changed": False, "state": row[0]}
+            if row[0] != "response_received":
+                raise ValueError("pipeline_state_conflict")
+            tid = transition_id(opportunity_id, "response_received", "contracted", evidence_id)
+            connection.execute("""INSERT INTO contract_receipts
+                (receipt_id,opportunity_id,response_receipt_id,proposal_id,provider,
+                 external_contract_id,contract_url,amount_cents,currency,contracted_at,
+                 terms_authority,authority_evidence_url,receipt_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                    receipt_id, opportunity_id, response_receipt_id, proposal_id, provider,
+                    external_id, contract_url, int(amount_cents), currency,
+                    contracted_at.isoformat(), terms_authority, authority_url,
+                    receipt_hash, recorded_at))
+            opportunity["pipeline_state"] = "contracted"
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                ("contracted", json.dumps(opportunity, sort_keys=True, separators=(",", ":")),
+                 recorded_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, "response_received", "contracted", evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
+        return {"receipt_id": receipt_id, "changed": True, "state": "contracted"}
+    finally:
+        connection.close()
+
+
 def record_transition(path, opportunity_id, expected_state, to_state, evidence_id, *, now=None):
     """Record one evidence-backed, no-skip pipeline transition atomically.
 
@@ -632,6 +759,8 @@ def record_transition(path, opportunity_id, expected_state, to_state, evidence_i
         raise ValueError("submission_receipt_required")
     if to_state == "response_received":
         raise ValueError("response_receipt_required")
+    if to_state == "contracted":
+        raise ValueError("contract_receipt_required")
     if not evidence_id.startswith(PIPELINE_EVIDENCE_PREFIXES[to_state]):
         raise ValueError("transition_evidence_invalid")
     recorded_at = (now or utc_now()).isoformat()

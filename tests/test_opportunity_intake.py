@@ -541,6 +541,128 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(count, 0)
         self.assertEqual(state, "submitted")
 
+    def test_contract_receipt_atomically_advances_and_is_idempotent(self):
+        result = opportunity_intake.ingest([candidate()], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        submission = {"provider": "marketplace", "external_submission_id": "application-456",
+                      "submission_url": "https://example.com/applications/456",
+                      "submitted_at": NOW.isoformat()}
+        response = {"provider": "marketplace", "external_message_id": "message-789",
+                    "message_url": "https://example.com/messages/789",
+                    "received_at": NOW.isoformat()}
+        contract = {"provider": "Marketplace", "external_contract_id": "contract-321",
+                    "contract_url": "HTTPS://EXAMPLE.COM/contracts/321/",
+                    "amount_cents": 100000, "currency": "usd",
+                    "contracted_at": NOW.isoformat(),
+                    "terms_authority": "preapproved_standard_terms",
+                    "authority_evidence_url": "https://example.com/terms/standard-v1"}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            proposal = opportunity_intake.prepare_proposal(
+                path, opportunity_id, self.proposal(), now=NOW)
+            submitted = opportunity_intake.record_submission(
+                path, opportunity_id, proposal["proposal_id"], submission, now=NOW)
+            replied = opportunity_intake.record_response(
+                path, opportunity_id, submitted["receipt_id"], response, now=NOW)
+            first = opportunity_intake.record_contract(
+                path, opportunity_id, replied["receipt_id"], contract, now=NOW)
+            second = opportunity_intake.record_contract(
+                path, opportunity_id, replied["receipt_id"], contract, now=NOW)
+            connection = sqlite3.connect(path)
+            receipt = connection.execute("""SELECT proposal_id,amount_cents,currency,
+                terms_authority,contract_url,receipt_hash FROM contract_receipts""").fetchone()
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            evidence = connection.execute(
+                "SELECT evidence_id FROM opportunity_transitions WHERE to_state='contracted'"
+            ).fetchone()[0]
+            connection.close()
+        self.assertTrue(first["changed"])
+        self.assertFalse(second["changed"])
+        self.assertEqual(state, "contracted")
+        self.assertEqual(receipt[:4], (proposal["proposal_id"], 100000, "USD",
+                                      "preapproved_standard_terms"))
+        self.assertEqual(receipt[4], "https://example.com/contracts/321")
+        self.assertEqual(len(receipt[5]), 64)
+        self.assertEqual(evidence, "contract:" + first["receipt_id"])
+
+    def test_contract_rejects_unapproved_or_inconsistent_evidence(self):
+        result = opportunity_intake.ingest([candidate()], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            proposal = opportunity_intake.prepare_proposal(path, opportunity_id, self.proposal(), now=NOW)
+            submitted = opportunity_intake.record_submission(path, opportunity_id, proposal["proposal_id"], {
+                "provider": "marketplace", "external_submission_id": "application-456",
+                "submission_url": "https://example.com/applications/456",
+                "submitted_at": NOW.isoformat()}, now=NOW)
+            replied = opportunity_intake.record_response(path, opportunity_id, submitted["receipt_id"], {
+                "provider": "marketplace", "external_message_id": "message-789",
+                "message_url": "https://example.com/messages/789",
+                "received_at": NOW.isoformat()}, now=NOW)
+            valid = {"provider": "marketplace", "external_contract_id": "contract-321",
+                     "contract_url": "https://example.com/contracts/321",
+                     "amount_cents": 100000, "currency": "USD",
+                     "contracted_at": NOW.isoformat(),
+                     "terms_authority": "preapproved_standard_terms",
+                     "authority_evidence_url": "https://example.com/terms/standard-v1"}
+            with self.assertRaisesRegex(ValueError, "contract_receipt_required"):
+                opportunity_intake.record_transition(
+                    path, opportunity_id, "response_received", "contracted", "contract:free-form", now=NOW)
+            for changes, reason in (
+                    ({"terms_authority": "custom_terms"}, "terms_authority_invalid"),
+                    ({"amount_cents": 100001}, "contract_amount_exceeds_proposal"),
+                    ({"currency": "EUR"}, "contract_currency_mismatch"),
+                    ({"provider": "other-provider"}, "contract_provider_mismatch")):
+                invalid = dict(valid)
+                invalid.update(changes)
+                with self.assertRaisesRegex(ValueError, reason):
+                    opportunity_intake.record_contract(
+                        path, opportunity_id, replied["receipt_id"], invalid, now=NOW)
+            connection = sqlite3.connect(path)
+            count = connection.execute("SELECT COUNT(*) FROM contract_receipts").fetchone()[0]
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(count, 0)
+        self.assertEqual(state, "response_received")
+
+    def test_contract_rolls_back_if_transition_insert_fails(self):
+        result = opportunity_intake.ingest([candidate()], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            proposal = opportunity_intake.prepare_proposal(path, opportunity_id, self.proposal(), now=NOW)
+            submitted = opportunity_intake.record_submission(path, opportunity_id, proposal["proposal_id"], {
+                "provider": "marketplace", "external_submission_id": "application-456",
+                "submission_url": "https://example.com/applications/456",
+                "submitted_at": NOW.isoformat()}, now=NOW)
+            replied = opportunity_intake.record_response(path, opportunity_id, submitted["receipt_id"], {
+                "provider": "marketplace", "external_message_id": "message-789",
+                "message_url": "https://example.com/messages/789",
+                "received_at": NOW.isoformat()}, now=NOW)
+            connection = sqlite3.connect(path)
+            connection.execute("""CREATE TRIGGER reject_contract_transition BEFORE INSERT
+                                ON opportunity_transitions WHEN NEW.to_state = 'contracted'
+                                BEGIN SELECT RAISE(ABORT, 'transition failure'); END""")
+            connection.commit()
+            connection.close()
+            with self.assertRaises(sqlite3.IntegrityError):
+                opportunity_intake.record_contract(path, opportunity_id, replied["receipt_id"], {
+                    "provider": "marketplace", "external_contract_id": "contract-321",
+                    "contract_url": "https://example.com/contracts/321",
+                    "amount_cents": 100000, "currency": "USD",
+                    "contracted_at": NOW.isoformat(),
+                    "terms_authority": "owner_approved_terms",
+                    "authority_evidence_url": "https://example.com/approvals/owner-1"}, now=NOW)
+            connection = sqlite3.connect(path)
+            count = connection.execute("SELECT COUNT(*) FROM contract_receipts").fetchone()[0]
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(count, 0)
+        self.assertEqual(state, "response_received")
+
     def test_ranking_favors_close_ready_high_confidence_work(self):
         slow = candidate(external_id="slow", time_to_cash_days=60, execution_confidence=0.7,
                          buyer_intent=0.5, win_probability=0.4)
