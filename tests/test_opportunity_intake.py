@@ -55,6 +55,27 @@ class OpportunityIntakeTests(unittest.TestCase):
         value.update(overrides)
         return value
 
+    def advance_to_contract(self, path):
+        result = opportunity_intake.ingest([candidate()], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        opportunity_intake.persist(result, path, now=NOW)
+        proposal = opportunity_intake.prepare_proposal(path, opportunity_id, self.proposal(), now=NOW)
+        submitted = opportunity_intake.record_submission(path, opportunity_id, proposal["proposal_id"], {
+            "provider": "marketplace", "external_submission_id": "application-456",
+            "submission_url": "https://example.com/applications/456",
+            "submitted_at": NOW.isoformat()}, now=NOW)
+        replied = opportunity_intake.record_response(path, opportunity_id, submitted["receipt_id"], {
+            "provider": "marketplace", "external_message_id": "message-789",
+            "message_url": "https://example.com/messages/789",
+            "received_at": NOW.isoformat()}, now=NOW)
+        contracted = opportunity_intake.record_contract(path, opportunity_id, replied["receipt_id"], {
+            "provider": "marketplace", "external_contract_id": "contract-321",
+            "contract_url": "https://example.com/contracts/321",
+            "amount_cents": 100000, "currency": "USD", "contracted_at": NOW.isoformat(),
+            "terms_authority": "preapproved_standard_terms",
+            "authority_evidence_url": "https://example.com/terms/standard-v1"}, now=NOW)
+        return opportunity_id, contracted["receipt_id"]
+
     def test_normalizes_and_scores_valid_candidate(self):
         result = opportunity_intake.ingest([candidate()], now=NOW)
         item = result["opportunities"][0]
@@ -662,6 +683,89 @@ class OpportunityIntakeTests(unittest.TestCase):
             connection.close()
         self.assertEqual(count, 0)
         self.assertEqual(state, "response_received")
+
+    def test_execution_plan_atomically_advances_and_is_idempotent(self):
+        plan = {"execution_environment": "Isolated repository branch and test environment",
+                "started_at": NOW.isoformat(), "deliverables": [{
+                    "title": "Validated workflow", "description": "Build the contracted automation.",
+                    "acceptance_criteria": "Automated tests pass and deployment notes are complete.",
+                    "due_at": (NOW + timedelta(days=7)).isoformat()}]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, contract_id = self.advance_to_contract(path)
+            first = opportunity_intake.start_execution(
+                path, opportunity_id, contract_id, plan, now=NOW)
+            second = opportunity_intake.start_execution(
+                path, opportunity_id, contract_id, plan, now=NOW)
+            connection = sqlite3.connect(path)
+            artifact = json.loads(connection.execute(
+                "SELECT plan_json FROM execution_plans").fetchone()[0])
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            evidence = connection.execute(
+                "SELECT evidence_id FROM opportunity_transitions WHERE to_state='executing'"
+            ).fetchone()[0]
+            connection.close()
+        self.assertTrue(first["changed"])
+        self.assertFalse(second["changed"])
+        self.assertEqual(state, "executing")
+        self.assertEqual(artifact["contract_receipt_id"], contract_id)
+        self.assertEqual(len(artifact["deliverables"]), 1)
+        self.assertIn(first["plan_id"], evidence)
+
+    def test_execution_plan_rejects_bypass_or_invalid_deliverables(self):
+        valid = {"execution_environment": "Isolated test environment",
+                 "started_at": NOW.isoformat(), "deliverables": [{
+                     "title": "Workflow", "description": "Build it.",
+                     "acceptance_criteria": "Tests pass.",
+                     "due_at": (NOW + timedelta(days=7)).isoformat()}]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, contract_id = self.advance_to_contract(path)
+            with self.assertRaisesRegex(ValueError, "execution_plan_required"):
+                opportunity_intake.record_transition(
+                    path, opportunity_id, "contracted", "executing", "contract:free-form", now=NOW)
+            for plan, reason in (
+                    (dict(valid, deliverables=[]), "deliverables_invalid"),
+                    (dict(valid, deliverables=[{
+                        "title": "Workflow", "description": "Build it.",
+                        "acceptance_criteria": "Tests pass.",
+                        "due_at": NOW.isoformat()}]), "deliverable_due_at_invalid"),
+                    (dict(valid, started_at=(NOW + timedelta(minutes=6)).isoformat()),
+                     "started_at_future")):
+                with self.assertRaisesRegex(ValueError, reason):
+                    opportunity_intake.start_execution(
+                        path, opportunity_id, contract_id, plan, now=NOW)
+            connection = sqlite3.connect(path)
+            count = connection.execute("SELECT COUNT(*) FROM execution_plans").fetchone()[0]
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(count, 0)
+        self.assertEqual(state, "contracted")
+
+    def test_execution_plan_rolls_back_if_transition_insert_fails(self):
+        plan = {"execution_environment": "Isolated test environment",
+                "started_at": NOW.isoformat(), "deliverables": [{
+                    "title": "Workflow", "description": "Build it.",
+                    "acceptance_criteria": "Tests pass.",
+                    "due_at": (NOW + timedelta(days=7)).isoformat()}]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, contract_id = self.advance_to_contract(path)
+            connection = sqlite3.connect(path)
+            connection.execute("""CREATE TRIGGER reject_execution_transition BEFORE INSERT
+                                ON opportunity_transitions WHEN NEW.to_state = 'executing'
+                                BEGIN SELECT RAISE(ABORT, 'transition failure'); END""")
+            connection.commit()
+            connection.close()
+            with self.assertRaises(sqlite3.IntegrityError):
+                opportunity_intake.start_execution(
+                    path, opportunity_id, contract_id, plan, now=NOW)
+            connection = sqlite3.connect(path)
+            count = connection.execute("SELECT COUNT(*) FROM execution_plans").fetchone()[0]
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(count, 0)
+        self.assertEqual(state, "contracted")
 
     def test_ranking_favors_close_ready_high_confidence_work(self):
         slow = candidate(external_id="slow", time_to_cash_days=60, execution_confidence=0.7,

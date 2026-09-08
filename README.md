@@ -41,7 +41,9 @@ submission and the same provider before advancing to `response_received`. Saving
 or recording evidence never contacts a buyer. `record_contract` can only record
 an externally accepted contract when it matches the proposal, currency, provider,
 and either preapproved standard terms or owner-approved terms with HTTPS evidence;
-it cannot accept or sign a contract.
+it cannot accept or sign a contract. `start_execution` then requires a stored,
+contract-linked plan with explicit deliverables, acceptance criteria, and future
+deadlines before work can move into execution.
 
 ## Mission control
 
