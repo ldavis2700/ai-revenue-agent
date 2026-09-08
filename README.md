@@ -36,7 +36,9 @@ stores the complete scope, bounded price, balanced milestones, and only explicit
 verified claims in the same transaction that advances an opportunity to
 `proposal_ready`. `record_submission` then requires that stored proposal plus a
 provider submission ID, HTTPS receipt URL, and timestamp before atomically
-advancing it to `submitted`. Saving or recording evidence never contacts a buyer.
+advancing it to `submitted`. `record_response` binds a claimed buyer reply to that
+submission and the same provider before advancing to `response_received`. Saving
+or recording evidence never contacts a buyer.
 
 ## Mission control
 

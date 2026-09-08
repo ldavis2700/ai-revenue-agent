@@ -435,6 +435,112 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(receipt_count, 0)
         self.assertEqual(state, "proposal_ready")
 
+    def test_response_receipt_atomically_advances_and_is_idempotent(self):
+        result = opportunity_intake.ingest([candidate()], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        submission = {"provider": "marketplace", "external_submission_id": "application-456",
+                      "submission_url": "https://example.com/applications/456",
+                      "submitted_at": NOW.isoformat()}
+        response = {"provider": "Marketplace", "external_message_id": "message-789",
+                    "message_url": "HTTPS://EXAMPLE.COM/messages/789/",
+                    "received_at": NOW.isoformat()}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            proposal = opportunity_intake.prepare_proposal(
+                path, opportunity_id, self.proposal(), now=NOW)
+            submitted = opportunity_intake.record_submission(
+                path, opportunity_id, proposal["proposal_id"], submission, now=NOW)
+            first = opportunity_intake.record_response(
+                path, opportunity_id, submitted["receipt_id"], response, now=NOW)
+            second = opportunity_intake.record_response(
+                path, opportunity_id, submitted["receipt_id"], response, now=NOW)
+            connection = sqlite3.connect(path)
+            receipt = connection.execute(
+                "SELECT submission_receipt_id,message_url,receipt_hash FROM response_receipts"
+            ).fetchone()
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            evidence = connection.execute(
+                "SELECT evidence_id FROM opportunity_transitions WHERE to_state='response_received'"
+            ).fetchone()[0]
+            connection.close()
+        self.assertTrue(first["changed"])
+        self.assertFalse(second["changed"])
+        self.assertEqual(state, "response_received")
+        self.assertEqual(receipt[0], submitted["receipt_id"])
+        self.assertEqual(receipt[1], "https://example.com/messages/789")
+        self.assertEqual(len(receipt[2]), 64)
+        self.assertEqual(evidence, "reply:" + first["receipt_id"])
+
+    def test_response_rejects_unlinked_or_mismatched_provider_evidence(self):
+        result = opportunity_intake.ingest([candidate()], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        submission = {"provider": "marketplace", "external_submission_id": "application-456",
+                      "submission_url": "https://example.com/applications/456",
+                      "submitted_at": NOW.isoformat()}
+        valid = {"provider": "marketplace", "external_message_id": "message-789",
+                 "message_url": "https://example.com/messages/789",
+                 "received_at": NOW.isoformat()}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            proposal = opportunity_intake.prepare_proposal(
+                path, opportunity_id, self.proposal(), now=NOW)
+            submitted = opportunity_intake.record_submission(
+                path, opportunity_id, proposal["proposal_id"], submission, now=NOW)
+            with self.assertRaisesRegex(ValueError, "response_receipt_required"):
+                opportunity_intake.record_transition(
+                    path, opportunity_id, "submitted", "response_received", "reply:free-form", now=NOW)
+            with self.assertRaisesRegex(ValueError, "submission_receipt_not_found"):
+                opportunity_intake.record_response(
+                    path, opportunity_id, "subr_missing", valid, now=NOW)
+            mismatch = dict(valid, provider="another-marketplace")
+            with self.assertRaisesRegex(ValueError, "response_provider_mismatch"):
+                opportunity_intake.record_response(
+                    path, opportunity_id, submitted["receipt_id"], mismatch, now=NOW)
+            insecure = dict(valid, message_url="http://example.com/messages/789")
+            with self.assertRaisesRegex(ValueError, "message_url_https_required"):
+                opportunity_intake.record_response(
+                    path, opportunity_id, submitted["receipt_id"], insecure, now=NOW)
+            connection = sqlite3.connect(path)
+            count = connection.execute("SELECT COUNT(*) FROM response_receipts").fetchone()[0]
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(count, 0)
+        self.assertEqual(state, "submitted")
+
+    def test_response_rolls_back_if_transition_insert_fails(self):
+        result = opportunity_intake.ingest([candidate()], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        submission = {"provider": "marketplace", "external_submission_id": "application-456",
+                      "submission_url": "https://example.com/applications/456",
+                      "submitted_at": NOW.isoformat()}
+        response = {"provider": "marketplace", "external_message_id": "message-789",
+                    "message_url": "https://example.com/messages/789",
+                    "received_at": NOW.isoformat()}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            proposal = opportunity_intake.prepare_proposal(
+                path, opportunity_id, self.proposal(), now=NOW)
+            submitted = opportunity_intake.record_submission(
+                path, opportunity_id, proposal["proposal_id"], submission, now=NOW)
+            connection = sqlite3.connect(path)
+            connection.execute("""CREATE TRIGGER reject_response_transition BEFORE INSERT
+                                ON opportunity_transitions WHEN NEW.to_state = 'response_received'
+                                BEGIN SELECT RAISE(ABORT, 'transition failure'); END""")
+            connection.commit()
+            connection.close()
+            with self.assertRaises(sqlite3.IntegrityError):
+                opportunity_intake.record_response(
+                    path, opportunity_id, submitted["receipt_id"], response, now=NOW)
+            connection = sqlite3.connect(path)
+            count = connection.execute("SELECT COUNT(*) FROM response_receipts").fetchone()[0]
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(count, 0)
+        self.assertEqual(state, "submitted")
+
     def test_ranking_favors_close_ready_high_confidence_work(self):
         slow = candidate(external_id="slow", time_to_cash_days=60, execution_confidence=0.7,
                          buyer_intent=0.5, win_probability=0.4)
