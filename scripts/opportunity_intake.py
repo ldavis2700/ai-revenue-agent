@@ -413,6 +413,25 @@ def open_ledger(path):
         FOREIGN KEY(delivery_receipt_id) REFERENCES delivery_receipts(receipt_id),
         UNIQUE(provider, external_invoice_id)
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS payment_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        invoice_receipt_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        external_transaction_id TEXT NOT NULL,
+        transaction_url TEXT NOT NULL,
+        gross_amount_cents INTEGER NOT NULL,
+        fee_amount_cents INTEGER NOT NULL,
+        net_amount_cents INTEGER NOT NULL,
+        currency TEXT NOT NULL,
+        paid_at TEXT NOT NULL,
+        settled_at TEXT NOT NULL,
+        receipt_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(invoice_receipt_id) REFERENCES invoice_receipts(receipt_id),
+        UNIQUE(provider, external_transaction_id)
+    )""")
     return connection
 
 
@@ -1160,6 +1179,115 @@ def record_invoice(path, opportunity_id, delivery_receipt_id, invoice, *, now=No
         connection.close()
 
 
+def record_collected_payment(path, opportunity_id, invoice_receipt_id, payment, *, now=None):
+    """Record a settled provider payment linked to an invoice; never initiate a charge."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(invoice_receipt_id, str) or not invoice_receipt_id.strip():
+        raise ValueError("invoice_receipt_id_required")
+    if not isinstance(payment, dict):
+        raise ValueError("payment_object_required")
+    opportunity_id = opportunity_id.strip()
+    invoice_receipt_id = invoice_receipt_id.strip()
+    provider = _proposal_text(payment.get("provider"), "payment_provider", 160)
+    external_id = _proposal_text(
+        payment.get("external_transaction_id"), "external_transaction_id", 500)
+    transaction_url = canonical_url(
+        _proposal_text(payment.get("transaction_url"), "transaction_url", 2000))
+    if urlsplit(transaction_url).scheme != "https":
+        raise ValueError("transaction_url_https_required")
+    amounts = {}
+    for field, minimum in (("gross_amount_cents", 1), ("fee_amount_cents", 0),
+                           ("net_amount_cents", 1)):
+        amount = finite_number(payment, field, minimum=minimum)
+        if not amount.is_integer():
+            raise ValueError(f"{field}_invalid")
+        amounts[field] = int(amount)
+    if amounts["net_amount_cents"] != (
+            amounts["gross_amount_cents"] - amounts["fee_amount_cents"]):
+        raise ValueError("payment_net_amount_mismatch")
+    currency = _proposal_text(payment.get("currency"), "payment_currency", 3).upper()
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        raise ValueError("payment_currency_invalid")
+    paid_at = parse_time(payment.get("paid_at"), "paid_at")
+    settled_at = parse_time(payment.get("settled_at"), "settled_at")
+    recorded = now or utc_now()
+    if paid_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("paid_at_future")
+    if settled_at < paid_at:
+        raise ValueError("settled_before_paid")
+    if settled_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("settled_at_future")
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            invoice = connection.execute("""SELECT opportunity_id,provider,amount_cents,
+                    currency,issued_at
+                FROM invoice_receipts WHERE receipt_id=?""",
+                (invoice_receipt_id,)).fetchone()
+            if invoice is None:
+                raise ValueError("invoice_receipt_not_found")
+            if invoice[0] != opportunity_id:
+                raise ValueError("payment_opportunity_mismatch")
+            if invoice[1].casefold() != provider.casefold():
+                raise ValueError("payment_provider_mismatch")
+            if amounts["gross_amount_cents"] != invoice[2]:
+                raise ValueError("payment_amount_mismatch")
+            if currency != invoice[3]:
+                raise ValueError("payment_currency_mismatch")
+            if paid_at < parse_time(invoice[4], "invoice_issued_at"):
+                raise ValueError("payment_before_invoice")
+            receipt = {"opportunity_id": opportunity_id,
+                       "invoice_receipt_id": invoice_receipt_id,
+                       "provider": provider, "external_transaction_id": external_id,
+                       "transaction_url": transaction_url, **amounts,
+                       "currency": currency, "paid_at": paid_at.isoformat(),
+                       "settled_at": settled_at.isoformat()}
+            serialized = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            receipt_id = "payr_" + receipt_hash[:24]
+            evidence_id = "verified_payment:" + receipt_id
+            recorded_at = recorded.isoformat()
+            existing = connection.execute(
+                "SELECT 1 FROM payment_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
+            if row[0] == "collected" and existing:
+                return {"receipt_id": receipt_id, "changed": False, "state": row[0],
+                        "net_amount_cents": amounts["net_amount_cents"]}
+            if row[0] != "invoiced":
+                raise ValueError("pipeline_state_conflict")
+            tid = transition_id(opportunity_id, "invoiced", "collected", evidence_id)
+            connection.execute("""INSERT INTO payment_receipts
+                (receipt_id,opportunity_id,invoice_receipt_id,provider,external_transaction_id,
+                 transaction_url,gross_amount_cents,fee_amount_cents,net_amount_cents,currency,
+                 paid_at,settled_at,receipt_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                    receipt_id, opportunity_id, invoice_receipt_id, provider, external_id,
+                    transaction_url, amounts["gross_amount_cents"], amounts["fee_amount_cents"],
+                    amounts["net_amount_cents"], currency, paid_at.isoformat(),
+                    settled_at.isoformat(), receipt_hash, recorded_at))
+            payload = json.loads(row[1])
+            payload["pipeline_state"] = "collected"
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                ("collected", json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                 recorded_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, "invoiced", "collected", evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
+        return {"receipt_id": receipt_id, "changed": True, "state": "collected",
+                "net_amount_cents": amounts["net_amount_cents"]}
+    finally:
+        connection.close()
+
+
 def record_transition(path, opportunity_id, expected_state, to_state, evidence_id, *, now=None):
     """Record one evidence-backed, no-skip pipeline transition atomically.
 
@@ -1188,6 +1316,8 @@ def record_transition(path, opportunity_id, expected_state, to_state, evidence_i
         raise ValueError("delivery_receipt_required")
     if to_state == "invoiced":
         raise ValueError("invoice_receipt_required")
+    if to_state == "collected":
+        raise ValueError("payment_receipt_required")
     if not evidence_id.startswith(PIPELINE_EVIDENCE_PREFIXES[to_state]):
         raise ValueError("transition_evidence_invalid")
     recorded_at = (now or utc_now()).isoformat()
