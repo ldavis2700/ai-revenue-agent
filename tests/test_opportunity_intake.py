@@ -202,9 +202,9 @@ class OpportunityIntakeTests(unittest.TestCase):
             path = os.path.join(directory, "opportunities.db")
             opportunity_intake.persist(result, path, now=NOW)
             first = opportunity_intake.record_transition(
-                path, opportunity_id, "qualified", "proposal_ready", "proposal:demo-v1", now=NOW)
+                path, opportunity_id, "qualified", "unqualified", "screen:buyer-withdrew", now=NOW)
             second = opportunity_intake.record_transition(
-                path, opportunity_id, "qualified", "proposal_ready", "proposal:demo-v1", now=NOW)
+                path, opportunity_id, "qualified", "unqualified", "screen:buyer-withdrew", now=NOW)
             connection = sqlite3.connect(path)
             state, stored = connection.execute(
                 "SELECT pipeline_state,payload_json FROM opportunities").fetchone()
@@ -213,9 +213,9 @@ class OpportunityIntakeTests(unittest.TestCase):
             connection.close()
         self.assertTrue(first["changed"])
         self.assertFalse(second["changed"])
-        self.assertEqual(state, "proposal_ready")
-        self.assertEqual(json.loads(stored)["pipeline_state"], "proposal_ready")
-        self.assertEqual(transition[:3], ("qualified", "proposal_ready", "proposal:demo-v1"))
+        self.assertEqual(state, "unqualified")
+        self.assertEqual(json.loads(stored)["pipeline_state"], "unqualified")
+        self.assertEqual(transition[:3], ("qualified", "unqualified", "screen:buyer-withdrew"))
         self.assertEqual(len(transition[3]), 64)
 
     def test_pipeline_transition_rejects_skips_stale_state_and_missing_evidence(self):
@@ -227,15 +227,17 @@ class OpportunityIntakeTests(unittest.TestCase):
             for expected, target, evidence, reason in (
                     ("qualified", "submitted", "provider/1", "transition_not_allowed"),
                     ("qualified", "proposal_ready", "", "transition_fields_required"),
-                    ("qualified", "proposal_ready", "provider/1", "transition_evidence_invalid")):
+                    ("qualified", "proposal_ready", "proposal:1", "proposal_artifact_required")):
                 with self.assertRaisesRegex(ValueError, reason):
                     opportunity_intake.record_transition(
                         path, opportunity_id, expected, target, evidence, now=NOW)
-            opportunity_intake.record_transition(
-                path, opportunity_id, "qualified", "proposal_ready", "proposal:1", now=NOW)
+            opportunity_intake.prepare_proposal(path, opportunity_id, self.proposal(), now=NOW)
+            with self.assertRaisesRegex(ValueError, "submission_receipt_required"):
+                opportunity_intake.record_transition(
+                    path, opportunity_id, "proposal_ready", "submitted", "submission:1", now=NOW)
             with self.assertRaisesRegex(ValueError, "pipeline_state_conflict"):
                 opportunity_intake.record_transition(
-                    path, opportunity_id, "qualified", "unqualified", "screen:2", now=NOW)
+                    path, opportunity_id, "qualified", "expired", "expiry:2", now=NOW)
 
     def test_pipeline_transition_rolls_back_if_receipt_insert_fails(self):
         result = opportunity_intake.ingest([candidate()], now=NOW)
@@ -250,7 +252,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             connection.close()
             with self.assertRaises(sqlite3.IntegrityError):
                 opportunity_intake.record_transition(
-                    path, opportunity_id, "qualified", "proposal_ready", "proposal:1", now=NOW)
+                    path, opportunity_id, "qualified", "unqualified", "screen:1", now=NOW)
             connection = sqlite3.connect(path)
             state = connection.execute(
                 "SELECT pipeline_state FROM opportunities WHERE id=?", (opportunity_id,)).fetchone()[0]
@@ -334,6 +336,104 @@ class OpportunityIntakeTests(unittest.TestCase):
             connection.close()
         self.assertEqual(artifact_count, 0)
         self.assertEqual(state, "qualified")
+
+    def test_submission_receipt_atomically_advances_and_is_idempotent(self):
+        result = opportunity_intake.ingest([candidate()], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        submission = {
+            "provider": "Permitted Marketplace",
+            "external_submission_id": "application-456",
+            "submission_url": "HTTPS://EXAMPLE.COM/applications/456/",
+            "submitted_at": NOW.isoformat(),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            prepared = opportunity_intake.prepare_proposal(
+                path, opportunity_id, self.proposal(), now=NOW)
+            first = opportunity_intake.record_submission(
+                path, opportunity_id, prepared["proposal_id"], submission, now=NOW)
+            second = opportunity_intake.record_submission(
+                path, opportunity_id, prepared["proposal_id"], submission, now=NOW)
+            connection = sqlite3.connect(path)
+            receipt = connection.execute(
+                "SELECT proposal_id,provider,submission_url,receipt_hash FROM submission_receipts"
+            ).fetchone()
+            state, stored = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities").fetchone()
+            evidence = connection.execute(
+                "SELECT evidence_id FROM opportunity_transitions WHERE to_state='submitted'"
+            ).fetchone()[0]
+            connection.close()
+        self.assertTrue(first["changed"])
+        self.assertFalse(second["changed"])
+        self.assertEqual(state, "submitted")
+        self.assertEqual(json.loads(stored)["pipeline_state"], "submitted")
+        self.assertEqual(receipt[0], prepared["proposal_id"])
+        self.assertEqual(receipt[1], "Permitted Marketplace")
+        self.assertEqual(receipt[2], "https://example.com/applications/456")
+        self.assertEqual(len(receipt[3]), 64)
+        self.assertEqual(evidence, "submission:" + first["receipt_id"])
+
+    def test_submission_rejects_unproven_or_invalid_receipts(self):
+        result = opportunity_intake.ingest([candidate()], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        valid = {"provider": "marketplace", "external_submission_id": "application-456",
+                 "submission_url": "https://example.com/applications/456",
+                 "submitted_at": NOW.isoformat()}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            with self.assertRaisesRegex(ValueError, "proposal_not_found"):
+                opportunity_intake.record_submission(
+                    path, opportunity_id, "prop_missing", valid, now=NOW)
+            prepared = opportunity_intake.prepare_proposal(
+                path, opportunity_id, self.proposal(), now=NOW)
+            for changes, reason in (
+                    ({"submission_url": "http://example.com/application"},
+                     "submission_url_https_required"),
+                    ({"submitted_at": (NOW + timedelta(minutes=6)).isoformat()},
+                     "submitted_at_future")):
+                invalid = dict(valid)
+                invalid.update(changes)
+                with self.assertRaisesRegex(ValueError, reason):
+                    opportunity_intake.record_submission(
+                        path, opportunity_id, prepared["proposal_id"], invalid, now=NOW)
+            connection = sqlite3.connect(path)
+            receipt_count = connection.execute(
+                "SELECT COUNT(*) FROM submission_receipts").fetchone()[0]
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(receipt_count, 0)
+        self.assertEqual(state, "proposal_ready")
+
+    def test_submission_rolls_back_if_transition_insert_fails(self):
+        result = opportunity_intake.ingest([candidate()], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        submission = {"provider": "marketplace", "external_submission_id": "application-456",
+                      "submission_url": "https://example.com/applications/456",
+                      "submitted_at": NOW.isoformat()}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            prepared = opportunity_intake.prepare_proposal(
+                path, opportunity_id, self.proposal(), now=NOW)
+            connection = sqlite3.connect(path)
+            connection.execute("""CREATE TRIGGER reject_submission_transition BEFORE INSERT
+                                ON opportunity_transitions WHEN NEW.to_state = 'submitted'
+                                BEGIN SELECT RAISE(ABORT, 'transition failure'); END""")
+            connection.commit()
+            connection.close()
+            with self.assertRaises(sqlite3.IntegrityError):
+                opportunity_intake.record_submission(
+                    path, opportunity_id, prepared["proposal_id"], submission, now=NOW)
+            connection = sqlite3.connect(path)
+            receipt_count = connection.execute(
+                "SELECT COUNT(*) FROM submission_receipts").fetchone()[0]
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(receipt_count, 0)
+        self.assertEqual(state, "proposal_ready")
 
     def test_ranking_favors_close_ready_high_confidence_work(self):
         slow = candidate(external_id="slow", time_to_cash_days=60, execution_confidence=0.7,

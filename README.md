@@ -34,7 +34,9 @@ Configure with:
 Paid-work opportunities use a separate evidence-gated ledger. `prepare_proposal`
 stores the complete scope, bounded price, balanced milestones, and only explicitly
 verified claims in the same transaction that advances an opportunity to
-`proposal_ready`. Saving a proposal does not submit it or contact a buyer.
+`proposal_ready`. `record_submission` then requires that stored proposal plus a
+provider submission ID, HTTPS receipt URL, and timestamp before atomically
+advancing it to `submitted`. Saving or recording evidence never contacts a buyer.
 
 ## Mission control
 
