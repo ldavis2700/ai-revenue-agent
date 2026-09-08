@@ -47,7 +47,9 @@ deadlines before work can move into execution. `pass_qa` requires an immutable
 artifact SHA-256 plus passing test results backed by HTTPS evidence before work
 can be marked `qa_passed`. `record_delivery` then binds the provider delivery
 receipt to that exact QA-approved artifact checksum before advancing to
-`delivered`.
+`delivered`. `record_invoice` requires a delivery-linked provider invoice whose
+amount and currency remain within the verified contract and whose dates follow
+delivery; it records evidence but never creates a charge.
 
 ## Mission control
 

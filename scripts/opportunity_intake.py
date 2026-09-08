@@ -396,6 +396,23 @@ def open_ledger(path):
         FOREIGN KEY(qa_report_id) REFERENCES qa_reports(report_id),
         UNIQUE(provider, external_delivery_id)
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS invoice_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        delivery_receipt_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        external_invoice_id TEXT NOT NULL,
+        invoice_url TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL,
+        currency TEXT NOT NULL,
+        issued_at TEXT NOT NULL,
+        due_at TEXT NOT NULL,
+        receipt_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(delivery_receipt_id) REFERENCES delivery_receipts(receipt_id),
+        UNIQUE(provider, external_invoice_id)
+    )""")
     return connection
 
 
@@ -1044,6 +1061,105 @@ def record_delivery(path, opportunity_id, qa_report_id, delivery, *, now=None):
         connection.close()
 
 
+def record_invoice(path, opportunity_id, delivery_receipt_id, invoice, *, now=None):
+    """Record an external invoice tied to verified delivery; never create a charge."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(delivery_receipt_id, str) or not delivery_receipt_id.strip():
+        raise ValueError("delivery_receipt_id_required")
+    if not isinstance(invoice, dict):
+        raise ValueError("invoice_object_required")
+    opportunity_id = opportunity_id.strip()
+    delivery_receipt_id = delivery_receipt_id.strip()
+    provider = _proposal_text(invoice.get("provider"), "invoice_provider", 160)
+    external_id = _proposal_text(
+        invoice.get("external_invoice_id"), "external_invoice_id", 500)
+    invoice_url = canonical_url(
+        _proposal_text(invoice.get("invoice_url"), "invoice_url", 2000))
+    if urlsplit(invoice_url).scheme != "https":
+        raise ValueError("invoice_url_https_required")
+    amount_cents = finite_number(invoice, "amount_cents", minimum=1)
+    if not amount_cents.is_integer():
+        raise ValueError("amount_cents_invalid")
+    currency = _proposal_text(invoice.get("currency"), "invoice_currency", 3).upper()
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        raise ValueError("invoice_currency_invalid")
+    issued_at = parse_time(invoice.get("issued_at"), "issued_at")
+    due_at = parse_time(invoice.get("due_at"), "due_at")
+    recorded = now or utc_now()
+    if issued_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("issued_at_future")
+    if due_at <= issued_at:
+        raise ValueError("due_at_invalid")
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            delivery = connection.execute("""SELECT d.opportunity_id,d.provider,d.delivered_at,
+                    c.amount_cents,c.currency
+                FROM delivery_receipts d
+                JOIN qa_reports q ON q.report_id=d.qa_report_id
+                JOIN execution_plans e ON e.plan_id=q.execution_plan_id
+                JOIN contract_receipts c ON c.receipt_id=e.contract_receipt_id
+                WHERE d.receipt_id=?""", (delivery_receipt_id,)).fetchone()
+            if delivery is None:
+                raise ValueError("delivery_receipt_not_found")
+            if delivery[0] != opportunity_id:
+                raise ValueError("delivery_opportunity_mismatch")
+            if delivery[1].casefold() != provider.casefold():
+                raise ValueError("invoice_provider_mismatch")
+            if issued_at < parse_time(delivery[2], "delivered_at"):
+                raise ValueError("invoice_before_delivery")
+            if int(amount_cents) > delivery[3]:
+                raise ValueError("invoice_amount_exceeds_contract")
+            if currency != delivery[4]:
+                raise ValueError("invoice_currency_mismatch")
+            receipt = {"opportunity_id": opportunity_id,
+                       "delivery_receipt_id": delivery_receipt_id,
+                       "provider": provider, "external_invoice_id": external_id,
+                       "invoice_url": invoice_url, "amount_cents": int(amount_cents),
+                       "currency": currency, "issued_at": issued_at.isoformat(),
+                       "due_at": due_at.isoformat()}
+            serialized = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            receipt_id = "invr_" + receipt_hash[:24]
+            evidence_id = "invoice:" + receipt_id
+            recorded_at = recorded.isoformat()
+            existing = connection.execute(
+                "SELECT 1 FROM invoice_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
+            if row[0] == "invoiced" and existing:
+                return {"receipt_id": receipt_id, "changed": False, "state": row[0]}
+            if row[0] != "delivered":
+                raise ValueError("pipeline_state_conflict")
+            tid = transition_id(opportunity_id, "delivered", "invoiced", evidence_id)
+            connection.execute("""INSERT INTO invoice_receipts
+                (receipt_id,opportunity_id,delivery_receipt_id,provider,external_invoice_id,
+                 invoice_url,amount_cents,currency,issued_at,due_at,receipt_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                    receipt_id, opportunity_id, delivery_receipt_id, provider, external_id,
+                    invoice_url, int(amount_cents), currency, issued_at.isoformat(),
+                    due_at.isoformat(), receipt_hash, recorded_at))
+            payload = json.loads(row[1])
+            payload["pipeline_state"] = "invoiced"
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                ("invoiced", json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                 recorded_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, "delivered", "invoiced", evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
+        return {"receipt_id": receipt_id, "changed": True, "state": "invoiced"}
+    finally:
+        connection.close()
+
+
 def record_transition(path, opportunity_id, expected_state, to_state, evidence_id, *, now=None):
     """Record one evidence-backed, no-skip pipeline transition atomically.
 
@@ -1070,6 +1186,8 @@ def record_transition(path, opportunity_id, expected_state, to_state, evidence_i
         raise ValueError("qa_report_required")
     if to_state == "delivered":
         raise ValueError("delivery_receipt_required")
+    if to_state == "invoiced":
+        raise ValueError("invoice_receipt_required")
     if not evidence_id.startswith(PIPELINE_EVIDENCE_PREFIXES[to_state]):
         raise ValueError("transition_evidence_invalid")
     recorded_at = (now or utc_now()).isoformat()
