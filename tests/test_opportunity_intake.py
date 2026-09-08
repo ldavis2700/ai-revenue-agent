@@ -36,6 +36,25 @@ def candidate(**overrides):
 
 
 class OpportunityIntakeTests(unittest.TestCase):
+    def proposal(self, **overrides):
+        value = {
+            "scope": "Build and validate the listed workflow automation.",
+            "price_cents": 100000,
+            "milestones": [{
+                "title": "Validated implementation",
+                "deliverable": "Tested workflow, deployment notes, and acceptance evidence.",
+                "amount_cents": 100000,
+                "due_days": 7,
+            }],
+            "claims": [{
+                "text": "APEX has a tested opportunity and delivery ledger.",
+                "source_url": "https://github.com/ldavis2700/ai-revenue-agent",
+                "verified_at": NOW.isoformat(),
+            }],
+        }
+        value.update(overrides)
+        return value
+
     def test_normalizes_and_scores_valid_candidate(self):
         result = opportunity_intake.ingest([candidate()], now=NOW)
         item = result["opportunities"][0]
@@ -214,6 +233,80 @@ class OpportunityIntakeTests(unittest.TestCase):
             state = connection.execute(
                 "SELECT pipeline_state FROM opportunities WHERE id=?", (opportunity_id,)).fetchone()[0]
             connection.close()
+        self.assertEqual(state, "qualified")
+
+    def test_proposal_artifact_atomically_advances_and_is_idempotent(self):
+        result = opportunity_intake.ingest([candidate()], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            first = opportunity_intake.prepare_proposal(
+                path, opportunity_id, self.proposal(), now=NOW)
+            second = opportunity_intake.prepare_proposal(
+                path, opportunity_id, self.proposal(), now=NOW)
+            connection = sqlite3.connect(path)
+            artifact = json.loads(connection.execute(
+                "SELECT artifact_json FROM proposal_artifacts").fetchone()[0])
+            state = connection.execute(
+                "SELECT pipeline_state FROM opportunities").fetchone()[0]
+            evidence = connection.execute(
+                "SELECT evidence_id FROM opportunity_transitions").fetchone()[0]
+            connection.close()
+        self.assertTrue(first["changed"])
+        self.assertFalse(second["changed"])
+        self.assertEqual(state, "proposal_ready")
+        self.assertEqual(artifact["price_cents"], 100000)
+        self.assertEqual(sum(x["amount_cents"] for x in artifact["milestones"]), 100000)
+        self.assertEqual(evidence, "proposal:" + first["proposal_id"])
+
+    def test_proposal_rejects_unpriced_unbalanced_or_unverified_content(self):
+        result = opportunity_intake.ingest([candidate()], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            invalid = [
+                (self.proposal(price_cents=100001), "milestone_total_mismatch"),
+                (self.proposal(price_cents=100001, milestones=[{
+                    "title": "Too expensive", "deliverable": "Work",
+                    "amount_cents": 100001, "due_days": 7,
+                }]), "price_exceeds_opportunity_payout"),
+                (self.proposal(claims=[{"text": "Unsupported"}]), "claim_source_url_required"),
+            ]
+            for proposal, reason in invalid:
+                with self.assertRaisesRegex(ValueError, reason):
+                    opportunity_intake.prepare_proposal(
+                        path, opportunity_id, proposal, now=NOW)
+            connection = sqlite3.connect(path)
+            counts = (connection.execute("SELECT COUNT(*) FROM proposal_artifacts").fetchone()[0],
+                      connection.execute("SELECT COUNT(*) FROM opportunity_transitions").fetchone()[0])
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(counts, (0, 0))
+        self.assertEqual(state, "qualified")
+
+    def test_proposal_rolls_back_if_transition_insert_fails(self):
+        result = opportunity_intake.ingest([candidate()], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            connection = sqlite3.connect(path)
+            connection.execute("""CREATE TRIGGER reject_proposal_transition BEFORE INSERT
+                                ON opportunity_transitions
+                                BEGIN SELECT RAISE(ABORT, 'transition failure'); END""")
+            connection.commit()
+            connection.close()
+            with self.assertRaises(sqlite3.IntegrityError):
+                opportunity_intake.prepare_proposal(
+                    path, opportunity_id, self.proposal(), now=NOW)
+            connection = sqlite3.connect(path)
+            artifact_count = connection.execute(
+                "SELECT COUNT(*) FROM proposal_artifacts").fetchone()[0]
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(artifact_count, 0)
         self.assertEqual(state, "qualified")
 
     def test_ranking_favors_close_ready_high_confidence_work(self):
