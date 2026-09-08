@@ -76,6 +76,15 @@ class OpportunityIntakeTests(unittest.TestCase):
             "authority_evidence_url": "https://example.com/terms/standard-v1"}, now=NOW)
         return opportunity_id, contracted["receipt_id"]
 
+    def advance_to_execution(self, path):
+        opportunity_id, contract_id = self.advance_to_contract(path)
+        execution = opportunity_intake.start_execution(path, opportunity_id, contract_id, {
+            "execution_environment": "Isolated test environment", "started_at": NOW.isoformat(),
+            "deliverables": [{"title": "Workflow", "description": "Build it.",
+                              "acceptance_criteria": "Automated tests pass.",
+                              "due_at": (NOW + timedelta(days=7)).isoformat()}]}, now=NOW)
+        return opportunity_id, execution["plan_id"]
+
     def test_normalizes_and_scores_valid_candidate(self):
         result = opportunity_intake.ingest([candidate()], now=NOW)
         item = result["opportunities"][0]
@@ -766,6 +775,79 @@ class OpportunityIntakeTests(unittest.TestCase):
             connection.close()
         self.assertEqual(count, 0)
         self.assertEqual(state, "contracted")
+
+    def test_qa_report_atomically_advances_and_is_idempotent(self):
+        report = {"artifact_sha256": "a" * 64, "completed_at": NOW.isoformat(),
+                  "tests": [{"name": "Automated acceptance suite", "status": "passed",
+                             "evidence_url": "HTTPS://EXAMPLE.COM/runs/123/"}]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, plan_id = self.advance_to_execution(path)
+            first = opportunity_intake.pass_qa(path, opportunity_id, plan_id, report, now=NOW)
+            second = opportunity_intake.pass_qa(path, opportunity_id, plan_id, report, now=NOW)
+            connection = sqlite3.connect(path)
+            artifact = json.loads(connection.execute(
+                "SELECT report_json FROM qa_reports").fetchone()[0])
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            evidence = connection.execute(
+                "SELECT evidence_id FROM opportunity_transitions WHERE to_state='qa_passed'"
+            ).fetchone()[0]
+            connection.close()
+        self.assertTrue(first["changed"])
+        self.assertFalse(second["changed"])
+        self.assertEqual(state, "qa_passed")
+        self.assertEqual(artifact["execution_plan_id"], plan_id)
+        self.assertEqual(artifact["tests"][0]["evidence_url"], "https://example.com/runs/123")
+        self.assertEqual(evidence, "qa:" + first["report_id"])
+
+    def test_qa_rejects_bypass_failed_tests_and_weak_evidence(self):
+        valid = {"artifact_sha256": "a" * 64, "completed_at": NOW.isoformat(),
+                 "tests": [{"name": "Acceptance suite", "status": "passed",
+                            "evidence_url": "https://example.com/runs/123"}]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, plan_id = self.advance_to_execution(path)
+            with self.assertRaisesRegex(ValueError, "qa_report_required"):
+                opportunity_intake.record_transition(
+                    path, opportunity_id, "executing", "qa_passed", "qa:free-form", now=NOW)
+            for report, reason in (
+                    (dict(valid, artifact_sha256="not-a-checksum"), "artifact_sha256_invalid"),
+                    (dict(valid, tests=[{"name": "Acceptance suite", "status": "failed",
+                                        "evidence_url": "https://example.com/runs/123"}]),
+                     "qa_test_not_passed"),
+                    (dict(valid, tests=[{"name": "Acceptance suite", "status": "passed",
+                                        "evidence_url": "http://example.com/runs/123"}]),
+                     "qa_evidence_url_https_required")):
+                with self.assertRaisesRegex(ValueError, reason):
+                    opportunity_intake.pass_qa(path, opportunity_id, plan_id, report, now=NOW)
+            connection = sqlite3.connect(path)
+            count = connection.execute("SELECT COUNT(*) FROM qa_reports").fetchone()[0]
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(count, 0)
+        self.assertEqual(state, "executing")
+
+    def test_qa_rolls_back_if_transition_insert_fails(self):
+        report = {"artifact_sha256": "a" * 64, "completed_at": NOW.isoformat(),
+                  "tests": [{"name": "Acceptance suite", "status": "passed",
+                             "evidence_url": "https://example.com/runs/123"}]}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, plan_id = self.advance_to_execution(path)
+            connection = sqlite3.connect(path)
+            connection.execute("""CREATE TRIGGER reject_qa_transition BEFORE INSERT
+                                ON opportunity_transitions WHEN NEW.to_state = 'qa_passed'
+                                BEGIN SELECT RAISE(ABORT, 'transition failure'); END""")
+            connection.commit()
+            connection.close()
+            with self.assertRaises(sqlite3.IntegrityError):
+                opportunity_intake.pass_qa(path, opportunity_id, plan_id, report, now=NOW)
+            connection = sqlite3.connect(path)
+            count = connection.execute("SELECT COUNT(*) FROM qa_reports").fetchone()[0]
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(count, 0)
+        self.assertEqual(state, "executing")
 
     def test_ranking_favors_close_ready_high_confidence_work(self):
         slow = candidate(external_id="slow", time_to_cash_days=60, execution_confidence=0.7,
