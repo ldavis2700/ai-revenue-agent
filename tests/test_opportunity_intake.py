@@ -85,6 +85,14 @@ class OpportunityIntakeTests(unittest.TestCase):
                               "due_at": (NOW + timedelta(days=7)).isoformat()}]}, now=NOW)
         return opportunity_id, execution["plan_id"]
 
+    def advance_to_qa(self, path):
+        opportunity_id, plan_id = self.advance_to_execution(path)
+        qa = opportunity_intake.pass_qa(path, opportunity_id, plan_id, {
+            "artifact_sha256": "a" * 64, "completed_at": NOW.isoformat(),
+            "tests": [{"name": "Acceptance suite", "status": "passed",
+                       "evidence_url": "https://example.com/runs/123"}]}, now=NOW)
+        return opportunity_id, qa["report_id"]
+
     def test_normalizes_and_scores_valid_candidate(self):
         result = opportunity_intake.ingest([candidate()], now=NOW)
         item = result["opportunities"][0]
@@ -848,6 +856,88 @@ class OpportunityIntakeTests(unittest.TestCase):
             connection.close()
         self.assertEqual(count, 0)
         self.assertEqual(state, "executing")
+
+    def test_delivery_receipt_atomically_advances_and_is_idempotent(self):
+        delivery = {"provider": "Marketplace", "external_delivery_id": "delivery-654",
+                    "delivery_url": "HTTPS://EXAMPLE.COM/deliveries/654/",
+                    "artifact_sha256": "a" * 64,
+                    "delivered_at": (NOW + timedelta(minutes=1)).isoformat()}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, qa_id = self.advance_to_qa(path)
+            first = opportunity_intake.record_delivery(
+                path, opportunity_id, qa_id, delivery, now=NOW + timedelta(minutes=1))
+            second = opportunity_intake.record_delivery(
+                path, opportunity_id, qa_id, delivery, now=NOW + timedelta(minutes=1))
+            connection = sqlite3.connect(path)
+            receipt = connection.execute(
+                "SELECT qa_report_id,delivery_url,artifact_sha256,receipt_hash FROM delivery_receipts"
+            ).fetchone()
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            evidence = connection.execute(
+                "SELECT evidence_id FROM opportunity_transitions WHERE to_state='delivered'"
+            ).fetchone()[0]
+            connection.close()
+        self.assertTrue(first["changed"])
+        self.assertFalse(second["changed"])
+        self.assertEqual(state, "delivered")
+        self.assertEqual(receipt[0], qa_id)
+        self.assertEqual(receipt[1], "https://example.com/deliveries/654")
+        self.assertEqual(receipt[2], "a" * 64)
+        self.assertEqual(len(receipt[3]), 64)
+        self.assertEqual(evidence, "delivery:" + first["receipt_id"])
+
+    def test_delivery_rejects_bypass_wrong_artifact_provider_or_timing(self):
+        valid = {"provider": "marketplace", "external_delivery_id": "delivery-654",
+                 "delivery_url": "https://example.com/deliveries/654",
+                 "artifact_sha256": "a" * 64,
+                 "delivered_at": (NOW + timedelta(minutes=1)).isoformat()}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, qa_id = self.advance_to_qa(path)
+            with self.assertRaisesRegex(ValueError, "delivery_receipt_required"):
+                opportunity_intake.record_transition(
+                    path, opportunity_id, "qa_passed", "delivered", "delivery:free-form", now=NOW)
+            for delivery, reason in (
+                    (dict(valid, artifact_sha256="b" * 64), "delivery_artifact_mismatch"),
+                    (dict(valid, provider="other-provider"), "delivery_provider_mismatch"),
+                    (dict(valid, delivered_at=(NOW - timedelta(seconds=1)).isoformat()),
+                     "delivered_before_qa"),
+                    (dict(valid, delivery_url="http://example.com/deliveries/654"),
+                     "delivery_url_https_required")):
+                with self.assertRaisesRegex(ValueError, reason):
+                    opportunity_intake.record_delivery(
+                        path, opportunity_id, qa_id, delivery, now=NOW + timedelta(minutes=1))
+            connection = sqlite3.connect(path)
+            count = connection.execute("SELECT COUNT(*) FROM delivery_receipts").fetchone()[0]
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(count, 0)
+        self.assertEqual(state, "qa_passed")
+
+    def test_delivery_rolls_back_if_transition_insert_fails(self):
+        delivery = {"provider": "marketplace", "external_delivery_id": "delivery-654",
+                    "delivery_url": "https://example.com/deliveries/654",
+                    "artifact_sha256": "a" * 64,
+                    "delivered_at": (NOW + timedelta(minutes=1)).isoformat()}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, qa_id = self.advance_to_qa(path)
+            connection = sqlite3.connect(path)
+            connection.execute("""CREATE TRIGGER reject_delivery_transition BEFORE INSERT
+                                ON opportunity_transitions WHEN NEW.to_state = 'delivered'
+                                BEGIN SELECT RAISE(ABORT, 'transition failure'); END""")
+            connection.commit()
+            connection.close()
+            with self.assertRaises(sqlite3.IntegrityError):
+                opportunity_intake.record_delivery(
+                    path, opportunity_id, qa_id, delivery, now=NOW + timedelta(minutes=1))
+            connection = sqlite3.connect(path)
+            count = connection.execute("SELECT COUNT(*) FROM delivery_receipts").fetchone()[0]
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(count, 0)
+        self.assertEqual(state, "qa_passed")
 
     def test_ranking_favors_close_ready_high_confidence_work(self):
         slow = candidate(external_id="slow", time_to_cash_days=60, execution_confidence=0.7,

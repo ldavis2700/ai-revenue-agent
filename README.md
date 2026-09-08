@@ -45,7 +45,9 @@ it cannot accept or sign a contract. `start_execution` then requires a stored,
 contract-linked plan with explicit deliverables, acceptance criteria, and future
 deadlines before work can move into execution. `pass_qa` requires an immutable
 artifact SHA-256 plus passing test results backed by HTTPS evidence before work
-can be marked `qa_passed`.
+can be marked `qa_passed`. `record_delivery` then binds the provider delivery
+receipt to that exact QA-approved artifact checksum before advancing to
+`delivered`.
 
 ## Mission control
 
