@@ -356,6 +356,18 @@ def open_ledger(path):
         FOREIGN KEY(proposal_id) REFERENCES proposal_artifacts(proposal_id),
         UNIQUE(provider, external_contract_id)
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS execution_plans (
+        plan_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        contract_receipt_id TEXT NOT NULL,
+        plan_hash TEXT NOT NULL,
+        plan_json TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(contract_receipt_id) REFERENCES contract_receipts(receipt_id),
+        UNIQUE(opportunity_id, plan_hash)
+    )""")
     return connection
 
 
@@ -741,6 +753,94 @@ def record_contract(path, opportunity_id, response_receipt_id, contract, *, now=
         connection.close()
 
 
+def start_execution(path, opportunity_id, contract_receipt_id, plan, *, now=None):
+    """Persist a bounded delivery plan before marking contracted work executing."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(contract_receipt_id, str) or not contract_receipt_id.strip():
+        raise ValueError("contract_receipt_id_required")
+    if not isinstance(plan, dict):
+        raise ValueError("execution_plan_object_required")
+    opportunity_id = opportunity_id.strip()
+    contract_receipt_id = contract_receipt_id.strip()
+    environment = _proposal_text(plan.get("execution_environment"), "execution_environment", 500)
+    deliverables = plan.get("deliverables")
+    if not isinstance(deliverables, list) or not 1 <= len(deliverables) <= 20:
+        raise ValueError("deliverables_invalid")
+    normalized_deliverables = []
+    for deliverable in deliverables:
+        if not isinstance(deliverable, dict):
+            raise ValueError("deliverable_invalid")
+        title = _proposal_text(deliverable.get("title"), "deliverable_title", 160)
+        description = _proposal_text(
+            deliverable.get("description"), "deliverable_description", 2000)
+        acceptance = _proposal_text(
+            deliverable.get("acceptance_criteria"), "acceptance_criteria", 2000)
+        due_at = parse_time(deliverable.get("due_at"), "deliverable_due_at")
+        normalized_deliverables.append({"title": title, "description": description,
+                                        "acceptance_criteria": acceptance,
+                                        "due_at": due_at.isoformat()})
+    started_at = parse_time(plan.get("started_at"), "started_at")
+    recorded = now or utc_now()
+    if started_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("started_at_future")
+    if any(parse_time(item["due_at"], "deliverable_due_at") <= started_at
+           for item in normalized_deliverables):
+        raise ValueError("deliverable_due_at_invalid")
+
+    artifact = {"opportunity_id": opportunity_id,
+                "contract_receipt_id": contract_receipt_id,
+                "execution_environment": environment,
+                "deliverables": normalized_deliverables,
+                "started_at": started_at.isoformat()}
+    serialized = json.dumps(artifact, sort_keys=True, separators=(",", ":"))
+    plan_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    plan_id = "execp_" + plan_hash[:24]
+    evidence_id = "contract:" + contract_receipt_id + ":plan:" + plan_id
+    recorded_at = recorded.isoformat()
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            contract = connection.execute(
+                "SELECT opportunity_id FROM contract_receipts WHERE receipt_id=?",
+                (contract_receipt_id,)).fetchone()
+            if contract is None:
+                raise ValueError("contract_receipt_not_found")
+            if contract[0] != opportunity_id:
+                raise ValueError("contract_opportunity_mismatch")
+            existing = connection.execute(
+                "SELECT 1 FROM execution_plans WHERE plan_id=?", (plan_id,)).fetchone()
+            if row[0] == "executing" and existing:
+                return {"plan_id": plan_id, "changed": False, "state": row[0]}
+            if row[0] != "contracted":
+                raise ValueError("pipeline_state_conflict")
+            tid = transition_id(opportunity_id, "contracted", "executing", evidence_id)
+            connection.execute("""INSERT INTO execution_plans
+                (plan_id,opportunity_id,contract_receipt_id,plan_hash,plan_json,started_at,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    plan_id, opportunity_id, contract_receipt_id, plan_hash, serialized,
+                    started_at.isoformat(), recorded_at))
+            payload = json.loads(row[1])
+            payload["pipeline_state"] = "executing"
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                ("executing", json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                 recorded_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, "contracted", "executing", evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
+        return {"plan_id": plan_id, "changed": True, "state": "executing"}
+    finally:
+        connection.close()
+
+
 def record_transition(path, opportunity_id, expected_state, to_state, evidence_id, *, now=None):
     """Record one evidence-backed, no-skip pipeline transition atomically.
 
@@ -761,6 +861,8 @@ def record_transition(path, opportunity_id, expected_state, to_state, evidence_i
         raise ValueError("response_receipt_required")
     if to_state == "contracted":
         raise ValueError("contract_receipt_required")
+    if to_state == "executing":
+        raise ValueError("execution_plan_required")
     if not evidence_id.startswith(PIPELINE_EVIDENCE_PREFIXES[to_state]):
         raise ValueError("transition_evidence_invalid")
     recorded_at = (now or utc_now()).isoformat()
