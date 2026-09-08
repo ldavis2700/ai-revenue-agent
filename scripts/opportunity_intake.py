@@ -322,6 +322,20 @@ def open_ledger(path):
         FOREIGN KEY(proposal_id) REFERENCES proposal_artifacts(proposal_id),
         UNIQUE(provider, external_submission_id)
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS response_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        submission_receipt_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        external_message_id TEXT NOT NULL,
+        message_url TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        receipt_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(submission_receipt_id) REFERENCES submission_receipts(receipt_id),
+        UNIQUE(provider, external_message_id)
+    )""")
     return connection
 
 
@@ -523,6 +537,83 @@ def record_submission(path, opportunity_id, proposal_id, submission, *, now=None
         connection.close()
 
 
+def record_response(path, opportunity_id, submission_receipt_id, response, *, now=None):
+    """Persist a provider-backed buyer response and advance it atomically."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(submission_receipt_id, str) or not submission_receipt_id.strip():
+        raise ValueError("submission_receipt_id_required")
+    if not isinstance(response, dict):
+        raise ValueError("response_object_required")
+    opportunity_id = opportunity_id.strip()
+    submission_receipt_id = submission_receipt_id.strip()
+    provider = _proposal_text(response.get("provider"), "response_provider", 160)
+    external_id = _proposal_text(
+        response.get("external_message_id"), "external_message_id", 500)
+    message_url = canonical_url(
+        _proposal_text(response.get("message_url"), "message_url", 2000))
+    if urlsplit(message_url).scheme != "https":
+        raise ValueError("message_url_https_required")
+    received_at = parse_time(response.get("received_at"), "received_at")
+    recorded = now or utc_now()
+    if received_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("received_at_future")
+
+    receipt = {"opportunity_id": opportunity_id,
+               "submission_receipt_id": submission_receipt_id,
+               "provider": provider, "external_message_id": external_id,
+               "message_url": message_url, "received_at": received_at.isoformat()}
+    serialized = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+    receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    receipt_id = "respr_" + receipt_hash[:24]
+    evidence_id = "reply:" + receipt_id
+    recorded_at = recorded.isoformat()
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            submission = connection.execute(
+                "SELECT opportunity_id,provider FROM submission_receipts WHERE receipt_id=?",
+                (submission_receipt_id,)).fetchone()
+            if submission is None:
+                raise ValueError("submission_receipt_not_found")
+            if submission[0] != opportunity_id:
+                raise ValueError("submission_opportunity_mismatch")
+            if submission[1].casefold() != provider.casefold():
+                raise ValueError("response_provider_mismatch")
+            existing = connection.execute(
+                "SELECT 1 FROM response_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
+            if row[0] == "response_received" and existing:
+                return {"receipt_id": receipt_id, "changed": False, "state": row[0]}
+            if row[0] != "submitted":
+                raise ValueError("pipeline_state_conflict")
+            tid = transition_id(opportunity_id, "submitted", "response_received", evidence_id)
+            connection.execute("""INSERT INTO response_receipts
+                (receipt_id,opportunity_id,submission_receipt_id,provider,external_message_id,
+                 message_url,received_at,receipt_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?,?,?)""", (
+                    receipt_id, opportunity_id, submission_receipt_id, provider, external_id,
+                    message_url, received_at.isoformat(), receipt_hash, recorded_at))
+            payload = json.loads(row[1])
+            payload["pipeline_state"] = "response_received"
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                ("response_received", json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                 recorded_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, "submitted", "response_received", evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
+        return {"receipt_id": receipt_id, "changed": True, "state": "response_received"}
+    finally:
+        connection.close()
+
+
 def record_transition(path, opportunity_id, expected_state, to_state, evidence_id, *, now=None):
     """Record one evidence-backed, no-skip pipeline transition atomically.
 
@@ -539,6 +630,8 @@ def record_transition(path, opportunity_id, expected_state, to_state, evidence_i
         raise ValueError("proposal_artifact_required")
     if to_state == "submitted":
         raise ValueError("submission_receipt_required")
+    if to_state == "response_received":
+        raise ValueError("response_receipt_required")
     if not evidence_id.startswith(PIPELINE_EVIDENCE_PREFIXES[to_state]):
         raise ValueError("transition_evidence_invalid")
     recorded_at = (now or utc_now()).isoformat()
