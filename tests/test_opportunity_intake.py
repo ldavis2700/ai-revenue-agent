@@ -103,6 +103,17 @@ class OpportunityIntakeTests(unittest.TestCase):
             now=NOW + timedelta(minutes=1))
         return opportunity_id, delivery["receipt_id"]
 
+    def advance_to_invoice(self, path):
+        opportunity_id, delivery_id = self.advance_to_delivery(path)
+        invoice = opportunity_intake.record_invoice(path, opportunity_id, delivery_id, {
+            "provider": "marketplace", "external_invoice_id": "invoice-987",
+            "invoice_url": "https://example.com/invoices/987",
+            "amount_cents": 100000, "currency": "USD",
+            "issued_at": (NOW + timedelta(minutes=2)).isoformat(),
+            "due_at": (NOW + timedelta(days=7)).isoformat()},
+            now=NOW + timedelta(minutes=2))
+        return opportunity_id, invoice["receipt_id"]
+
     def test_normalizes_and_scores_valid_candidate(self):
         result = opportunity_intake.ingest([candidate()], now=NOW)
         item = result["opportunities"][0]
@@ -1032,6 +1043,102 @@ class OpportunityIntakeTests(unittest.TestCase):
             connection.close()
         self.assertEqual(count, 0)
         self.assertEqual(state, "delivered")
+
+    def test_settled_payment_atomically_advances_and_is_idempotent(self):
+        payment = {"provider": "Marketplace", "external_transaction_id": "payment-246",
+                   "transaction_url": "HTTPS://EXAMPLE.COM/payments/246/",
+                   "gross_amount_cents": 100000, "fee_amount_cents": 3000,
+                   "net_amount_cents": 97000, "currency": "usd",
+                   "paid_at": (NOW + timedelta(minutes=3)).isoformat(),
+                   "settled_at": (NOW + timedelta(minutes=4)).isoformat()}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, invoice_id = self.advance_to_invoice(path)
+            first = opportunity_intake.record_collected_payment(
+                path, opportunity_id, invoice_id, payment, now=NOW + timedelta(minutes=4))
+            second = opportunity_intake.record_collected_payment(
+                path, opportunity_id, invoice_id, payment, now=NOW + timedelta(minutes=4))
+            connection = sqlite3.connect(path)
+            receipt = connection.execute("""SELECT invoice_receipt_id,transaction_url,
+                gross_amount_cents,fee_amount_cents,net_amount_cents,currency,receipt_hash
+                FROM payment_receipts""").fetchone()
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            evidence = connection.execute(
+                "SELECT evidence_id FROM opportunity_transitions WHERE to_state='collected'"
+            ).fetchone()[0]
+            connection.close()
+        self.assertTrue(first["changed"])
+        self.assertFalse(second["changed"])
+        self.assertEqual(first["net_amount_cents"], 97000)
+        self.assertEqual(state, "collected")
+        self.assertEqual(receipt[:6], (invoice_id, "https://example.com/payments/246",
+                                      100000, 3000, 97000, "USD"))
+        self.assertEqual(len(receipt[6]), 64)
+        self.assertEqual(evidence, "verified_payment:" + first["receipt_id"])
+
+    def test_payment_rejects_bypass_mismatches_and_unsettled_evidence(self):
+        valid = {"provider": "marketplace", "external_transaction_id": "payment-246",
+                 "transaction_url": "https://example.com/payments/246",
+                 "gross_amount_cents": 100000, "fee_amount_cents": 3000,
+                 "net_amount_cents": 97000, "currency": "USD",
+                 "paid_at": (NOW + timedelta(minutes=3)).isoformat(),
+                 "settled_at": (NOW + timedelta(minutes=4)).isoformat()}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, invoice_id = self.advance_to_invoice(path)
+            with self.assertRaisesRegex(ValueError, "payment_receipt_required"):
+                opportunity_intake.record_transition(
+                    path, opportunity_id, "invoiced", "collected",
+                    "verified_payment:free-form", now=NOW)
+            for payment, reason in (
+                    (dict(valid, gross_amount_cents=99999), "payment_net_amount_mismatch"),
+                    (dict(valid, gross_amount_cents=99999, fee_amount_cents=2999),
+                     "payment_amount_mismatch"),
+                    (dict(valid, net_amount_cents=96000), "payment_net_amount_mismatch"),
+                    (dict(valid, currency="EUR"), "payment_currency_mismatch"),
+                    (dict(valid, provider="other-provider"), "payment_provider_mismatch"),
+                    (dict(valid, transaction_url="http://example.com/payments/246"),
+                     "transaction_url_https_required"),
+                    (dict(valid, paid_at=NOW.isoformat()), "payment_before_invoice"),
+                    (dict(valid, settled_at=(NOW + timedelta(minutes=2)).isoformat()),
+                     "settled_before_paid")):
+                with self.assertRaisesRegex(ValueError, reason):
+                    opportunity_intake.record_collected_payment(
+                        path, opportunity_id, invoice_id, payment,
+                        now=NOW + timedelta(minutes=4))
+            connection = sqlite3.connect(path)
+            count = connection.execute("SELECT COUNT(*) FROM payment_receipts").fetchone()[0]
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(count, 0)
+        self.assertEqual(state, "invoiced")
+
+    def test_payment_rolls_back_if_transition_insert_fails(self):
+        payment = {"provider": "marketplace", "external_transaction_id": "payment-246",
+                   "transaction_url": "https://example.com/payments/246",
+                   "gross_amount_cents": 100000, "fee_amount_cents": 3000,
+                   "net_amount_cents": 97000, "currency": "USD",
+                   "paid_at": (NOW + timedelta(minutes=3)).isoformat(),
+                   "settled_at": (NOW + timedelta(minutes=4)).isoformat()}
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, invoice_id = self.advance_to_invoice(path)
+            connection = sqlite3.connect(path)
+            connection.execute("""CREATE TRIGGER reject_payment_transition BEFORE INSERT
+                                ON opportunity_transitions WHEN NEW.to_state = 'collected'
+                                BEGIN SELECT RAISE(ABORT, 'transition failure'); END""")
+            connection.commit()
+            connection.close()
+            with self.assertRaises(sqlite3.IntegrityError):
+                opportunity_intake.record_collected_payment(
+                    path, opportunity_id, invoice_id, payment,
+                    now=NOW + timedelta(minutes=4))
+            connection = sqlite3.connect(path)
+            count = connection.execute("SELECT COUNT(*) FROM payment_receipts").fetchone()[0]
+            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(count, 0)
+        self.assertEqual(state, "invoiced")
 
     def test_ranking_favors_close_ready_high_confidence_work(self):
         slow = candidate(external_id="slow", time_to_cash_days=60, execution_confidence=0.7,

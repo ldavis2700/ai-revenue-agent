@@ -49,7 +49,10 @@ can be marked `qa_passed`. `record_delivery` then binds the provider delivery
 receipt to that exact QA-approved artifact checksum before advancing to
 `delivered`. `record_invoice` requires a delivery-linked provider invoice whose
 amount and currency remain within the verified contract and whose dates follow
-delivery; it records evidence but never creates a charge.
+delivery; it records evidence but never creates a charge. Finally,
+`record_collected_payment` counts revenue only from a settled provider transaction
+linked to that invoice, with exact gross/currency matching and verified fee/net
+arithmetic; it never initiates a charge or changes a payout account.
 
 ## Mission control
 
