@@ -368,6 +368,19 @@ def open_ledger(path):
         FOREIGN KEY(contract_receipt_id) REFERENCES contract_receipts(receipt_id),
         UNIQUE(opportunity_id, plan_hash)
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS qa_reports (
+        report_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        execution_plan_id TEXT NOT NULL,
+        artifact_sha256 TEXT NOT NULL,
+        report_hash TEXT NOT NULL,
+        report_json TEXT NOT NULL,
+        completed_at TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(execution_plan_id) REFERENCES execution_plans(plan_id),
+        UNIQUE(opportunity_id, report_hash)
+    )""")
     return connection
 
 
@@ -841,6 +854,92 @@ def start_execution(path, opportunity_id, contract_receipt_id, plan, *, now=None
         connection.close()
 
 
+def pass_qa(path, opportunity_id, execution_plan_id, report, *, now=None):
+    """Persist objective passing QA evidence before marking work QA-passed."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(execution_plan_id, str) or not execution_plan_id.strip():
+        raise ValueError("execution_plan_id_required")
+    if not isinstance(report, dict):
+        raise ValueError("qa_report_object_required")
+    opportunity_id = opportunity_id.strip()
+    execution_plan_id = execution_plan_id.strip()
+    artifact_sha256 = _proposal_text(report.get("artifact_sha256"), "artifact_sha256", 64).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", artifact_sha256):
+        raise ValueError("artifact_sha256_invalid")
+    tests = report.get("tests")
+    if not isinstance(tests, list) or not 1 <= len(tests) <= 100:
+        raise ValueError("qa_tests_invalid")
+    normalized_tests = []
+    for test in tests:
+        if not isinstance(test, dict):
+            raise ValueError("qa_test_invalid")
+        name = _proposal_text(test.get("name"), "qa_test_name", 200)
+        if test.get("status") != "passed":
+            raise ValueError("qa_test_not_passed")
+        evidence_url = canonical_url(
+            _proposal_text(test.get("evidence_url"), "qa_evidence_url", 2000))
+        if urlsplit(evidence_url).scheme != "https":
+            raise ValueError("qa_evidence_url_https_required")
+        normalized_tests.append({"name": name, "status": "passed",
+                                 "evidence_url": evidence_url})
+    completed_at = parse_time(report.get("completed_at"), "qa_completed_at")
+    recorded = now or utc_now()
+    if completed_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("qa_completed_at_future")
+
+    artifact = {"opportunity_id": opportunity_id,
+                "execution_plan_id": execution_plan_id,
+                "artifact_sha256": artifact_sha256, "tests": normalized_tests,
+                "completed_at": completed_at.isoformat()}
+    serialized = json.dumps(artifact, sort_keys=True, separators=(",", ":"))
+    report_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    report_id = "qar_" + report_hash[:24]
+    evidence_id = "qa:" + report_id
+    recorded_at = recorded.isoformat()
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            plan = connection.execute(
+                "SELECT opportunity_id FROM execution_plans WHERE plan_id=?",
+                (execution_plan_id,)).fetchone()
+            if plan is None:
+                raise ValueError("execution_plan_not_found")
+            if plan[0] != opportunity_id:
+                raise ValueError("execution_plan_opportunity_mismatch")
+            existing = connection.execute(
+                "SELECT 1 FROM qa_reports WHERE report_id=?", (report_id,)).fetchone()
+            if row[0] == "qa_passed" and existing:
+                return {"report_id": report_id, "changed": False, "state": row[0]}
+            if row[0] != "executing":
+                raise ValueError("pipeline_state_conflict")
+            tid = transition_id(opportunity_id, "executing", "qa_passed", evidence_id)
+            connection.execute("""INSERT INTO qa_reports
+                (report_id,opportunity_id,execution_plan_id,artifact_sha256,report_hash,
+                 report_json,completed_at,recorded_at) VALUES (?,?,?,?,?,?,?,?)""", (
+                    report_id, opportunity_id, execution_plan_id, artifact_sha256,
+                    report_hash, serialized, completed_at.isoformat(), recorded_at))
+            payload = json.loads(row[1])
+            payload["pipeline_state"] = "qa_passed"
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                ("qa_passed", json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                 recorded_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, "executing", "qa_passed", evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
+        return {"report_id": report_id, "changed": True, "state": "qa_passed"}
+    finally:
+        connection.close()
+
+
 def record_transition(path, opportunity_id, expected_state, to_state, evidence_id, *, now=None):
     """Record one evidence-backed, no-skip pipeline transition atomically.
 
@@ -863,6 +962,8 @@ def record_transition(path, opportunity_id, expected_state, to_state, evidence_i
         raise ValueError("contract_receipt_required")
     if to_state == "executing":
         raise ValueError("execution_plan_required")
+    if to_state == "qa_passed":
+        raise ValueError("qa_report_required")
     if not evidence_id.startswith(PIPELINE_EVIDENCE_PREFIXES[to_state]):
         raise ValueError("transition_evidence_invalid")
     recorded_at = (now or utc_now()).isoformat()
