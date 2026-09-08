@@ -11,12 +11,14 @@ import hashlib
 import json
 import math
 import re
+import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit, urlunsplit
 
 
 DEFAULT_MAX_AGE_DAYS = 30
+DEFAULT_DB_PATH = "/files/data/revenue_agent.db"
 MAX_FUTURE_SKEW = timedelta(minutes=5)
 PROHIBITED_CATEGORIES = {
     "adult", "credential_theft", "deceptive_reviews", "fraud", "malware",
@@ -72,6 +74,14 @@ def stable_id(source, external_id, url):
     # A provider's immutable external ID wins over a mutable/listing URL.
     identity = f"{source.lower()}|{external_id.lower() or url.lower()}"
     return "opp_" + hashlib.sha256(identity.encode()).hexdigest()[:20]
+
+
+def payload_hash(value):
+    try:
+        encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+    except (TypeError, ValueError):
+        encoded = repr(value)
+    return hashlib.sha256(encoded.encode()).hexdigest()
 
 
 def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
@@ -194,21 +204,26 @@ def ingest(payloads, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
             item = normalize(payload, now=now, max_age_days=max_age_days)
             eligible, reason = screen(item)
             if not eligible:
-                rejected.append({"index": index, "reason": reason, "id": item["id"]})
+                rejected.append({"index": index, "reason": reason, "id": item["id"],
+                                 "payload_hash": payload_hash(payload)})
                 continue
             previous = by_id.get(item["id"])
             if previous and previous["observed_at"] >= item["observed_at"]:
-                rejected.append({"index": index, "reason": "duplicate_older_or_equal", "id": item["id"]})
+                rejected.append({"index": index, "reason": "duplicate_older_or_equal", "id": item["id"],
+                                 "payload_hash": payload_hash(payload)})
                 continue
             if previous:
                 accepted.remove(previous)
-                rejected.append({"index": previous["_index"], "reason": "duplicate_superseded", "id": item["id"]})
+                rejected.append({"index": previous["_index"], "reason": "duplicate_superseded", "id": item["id"],
+                                 "payload_hash": previous["_payload_hash"]})
             item["score"], item["score_components"] = score(item)
             item["action_mode"] = action_mode(item)
             item["pipeline_state"] = ("payment_rail_blocked"
                                       if item["payment_rail_status"] == "temporarily_unavailable"
                                       else "qualified")
+            item["source_index"] = index
             item["_index"] = index
+            item["_payload_hash"] = payload_hash(payload)
             by_id[item["id"]] = item
             accepted.append(item)
         except ValueError as exc:
@@ -216,13 +231,98 @@ def ingest(payloads, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
     accepted.sort(key=lambda item: (-item["score"], item["time_to_cash_days"], item["id"]))
     for item in accepted:
         item.pop("_index", None)
+        item.pop("_payload_hash", None)
+    for rejection in rejected:
+        rejection.setdefault("payload_hash", payload_hash(payloads[rejection["index"]]))
     return {"metrics": {"received": len(payloads), "eligible": len(accepted), "rejected": len(rejected)},
             "opportunities": accepted, "rejections": rejected}
+
+
+def open_ledger(path):
+    connection = sqlite3.connect(path)
+    connection.execute("PRAGMA foreign_keys=ON")
+    connection.execute("""CREATE TABLE IF NOT EXISTS opportunities (
+        id TEXT PRIMARY KEY,
+        source TEXT NOT NULL,
+        external_id TEXT NOT NULL,
+        url TEXT NOT NULL,
+        title TEXT NOT NULL,
+        score REAL NOT NULL,
+        action_mode TEXT NOT NULL,
+        pipeline_state TEXT NOT NULL,
+        observed_at TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS opportunity_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        opportunity_id TEXT,
+        decision TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        source_index INTEGER NOT NULL,
+        payload_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL
+    )""")
+    return connection
+
+
+def receipt_id(opportunity_id, decision, reason, source_index, digest):
+    value = f"{opportunity_id or ''}|{decision}|{reason}|{source_index}|{digest}"
+    return "oppr_" + hashlib.sha256(value.encode()).hexdigest()[:24]
+
+
+def persist(result, path=DEFAULT_DB_PATH, *, now=None):
+    """Atomically persist eligible opportunities and idempotent decision receipts."""
+    now = (now or utc_now()).isoformat()
+    connection = open_ledger(path)
+    written, unchanged, receipt_writes = 0, 0, 0
+    try:
+        with connection:
+            for index, item in enumerate(result["opportunities"]):
+                serialized = json.dumps(item, sort_keys=True, separators=(",", ":"))
+                cursor = connection.execute("""INSERT INTO opportunities
+                    (id,source,external_id,url,title,score,action_mode,pipeline_state,
+                     observed_at,payload_json,updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET
+                      source=excluded.source, external_id=excluded.external_id,
+                      url=excluded.url, title=excluded.title, score=excluded.score,
+                      action_mode=excluded.action_mode, pipeline_state=excluded.pipeline_state,
+                      observed_at=excluded.observed_at, payload_json=excluded.payload_json,
+                      updated_at=excluded.updated_at
+                    WHERE excluded.observed_at > opportunities.observed_at""", (
+                        item["id"], item["source"], item["external_id"], item["url"],
+                        item["title"], item["score"], item["action_mode"], item["pipeline_state"],
+                        item["observed_at"], serialized, now))
+                if cursor.rowcount:
+                    written += 1
+                else:
+                    unchanged += 1
+                digest = payload_hash(item)
+                source_index = item.get("source_index", index)
+                rid = receipt_id(item["id"], "eligible", item["action_mode"], source_index, digest)
+                receipt_writes += connection.execute("""INSERT OR IGNORE INTO opportunity_receipts
+                    (receipt_id,opportunity_id,decision,reason,source_index,payload_hash,recorded_at)
+                    VALUES (?,?,?,?,?,?,?)""", (
+                        rid, item["id"], "eligible", item["action_mode"], source_index, digest, now)).rowcount
+            for rejected in result["rejections"]:
+                rid = receipt_id(rejected.get("id"), "rejected", rejected["reason"],
+                                 rejected["index"], rejected["payload_hash"])
+                receipt_writes += connection.execute("""INSERT OR IGNORE INTO opportunity_receipts
+                    (receipt_id,opportunity_id,decision,reason,source_index,payload_hash,recorded_at)
+                    VALUES (?,?,?,?,?,?,?)""", (
+                        rid, rejected.get("id"), "rejected", rejected["reason"],
+                        rejected["index"], rejected["payload_hash"], now)).rowcount
+        return {"opportunities_written": written, "opportunities_unchanged": unchanged,
+                "receipts_written": receipt_writes}
+    finally:
+        connection.close()
 
 
 def main():
     parser = argparse.ArgumentParser(description="Screen and rank paid-work opportunities")
     parser.add_argument("--max-age-days", type=int, default=DEFAULT_MAX_AGE_DAYS)
+    parser.add_argument("--database", help="persist decisions to the opportunity ledger")
     args = parser.parse_args()
     if args.max_age_days < 1:
         raise SystemExit("max-age-days must be positive")
@@ -231,7 +331,10 @@ def main():
     payloads = data if isinstance(data, list) else data.get("opportunities", [])
     if not isinstance(payloads, list):
         raise SystemExit("opportunities must be a list")
-    print(json.dumps(ingest(payloads, max_age_days=args.max_age_days), sort_keys=True))
+    result = ingest(payloads, max_age_days=args.max_age_days)
+    if args.database:
+        result["persistence"] = persist(result, args.database)
+    print(json.dumps(result, sort_keys=True))
 
 
 if __name__ == "__main__":

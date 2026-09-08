@@ -1,4 +1,8 @@
 from datetime import datetime, timedelta, timezone
+import json
+import os
+import sqlite3
+import tempfile
 import unittest
 
 from scripts import opportunity_intake
@@ -95,6 +99,60 @@ class OpportunityIntakeTests(unittest.TestCase):
         accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
         self.assertEqual(accepted["pipeline_state"], "payment_rail_blocked")
         self.assertEqual(accepted["action_mode"], "prepare_only")
+
+    def test_persistence_is_idempotent_and_does_not_store_rejected_payload(self):
+        accepted = candidate()
+        rejected = candidate(external_id="bad", scam_signals=["advance fee"],
+                             description="sensitive untrusted text")
+        result = opportunity_intake.ingest([accepted, rejected], now=NOW)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            first = opportunity_intake.persist(result, path, now=NOW)
+            second = opportunity_intake.persist(result, path, now=NOW + timedelta(minutes=1))
+            connection = sqlite3.connect(path)
+            opportunities = connection.execute("SELECT COUNT(*) FROM opportunities").fetchone()[0]
+            receipts = connection.execute("SELECT COUNT(*) FROM opportunity_receipts").fetchone()[0]
+            stored = connection.execute("SELECT payload_json FROM opportunities").fetchone()[0]
+            raw = " ".join(str(value) for row in connection.execute(
+                "SELECT * FROM opportunity_receipts") for value in row)
+            connection.close()
+        self.assertEqual(first, {"opportunities_written": 1, "opportunities_unchanged": 0,
+                                 "receipts_written": 2})
+        self.assertEqual(second, {"opportunities_written": 0, "opportunities_unchanged": 1,
+                                  "receipts_written": 0})
+        self.assertEqual((opportunities, receipts), (1, 2))
+        self.assertEqual(json.loads(stored)["external_id"], "job-123")
+        self.assertNotIn("sensitive untrusted text", raw)
+
+    def test_newer_observation_updates_and_older_observation_cannot_overwrite(self):
+        older = candidate(title="Old", observed_at=(NOW - timedelta(hours=2)).isoformat())
+        newer = candidate(title="New", observed_at=(NOW - timedelta(minutes=10)).isoformat())
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(opportunity_intake.ingest([older], now=NOW), path, now=NOW)
+            update = opportunity_intake.persist(opportunity_intake.ingest([newer], now=NOW), path,
+                                                now=NOW + timedelta(minutes=1))
+            stale = opportunity_intake.persist(opportunity_intake.ingest([older], now=NOW), path,
+                                               now=NOW + timedelta(minutes=2))
+            connection = sqlite3.connect(path)
+            title = connection.execute("SELECT title FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(update["opportunities_written"], 1)
+        self.assertEqual(stale["opportunities_unchanged"], 1)
+        self.assertEqual(title, "New")
+
+    def test_persistence_rolls_back_partial_batch_on_error(self):
+        result = opportunity_intake.ingest([candidate(), candidate(external_id="second")], now=NOW)
+        del result["opportunities"][1]["source"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            with self.assertRaises(KeyError):
+                opportunity_intake.persist(result, path, now=NOW)
+            connection = sqlite3.connect(path)
+            count = connection.execute("SELECT COUNT(*) FROM opportunities").fetchone()[0]
+            receipt_count = connection.execute("SELECT COUNT(*) FROM opportunity_receipts").fetchone()[0]
+            connection.close()
+        self.assertEqual((count, receipt_count), (0, 0))
 
     def test_ranking_favors_close_ready_high_confidence_work(self):
         slow = candidate(external_id="slow", time_to_cash_days=60, execution_confidence=0.7,
