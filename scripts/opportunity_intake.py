@@ -381,6 +381,21 @@ def open_ledger(path):
         FOREIGN KEY(execution_plan_id) REFERENCES execution_plans(plan_id),
         UNIQUE(opportunity_id, report_hash)
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS delivery_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        qa_report_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        external_delivery_id TEXT NOT NULL,
+        delivery_url TEXT NOT NULL,
+        artifact_sha256 TEXT NOT NULL,
+        delivered_at TEXT NOT NULL,
+        receipt_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(qa_report_id) REFERENCES qa_reports(report_id),
+        UNIQUE(provider, external_delivery_id)
+    )""")
     return connection
 
 
@@ -940,6 +955,95 @@ def pass_qa(path, opportunity_id, execution_plan_id, report, *, now=None):
         connection.close()
 
 
+def record_delivery(path, opportunity_id, qa_report_id, delivery, *, now=None):
+    """Record provider delivery evidence for the exact QA-approved artifact."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(qa_report_id, str) or not qa_report_id.strip():
+        raise ValueError("qa_report_id_required")
+    if not isinstance(delivery, dict):
+        raise ValueError("delivery_object_required")
+    opportunity_id = opportunity_id.strip()
+    qa_report_id = qa_report_id.strip()
+    provider = _proposal_text(delivery.get("provider"), "delivery_provider", 160)
+    external_id = _proposal_text(
+        delivery.get("external_delivery_id"), "external_delivery_id", 500)
+    delivery_url = canonical_url(
+        _proposal_text(delivery.get("delivery_url"), "delivery_url", 2000))
+    if urlsplit(delivery_url).scheme != "https":
+        raise ValueError("delivery_url_https_required")
+    artifact_sha256 = _proposal_text(
+        delivery.get("artifact_sha256"), "artifact_sha256", 64).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", artifact_sha256):
+        raise ValueError("artifact_sha256_invalid")
+    delivered_at = parse_time(delivery.get("delivered_at"), "delivered_at")
+    recorded = now or utc_now()
+    if delivered_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("delivered_at_future")
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            qa = connection.execute("""SELECT q.opportunity_id,q.artifact_sha256,q.completed_at,
+                    c.provider
+                FROM qa_reports q
+                JOIN execution_plans e ON e.plan_id=q.execution_plan_id
+                JOIN contract_receipts c ON c.receipt_id=e.contract_receipt_id
+                WHERE q.report_id=?""", (qa_report_id,)).fetchone()
+            if qa is None:
+                raise ValueError("qa_report_not_found")
+            if qa[0] != opportunity_id:
+                raise ValueError("qa_report_opportunity_mismatch")
+            if qa[1] != artifact_sha256:
+                raise ValueError("delivery_artifact_mismatch")
+            if qa[3].casefold() != provider.casefold():
+                raise ValueError("delivery_provider_mismatch")
+            if delivered_at < parse_time(qa[2], "qa_completed_at"):
+                raise ValueError("delivered_before_qa")
+            receipt = {"opportunity_id": opportunity_id, "qa_report_id": qa_report_id,
+                       "provider": provider, "external_delivery_id": external_id,
+                       "delivery_url": delivery_url, "artifact_sha256": artifact_sha256,
+                       "delivered_at": delivered_at.isoformat()}
+            serialized = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            receipt_id = "delr_" + receipt_hash[:24]
+            evidence_id = "delivery:" + receipt_id
+            recorded_at = recorded.isoformat()
+            existing = connection.execute(
+                "SELECT 1 FROM delivery_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
+            if row[0] == "delivered" and existing:
+                return {"receipt_id": receipt_id, "changed": False, "state": row[0]}
+            if row[0] != "qa_passed":
+                raise ValueError("pipeline_state_conflict")
+            tid = transition_id(opportunity_id, "qa_passed", "delivered", evidence_id)
+            connection.execute("""INSERT INTO delivery_receipts
+                (receipt_id,opportunity_id,qa_report_id,provider,external_delivery_id,
+                 delivery_url,artifact_sha256,delivered_at,receipt_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""", (
+                    receipt_id, opportunity_id, qa_report_id, provider, external_id,
+                    delivery_url, artifact_sha256, delivered_at.isoformat(),
+                    receipt_hash, recorded_at))
+            payload = json.loads(row[1])
+            payload["pipeline_state"] = "delivered"
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                ("delivered", json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                 recorded_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, "qa_passed", "delivered", evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
+        return {"receipt_id": receipt_id, "changed": True, "state": "delivered"}
+    finally:
+        connection.close()
+
+
 def record_transition(path, opportunity_id, expected_state, to_state, evidence_id, *, now=None):
     """Record one evidence-backed, no-skip pipeline transition atomically.
 
@@ -964,6 +1068,8 @@ def record_transition(path, opportunity_id, expected_state, to_state, evidence_i
         raise ValueError("execution_plan_required")
     if to_state == "qa_passed":
         raise ValueError("qa_report_required")
+    if to_state == "delivered":
+        raise ValueError("delivery_receipt_required")
     if not evidence_id.startswith(PIPELINE_EVIDENCE_PREFIXES[to_state]):
         raise ValueError("transition_evidence_invalid")
     recorded_at = (now or utc_now()).isoformat()
