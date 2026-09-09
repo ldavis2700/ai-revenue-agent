@@ -207,6 +207,47 @@ class OpportunityIntakeTests(unittest.TestCase):
         ], now=NOW)
         self.assertEqual(len(result["opportunities"]), 1)
 
+    def test_rejects_jobs_with_unavailable_execution_requirements(self):
+        result = opportunity_intake.ingest([
+            candidate(
+                external_id="native-windows-excel",
+                required_execution_capabilities=["windows_hardware", "native_excel"],
+                available_execution_capabilities=["python", "libreoffice"],
+            ),
+        ], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(result["rejections"][0]["reason"],
+                         "execution_capabilities_unmet")
+
+    def test_accepts_explicitly_satisfied_execution_requirements(self):
+        result = opportunity_intake.ingest([
+            candidate(
+                required_execution_capabilities=["playwright", "python", "playwright"],
+                available_execution_capabilities=["python", "playwright", "sqlite"],
+            ),
+        ], now=NOW)
+        item = result["opportunities"][0]
+        self.assertEqual(item["required_execution_capabilities"],
+                         ["playwright", "python"])
+        self.assertEqual(item["missing_execution_capabilities"], [])
+
+    def test_rejects_malformed_capability_evidence(self):
+        values = [
+            candidate(external_id="not-a-list",
+                      required_execution_capabilities="windows_hardware"),
+            candidate(external_id="empty-capability",
+                      available_execution_capabilities=[""]),
+            candidate(external_id="unsafe-capability",
+                      required_execution_capabilities=["native excel / maybe"]),
+        ]
+        reasons = [item["reason"] for item in
+                   opportunity_intake.ingest(values, now=NOW)["rejections"]]
+        self.assertEqual(reasons, [
+            "required_execution_capabilities_invalid",
+            "available_execution_capabilities_invalid",
+            "required_execution_capabilities_invalid",
+        ])
+
     def test_temporary_payment_outage_preserves_pipeline_without_submission(self):
         item = candidate(payment_rail_clear=False, payment_rail_status="temporarily_unavailable",
                          platform_allows_automation=True, authenticated_channel=True,

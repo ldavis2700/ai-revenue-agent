@@ -50,6 +50,13 @@ receipt to that exact QA-approved artifact checksum before advancing to
 `delivered`. `record_invoice` requires a delivery-linked provider invoice whose
 amount and currency remain within the verified contract and whose dates follow
 delivery; it records evidence but never creates a charge. Finally,
+Opportunity intake can also carry explicit `required_execution_capabilities` and
+`available_execution_capabilities` lists. APEX fails closed when any requirement
+is unavailable, preventing technically open jobs from reaching proposal work when
+the connected execution environment cannot truthfully complete them. Capability
+names are normalized, deduplicated, and validated rather than inferred from job
+copy.
+
 `record_collected_payment` counts revenue only from a settled provider transaction
 linked to that invoice, with exact gross/currency matching and verified fee/net
 arithmetic; it never initiates a charge or changes a payout account.

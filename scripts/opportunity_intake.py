@@ -81,6 +81,22 @@ def finite_number(payload, field, *, minimum=0, maximum=None, required=True):
     return value
 
 
+def capability_set(payload, field):
+    """Normalize explicit execution capabilities without guessing from free text."""
+    values = payload.get(field, [])
+    if not isinstance(values, list):
+        raise ValueError(f"{field}_invalid")
+    normalized = set()
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{field}_invalid")
+        capability = value.strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,79}", capability):
+            raise ValueError(f"{field}_invalid")
+        normalized.add(capability)
+    return sorted(normalized)
+
+
 def canonical_url(value):
     if not value:
         return ""
@@ -139,6 +155,8 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
     payout_cents = finite_number(payload, "payout_cents", minimum=0)
     effort_hours = finite_number(payload, "effort_hours", minimum=0.25, maximum=10000)
     time_to_cash_days = finite_number(payload, "time_to_cash_days", minimum=0, maximum=3650)
+    required_capabilities = capability_set(payload, "required_execution_capabilities")
+    available_capabilities = capability_set(payload, "available_execution_capabilities")
     normalized = {
         "id": stable_id(source, external_id, url),
         "source": source,
@@ -180,6 +198,10 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         "hires_for_listing": finite_number(payload, "hires_for_listing", minimum=0,
                                              maximum=10000, required=False),
         "preferred_qualifications_met": bool(payload.get("preferred_qualifications_met", True)),
+        "required_execution_capabilities": required_capabilities,
+        "available_execution_capabilities": available_capabilities,
+        "missing_execution_capabilities": sorted(
+            set(required_capabilities) - set(available_capabilities)),
     }
     if not re.fullmatch(r"[A-Z]{3}", normalized["currency"]):
         raise ValueError("currency_invalid")
@@ -200,6 +222,8 @@ def screen(opportunity):
         return False, "listing_filled"
     if not opportunity["preferred_qualifications_met"]:
         return False, "preferred_qualifications_unmet"
+    if opportunity["missing_execution_capabilities"]:
+        return False, "execution_capabilities_unmet"
     if opportunity["prohibited_category"] in PROHIBITED_CATEGORIES:
         return False, "prohibited_category"
     if opportunity["scam_signals"]:
