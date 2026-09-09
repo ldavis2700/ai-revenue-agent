@@ -131,6 +131,23 @@ class OpportunityIntakeTests(unittest.TestCase):
         accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
         self.assertEqual(accepted["action_mode"], "prepare_only")
 
+    def test_submission_channel_outage_preserves_opportunity_without_autonomous_submit(self):
+        item = candidate(platform_allows_automation=True, authenticated_channel=True,
+                         submission_authorized=True,
+                         submission_channel_status="temporarily_unavailable")
+        accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
+        self.assertEqual(accepted["pipeline_state"], "qualified")
+        self.assertEqual(accepted["action_mode"], "prepare_only")
+        self.assertEqual(accepted["submission_channel_status"], "temporarily_unavailable")
+
+    def test_rejects_unknown_submission_channel_status(self):
+        result = opportunity_intake.ingest([
+            candidate(submission_channel_status="broken-ish"),
+        ], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(result["rejections"][0]["reason"],
+                         "submission_channel_status_invalid")
+
     def test_deduplicates_and_keeps_newest_observation(self):
         older = candidate(title="Older", url="https://example.com/jobs/123?old=true",
                           observed_at=(NOW - timedelta(hours=2)).isoformat())
@@ -169,6 +186,26 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(reasons, ["prohibited_category", "scam_signals_present", "deception_required",
                                    "unsolicited_contact_disallowed", "suppressed_or_opted_out",
                                    "payment_rail_unclear", "execution_confidence_too_low"])
+
+    def test_rejects_closed_filled_and_profile_mismatched_marketplace_jobs(self):
+        values = [
+            candidate(external_id="closed", listing_open=False),
+            candidate(external_id="filled", positions_to_hire=1, hires_for_listing=1),
+            candidate(external_id="profile-mismatch", preferred_qualifications_met=False),
+        ]
+        result = opportunity_intake.ingest(values, now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(
+            [item["reason"] for item in result["rejections"]],
+            ["listing_closed", "listing_filled", "preferred_qualifications_unmet"],
+        )
+
+    def test_unfilled_listing_and_met_qualifications_remain_eligible(self):
+        result = opportunity_intake.ingest([
+            candidate(positions_to_hire=2, hires_for_listing=1,
+                      preferred_qualifications_met=True),
+        ], now=NOW)
+        self.assertEqual(len(result["opportunities"]), 1)
 
     def test_temporary_payment_outage_preserves_pipeline_without_submission(self):
         item = candidate(payment_rail_clear=False, payment_rail_status="temporarily_unavailable",
