@@ -231,6 +231,60 @@ class OpportunityIntakeTests(unittest.TestCase):
                          ["playwright", "python"])
         self.assertEqual(item["missing_execution_capabilities"], [])
 
+    def test_rejects_personal_data_collection_without_verified_authority(self):
+        result = opportunity_intake.ingest([
+            candidate(
+                external_id="contact-harvesting",
+                requires_personal_data_collection=True,
+                personal_data_authorized=False,
+            ),
+        ], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(result["rejections"][0]["reason"],
+                         "personal_data_authority_unverified")
+
+    def test_accepts_authorized_personal_data_work_without_contacting_people(self):
+        result = opportunity_intake.ingest([
+            candidate(
+                requires_personal_data_collection=True,
+                personal_data_authorized=True,
+                unsolicited_direct_contact=False,
+            ),
+        ], now=NOW)
+        self.assertEqual(len(result["opportunities"]), 1)
+
+    def test_rejects_raw_or_unclear_credential_access(self):
+        values = [
+            candidate(external_id="raw-login", requires_credential_access=True,
+                      credential_access_method="raw"),
+            candidate(external_id="unspecified-login", requires_credential_access=True),
+        ]
+        reasons = [item["reason"] for item in
+                   opportunity_intake.ingest(values, now=NOW)["rejections"]]
+        self.assertEqual(reasons, ["credential_access_unsafe", "credential_access_unsafe"])
+
+    def test_accepts_provider_managed_credential_access(self):
+        result = opportunity_intake.ingest([
+            candidate(requires_credential_access=True,
+                      credential_access_method="provider_managed"),
+        ], now=NOW)
+        self.assertEqual(len(result["opportunities"]), 1)
+
+    def test_rejects_malformed_privacy_and_credential_evidence(self):
+        values = [
+            candidate(external_id="string-flag",
+                      requires_personal_data_collection="false"),
+            candidate(external_id="bad-credential-method",
+                      requires_credential_access=True,
+                      credential_access_method="email-me-a-password"),
+        ]
+        reasons = [item["reason"] for item in
+                   opportunity_intake.ingest(values, now=NOW)["rejections"]]
+        self.assertEqual(reasons, [
+            "requires_personal_data_collection_invalid",
+            "credential_access_method_invalid",
+        ])
+
     def test_rejects_malformed_capability_evidence(self):
         values = [
             candidate(external_id="not-a-list",
