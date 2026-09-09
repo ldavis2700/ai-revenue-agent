@@ -131,6 +131,23 @@ class OpportunityIntakeTests(unittest.TestCase):
         accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
         self.assertEqual(accepted["action_mode"], "prepare_only")
 
+    def test_submission_channel_outage_preserves_opportunity_without_autonomous_submit(self):
+        item = candidate(platform_allows_automation=True, authenticated_channel=True,
+                         submission_authorized=True,
+                         submission_channel_status="temporarily_unavailable")
+        accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
+        self.assertEqual(accepted["pipeline_state"], "qualified")
+        self.assertEqual(accepted["action_mode"], "prepare_only")
+        self.assertEqual(accepted["submission_channel_status"], "temporarily_unavailable")
+
+    def test_rejects_unknown_submission_channel_status(self):
+        result = opportunity_intake.ingest([
+            candidate(submission_channel_status="broken-ish"),
+        ], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(result["rejections"][0]["reason"],
+                         "submission_channel_status_invalid")
+
     def test_deduplicates_and_keeps_newest_observation(self):
         older = candidate(title="Older", url="https://example.com/jobs/123?old=true",
                           observed_at=(NOW - timedelta(hours=2)).isoformat())

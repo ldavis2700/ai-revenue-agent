@@ -170,6 +170,10 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         "platform_allows_automation": bool(payload.get("platform_allows_automation", False)),
         "authenticated_channel": bool(payload.get("authenticated_channel", False)),
         "submission_authorized": bool(payload.get("submission_authorized", False)),
+        "submission_channel_status": str(
+            payload.get("submission_channel_status") or
+            ("available" if payload.get("authenticated_channel", False) else "unclear")
+        ).strip().lower(),
         "listing_open": bool(payload.get("listing_open", True)),
         "positions_to_hire": finite_number(payload, "positions_to_hire", minimum=1,
                                              maximum=10000, required=False),
@@ -181,6 +185,9 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         raise ValueError("currency_invalid")
     if normalized["payment_rail_status"] not in {"clear", "temporarily_unavailable", "unclear"}:
         raise ValueError("payment_rail_status_invalid")
+    if normalized["submission_channel_status"] not in {
+            "available", "temporarily_unavailable", "unclear"}:
+        raise ValueError("submission_channel_status_invalid")
     return normalized
 
 
@@ -231,7 +238,8 @@ def score(opportunity):
 def action_mode(opportunity):
     if (opportunity["platform_allows_automation"] and opportunity["authenticated_channel"]
             and opportunity["submission_authorized"] and not opportunity["requires_owner_identity"]
-            and opportunity["payment_rail_status"] == "clear"):
+            and opportunity["payment_rail_status"] == "clear"
+            and opportunity["submission_channel_status"] == "available"):
         return "autonomous_submit"
     return "prepare_only"
 
