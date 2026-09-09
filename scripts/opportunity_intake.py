@@ -81,6 +81,14 @@ def finite_number(payload, field, *, minimum=0, maximum=None, required=True):
     return value
 
 
+def boolean_flag(payload, field, *, default=False):
+    """Accept only explicit JSON booleans for policy-sensitive evidence."""
+    value = payload.get(field, default)
+    if not isinstance(value, bool):
+        raise ValueError(f"{field}_invalid")
+    return value
+
+
 def capability_set(payload, field):
     """Normalize explicit execution capabilities without guessing from free text."""
     values = payload.get(field, [])
@@ -157,6 +165,11 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
     time_to_cash_days = finite_number(payload, "time_to_cash_days", minimum=0, maximum=3650)
     required_capabilities = capability_set(payload, "required_execution_capabilities")
     available_capabilities = capability_set(payload, "available_execution_capabilities")
+    requires_credential_access = boolean_flag(payload, "requires_credential_access")
+    credential_access_method = str(
+        payload.get("credential_access_method") or
+        ("unclear" if requires_credential_access else "none")
+    ).strip().lower()
     normalized = {
         "id": stable_id(source, external_id, url),
         "source": source,
@@ -198,6 +211,11 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         "hires_for_listing": finite_number(payload, "hires_for_listing", minimum=0,
                                              maximum=10000, required=False),
         "preferred_qualifications_met": bool(payload.get("preferred_qualifications_met", True)),
+        "requires_personal_data_collection": boolean_flag(
+            payload, "requires_personal_data_collection"),
+        "personal_data_authorized": boolean_flag(payload, "personal_data_authorized"),
+        "requires_credential_access": requires_credential_access,
+        "credential_access_method": credential_access_method,
         "required_execution_capabilities": required_capabilities,
         "available_execution_capabilities": available_capabilities,
         "missing_execution_capabilities": sorted(
@@ -210,6 +228,9 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
     if normalized["submission_channel_status"] not in {
             "available", "temporarily_unavailable", "unclear"}:
         raise ValueError("submission_channel_status_invalid")
+    if normalized["credential_access_method"] not in {
+            "none", "provider_managed", "tokenized", "raw", "unclear"}:
+        raise ValueError("credential_access_method_invalid")
     return normalized
 
 
@@ -224,6 +245,13 @@ def screen(opportunity):
         return False, "preferred_qualifications_unmet"
     if opportunity["missing_execution_capabilities"]:
         return False, "execution_capabilities_unmet"
+    if (opportunity["requires_personal_data_collection"]
+            and not opportunity["personal_data_authorized"]):
+        return False, "personal_data_authority_unverified"
+    if (opportunity["requires_credential_access"]
+            and opportunity["credential_access_method"] not in {
+                "provider_managed", "tokenized"}):
+        return False, "credential_access_unsafe"
     if opportunity["prohibited_category"] in PROHIBITED_CATEGORIES:
         return False, "prohibited_category"
     if opportunity["scam_signals"]:
