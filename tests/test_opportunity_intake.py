@@ -131,6 +131,59 @@ class OpportunityIntakeTests(unittest.TestCase):
         accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
         self.assertEqual(accepted["action_mode"], "prepare_only")
 
+    def test_paid_submission_requires_specific_spend_authorization(self):
+        item = candidate(
+            platform_allows_automation=True,
+            authenticated_channel=True,
+            submission_authorized=True,
+            application_cost_units=11,
+            application_units_balance=150,
+        )
+        accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
+        self.assertEqual(accepted["action_mode"], "prepare_only")
+        item["application_spend_authorized"] = True
+        accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
+        self.assertEqual(accepted["action_mode"], "autonomous_submit")
+
+    def test_rejects_paid_application_without_verified_sufficient_balance(self):
+        values = [
+            candidate(external_id="unknown-balance", application_cost_units=11),
+            candidate(external_id="insufficient-balance", application_cost_units=11,
+                      application_units_balance=10),
+        ]
+        reasons = [item["reason"] for item in
+                   opportunity_intake.ingest(values, now=NOW)["rejections"]]
+        self.assertEqual(reasons, [
+            "application_balance_unverified",
+            "insufficient_application_units",
+        ])
+
+    def test_application_cost_lowers_rank_without_rejecting_funded_work(self):
+        free = candidate(external_id="free", application_cost_units=0)
+        paid = candidate(external_id="paid", application_cost_units=15,
+                         application_units_balance=150)
+        result = opportunity_intake.ingest([paid, free], now=NOW)
+        self.assertEqual([item["external_id"] for item in result["opportunities"]],
+                         ["free", "paid"])
+        self.assertLess(result["opportunities"][1]["score_components"]["application_cost"], 0)
+
+    def test_rejects_malformed_application_credit_evidence(self):
+        values = [
+            candidate(external_id="fractional-cost", application_cost_units=1.5,
+                      application_units_balance=150),
+            candidate(external_id="fractional-balance", application_cost_units=1,
+                      application_units_balance=1.5),
+            candidate(external_id="string-authorization",
+                      application_spend_authorized="yes"),
+        ]
+        reasons = [item["reason"] for item in
+                   opportunity_intake.ingest(values, now=NOW)["rejections"]]
+        self.assertEqual(reasons, [
+            "application_cost_units_invalid",
+            "application_units_balance_invalid",
+            "application_spend_authorized_invalid",
+        ])
+
     def test_submission_channel_outage_preserves_opportunity_without_autonomous_submit(self):
         item = candidate(platform_allows_automation=True, authenticated_channel=True,
                          submission_authorized=True,
