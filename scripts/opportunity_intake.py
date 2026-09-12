@@ -173,6 +173,10 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         raise ValueError("application_cost_units_invalid")
     if application_units_balance is not None and not application_units_balance.is_integer():
         raise ValueError("application_units_balance_invalid")
+    payment_rail_clear = boolean_flag(payload, "payment_rail_clear")
+    platform_allows_automation = boolean_flag(payload, "platform_allows_automation")
+    authenticated_channel = boolean_flag(payload, "authenticated_channel")
+    submission_authorized = boolean_flag(payload, "submission_authorized")
     requires_credential_access = boolean_flag(payload, "requires_credential_access")
     credential_access_method = str(
         payload.get("credential_access_method") or
@@ -199,26 +203,28 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         "recurring_value": finite_number(payload, "recurring_value", maximum=1),
         "prohibited_category": str(payload.get("prohibited_category") or "").strip().lower(),
         "scam_signals": [str(x).strip() for x in (payload.get("scam_signals") or []) if str(x).strip()],
-        "requires_deception": bool(payload.get("requires_deception", False)),
-        "requires_owner_identity": bool(payload.get("requires_owner_identity", False)),
-        "unsolicited_direct_contact": bool(payload.get("unsolicited_direct_contact", False)),
-        "suppressed": bool(payload.get("suppressed", False)),
-        "opted_out": bool(payload.get("opted_out", False)),
+        "requires_deception": boolean_flag(payload, "requires_deception"),
+        "requires_owner_identity": boolean_flag(payload, "requires_owner_identity"),
+        "unsolicited_direct_contact": boolean_flag(
+            payload, "unsolicited_direct_contact"),
+        "suppressed": boolean_flag(payload, "suppressed"),
+        "opted_out": boolean_flag(payload, "opted_out"),
         "payment_rail_status": str(payload.get("payment_rail_status") or
-                                   ("clear" if payload.get("payment_rail_clear", False) else "unclear")).strip().lower(),
-        "platform_allows_automation": bool(payload.get("platform_allows_automation", False)),
-        "authenticated_channel": bool(payload.get("authenticated_channel", False)),
-        "submission_authorized": bool(payload.get("submission_authorized", False)),
+                                   ("clear" if payment_rail_clear else "unclear")).strip().lower(),
+        "platform_allows_automation": platform_allows_automation,
+        "authenticated_channel": authenticated_channel,
+        "submission_authorized": submission_authorized,
         "submission_channel_status": str(
             payload.get("submission_channel_status") or
-            ("available" if payload.get("authenticated_channel", False) else "unclear")
+            ("available" if authenticated_channel else "unclear")
         ).strip().lower(),
-        "listing_open": bool(payload.get("listing_open", True)),
+        "listing_open": boolean_flag(payload, "listing_open", default=True),
         "positions_to_hire": finite_number(payload, "positions_to_hire", minimum=1,
                                              maximum=10000, required=False),
         "hires_for_listing": finite_number(payload, "hires_for_listing", minimum=0,
                                              maximum=10000, required=False),
-        "preferred_qualifications_met": bool(payload.get("preferred_qualifications_met", True)),
+        "preferred_qualifications_met": boolean_flag(
+            payload, "preferred_qualifications_met", default=True),
         "application_cost_units": int(application_cost_units or 0),
         "application_units_balance": (int(application_units_balance)
                                       if application_units_balance is not None else None),
