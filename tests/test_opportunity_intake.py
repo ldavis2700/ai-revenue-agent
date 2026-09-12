@@ -632,6 +632,35 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(transition[:2], ("qualified", "unqualified"))
         self.assertTrue(transition[2].startswith("screen:oppr_"))
 
+    def test_known_expiration_retires_persisted_opportunity_without_new_observation(self):
+        expiring = candidate(
+            observed_at=(NOW - timedelta(hours=1)).isoformat(),
+            expires_at=(NOW + timedelta(minutes=1)).isoformat())
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            accepted = opportunity_intake.ingest([expiring], now=NOW)
+            opportunity_intake.persist(accepted, path, now=NOW)
+            rejected = opportunity_intake.ingest(
+                [expiring], now=NOW + timedelta(minutes=2))
+            update = opportunity_intake.persist(
+                rejected, path, now=NOW + timedelta(minutes=2))
+            connection = sqlite3.connect(path)
+            state, observed_at, stored = connection.execute(
+                "SELECT pipeline_state,observed_at,payload_json FROM opportunities"
+            ).fetchone()
+            transition = connection.execute(
+                "SELECT from_state,to_state,evidence_id FROM opportunity_transitions"
+            ).fetchone()
+            connection.close()
+        payload = json.loads(stored)
+        self.assertEqual(update["opportunities_written"], 1)
+        self.assertEqual(state, "expired")
+        self.assertEqual(observed_at, expiring["observed_at"])
+        self.assertEqual(payload["pipeline_state"], "expired")
+        self.assertEqual(payload["latest_screen_reason"], "opportunity_expired")
+        self.assertEqual(transition[:2], ("qualified", "expired"))
+        self.assertTrue(transition[2].startswith("expiry:oppr_"))
+
     def test_terminal_rejection_does_not_regress_contracted_work(self):
         newer_closed = candidate(
             observed_at=(NOW + timedelta(minutes=1)).isoformat(),
