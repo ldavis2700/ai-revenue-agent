@@ -200,6 +200,14 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         if application_balance_observed < now - MAX_APPLICATION_BALANCE_AGE:
             raise ValueError("application_balance_stale")
     payment_rail_clear = boolean_flag(payload, "payment_rail_clear")
+    payment_rail_status = str(
+        payload.get("payment_rail_status") or
+        ("clear" if payment_rail_clear else "unclear")
+    ).strip().lower()
+    if payment_rail_status not in {"clear", "temporarily_unavailable", "unclear"}:
+        raise ValueError("payment_rail_status_invalid")
+    if payment_rail_clear != (payment_rail_status == "clear"):
+        raise ValueError("payment_rail_evidence_conflict")
     platform_allows_automation = boolean_flag(payload, "platform_allows_automation")
     authenticated_channel = boolean_flag(payload, "authenticated_channel")
     submission_authorized = boolean_flag(payload, "submission_authorized")
@@ -282,8 +290,7 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
             payload, "unsolicited_direct_contact"),
         "suppressed": boolean_flag(payload, "suppressed"),
         "opted_out": boolean_flag(payload, "opted_out"),
-        "payment_rail_status": str(payload.get("payment_rail_status") or
-                                   ("clear" if payment_rail_clear else "unclear")).strip().lower(),
+        "payment_rail_status": payment_rail_status,
         "platform_allows_automation": platform_allows_automation,
         "authenticated_channel": authenticated_channel,
         "submission_authorized": submission_authorized,
@@ -331,8 +338,6 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
     }
     if not re.fullmatch(r"[A-Z]{3}", normalized["currency"]):
         raise ValueError("currency_invalid")
-    if normalized["payment_rail_status"] not in {"clear", "temporarily_unavailable", "unclear"}:
-        raise ValueError("payment_rail_status_invalid")
     if normalized["submission_channel_status"] not in {
             "available", "temporarily_unavailable", "unclear"}:
         raise ValueError("submission_channel_status_invalid")
