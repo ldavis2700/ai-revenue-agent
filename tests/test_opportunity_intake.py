@@ -601,6 +601,55 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(stale["opportunities_unchanged"], 1)
         self.assertEqual(title, "New")
 
+    def test_newer_terminal_rejection_invalidates_persisted_open_listing(self):
+        older_open = candidate(
+            observed_at=(NOW - timedelta(hours=2)).isoformat())
+        newer_closed = candidate(
+            observed_at=(NOW - timedelta(minutes=10)).isoformat(),
+            listing_open=False)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            accepted = opportunity_intake.ingest([older_open], now=NOW)
+            opportunity_intake.persist(accepted, path, now=NOW)
+            rejected = opportunity_intake.ingest([newer_closed], now=NOW)
+            update = opportunity_intake.persist(
+                rejected, path, now=NOW + timedelta(minutes=1))
+            connection = sqlite3.connect(path)
+            state, observed_at, stored = connection.execute(
+                "SELECT pipeline_state,observed_at,payload_json FROM opportunities"
+            ).fetchone()
+            transition = connection.execute(
+                "SELECT from_state,to_state,evidence_id FROM opportunity_transitions"
+            ).fetchone()
+            connection.close()
+        payload = json.loads(stored)
+        self.assertEqual(update["opportunities_written"], 1)
+        self.assertEqual(state, "unqualified")
+        self.assertEqual(observed_at, newer_closed["observed_at"])
+        self.assertEqual(payload["pipeline_state"], "unqualified")
+        self.assertEqual(payload["observed_at"], newer_closed["observed_at"])
+        self.assertEqual(payload["latest_screen_reason"], "listing_closed")
+        self.assertEqual(transition[:2], ("qualified", "unqualified"))
+        self.assertTrue(transition[2].startswith("screen:oppr_"))
+
+    def test_terminal_rejection_does_not_regress_contracted_work(self):
+        newer_closed = candidate(
+            observed_at=(NOW + timedelta(minutes=1)).isoformat(),
+            listing_open=False)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            self.advance_to_contract(path)
+            rejected = opportunity_intake.ingest(
+                [newer_closed], now=NOW + timedelta(minutes=1))
+            update = opportunity_intake.persist(
+                rejected, path, now=NOW + timedelta(minutes=2))
+            connection = sqlite3.connect(path)
+            state = connection.execute(
+                "SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(update["opportunities_written"], 0)
+        self.assertEqual(state, "contracted")
+
     def test_newer_observation_cannot_regress_an_advanced_pipeline_state(self):
         original = candidate(observed_at=(NOW - timedelta(hours=2)).isoformat())
         newer = candidate(title="Refreshed", observed_at=(NOW - timedelta(minutes=5)).isoformat())
