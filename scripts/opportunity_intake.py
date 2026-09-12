@@ -164,7 +164,7 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         if expires <= now:
             raise ValueError("opportunity_expired")
 
-    payout_cents = finite_number(payload, "payout_cents", minimum=0)
+    payout_cents = finite_number(payload, "payout_cents", minimum=1)
     if not payout_cents.is_integer():
         raise ValueError("payout_cents_invalid")
     effort_hours = finite_number(payload, "effort_hours", minimum=0.25, maximum=10000)
