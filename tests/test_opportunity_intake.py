@@ -131,6 +131,25 @@ class OpportunityIntakeTests(unittest.TestCase):
         accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
         self.assertEqual(accepted["action_mode"], "prepare_only")
 
+    def test_rejects_string_authorization_and_listing_flags(self):
+        fields = [
+            "payment_rail_clear",
+            "platform_allows_automation",
+            "authenticated_channel",
+            "submission_authorized",
+            "requires_deception",
+            "requires_owner_identity",
+            "unsolicited_direct_contact",
+            "suppressed",
+            "opted_out",
+            "listing_open",
+            "preferred_qualifications_met",
+        ]
+        values = [candidate(external_id=field, **{field: "false"}) for field in fields]
+        reasons = [item["reason"] for item in
+                   opportunity_intake.ingest(values, now=NOW)["rejections"]]
+        self.assertEqual(reasons, [f"{field}_invalid" for field in fields])
+
     def test_paid_submission_requires_specific_spend_authorization(self):
         item = candidate(
             platform_allows_automation=True,
