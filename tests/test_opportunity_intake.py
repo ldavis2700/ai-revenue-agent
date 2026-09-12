@@ -393,6 +393,14 @@ class OpportunityIntakeTests(unittest.TestCase):
             "hires_for_listing_invalid",
         ])
 
+    def test_rejects_zero_pay_opportunity(self):
+        result = opportunity_intake.ingest([
+            candidate(external_id="unpaid", payout_cents=0),
+        ], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(result["rejections"][0]["reason"],
+                         "payout_cents_invalid")
+
     def test_hard_rejects_risk_and_policy_failures(self):
         values = [
             candidate(external_id="fraud", prohibited_category="fraud"),
