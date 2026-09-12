@@ -28,7 +28,7 @@ PROHIBITED_CATEGORIES = {
     "regulated_financial_advice", "spam", "surveillance",
 }
 PIPELINE_TRANSITIONS = {
-    "payment_rail_blocked": {"qualified"},
+    "payment_rail_blocked": {"qualified", "unqualified"},
     "qualified": {"proposal_ready", "unqualified", "expired"},
     "proposal_ready": {"submitted", "unqualified", "expired"},
     "submitted": {"response_received", "unqualified", "expired"},
@@ -38,6 +38,13 @@ PIPELINE_TRANSITIONS = {
     "qa_passed": {"delivered"},
     "delivered": {"invoiced"},
     "invoiced": {"collected"},
+}
+TERMINAL_SCREEN_REASONS = {
+    "listing_closed", "listing_filled", "preferred_qualifications_unmet",
+    "execution_capabilities_unmet", "personal_data_authority_unverified",
+    "credential_access_unsafe", "prohibited_category", "scam_signals_present",
+    "deception_required", "unsolicited_contact_disallowed",
+    "suppressed_or_opted_out", "execution_confidence_too_low",
 }
 PIPELINE_EVIDENCE_PREFIXES = {
     "qualified": ("payment_rail:",),
@@ -435,12 +442,15 @@ def ingest(payloads, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
                     and previous["item"]["observed_at"] >= item["observed_at"]):
                 rejection_by_index[index] = {
                     "index": index, "reason": "duplicate_older_or_equal",
-                    "id": item["id"], "payload_hash": record["payload_hash"]}
+                    "id": item["id"], "observed_at": item["observed_at"],
+                    "payload_hash": record["payload_hash"]}
                 continue
             if previous:
                 rejection_by_index[previous["index"]] = {
                     "index": previous["index"], "reason": "duplicate_superseded",
-                    "id": item["id"], "payload_hash": previous["payload_hash"]}
+                    "id": item["id"],
+                    "observed_at": previous["item"]["observed_at"],
+                    "payload_hash": previous["payload_hash"]}
                 records.remove(previous)
             by_id[item["id"]] = record
             records.append(record)
@@ -453,6 +463,7 @@ def ingest(payloads, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         if not eligible:
             rejection_by_index[record["index"]] = {
                 "index": record["index"], "reason": reason, "id": item["id"],
+                "observed_at": item["observed_at"],
                 "payload_hash": record["payload_hash"]}
             continue
         try:
@@ -1619,6 +1630,35 @@ def persist(result, path=DEFAULT_DB_PATH, *, now=None):
                     VALUES (?,?,?,?,?,?,?)""", (
                         rid, rejected.get("id"), "rejected", rejected["reason"],
                         rejected["index"], rejected["payload_hash"], now)).rowcount
+                if (rejected.get("id")
+                        and rejected.get("observed_at")
+                        and rejected["reason"] in TERMINAL_SCREEN_REASONS):
+                    row = connection.execute(
+                        "SELECT pipeline_state,observed_at,payload_json "
+                        "FROM opportunities WHERE id=?", (rejected["id"],)).fetchone()
+                    if (row and rejected["observed_at"] > row[1]
+                            and "unqualified" in PIPELINE_TRANSITIONS.get(row[0], set())):
+                        payload = json.loads(row[2])
+                        payload["pipeline_state"] = "unqualified"
+                        payload["observed_at"] = rejected["observed_at"]
+                        payload["latest_screen_reason"] = rejected["reason"]
+                        evidence_id = "screen:" + rid
+                        tid = transition_id(
+                            rejected["id"], row[0], "unqualified", evidence_id)
+                        connection.execute(
+                            "UPDATE opportunities SET pipeline_state='unqualified', "
+                            "observed_at=?,payload_json=?,updated_at=? WHERE id=?", (
+                                rejected["observed_at"],
+                                json.dumps(payload, sort_keys=True,
+                                           separators=(",", ":")),
+                                now, rejected["id"]))
+                        connection.execute("""INSERT OR IGNORE INTO opportunity_transitions
+                            (transition_id,opportunity_id,from_state,to_state,evidence_id,
+                             evidence_hash,recorded_at) VALUES (?,?,?,?,?,?,?)""", (
+                                tid, rejected["id"], row[0], "unqualified",
+                                evidence_id,
+                                hashlib.sha256(evidence_id.encode()).hexdigest(), now))
+                        written += 1
         return {"opportunities_written": written, "opportunities_unchanged": unchanged,
                 "receipts_written": receipt_writes}
     finally:
