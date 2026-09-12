@@ -165,6 +165,14 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
     time_to_cash_days = finite_number(payload, "time_to_cash_days", minimum=0, maximum=3650)
     required_capabilities = capability_set(payload, "required_execution_capabilities")
     available_capabilities = capability_set(payload, "available_execution_capabilities")
+    application_cost_units = finite_number(
+        payload, "application_cost_units", minimum=0, maximum=10000, required=False)
+    application_units_balance = finite_number(
+        payload, "application_units_balance", minimum=0, maximum=1000000, required=False)
+    if application_cost_units is not None and not application_cost_units.is_integer():
+        raise ValueError("application_cost_units_invalid")
+    if application_units_balance is not None and not application_units_balance.is_integer():
+        raise ValueError("application_units_balance_invalid")
     requires_credential_access = boolean_flag(payload, "requires_credential_access")
     credential_access_method = str(
         payload.get("credential_access_method") or
@@ -211,6 +219,11 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         "hires_for_listing": finite_number(payload, "hires_for_listing", minimum=0,
                                              maximum=10000, required=False),
         "preferred_qualifications_met": bool(payload.get("preferred_qualifications_met", True)),
+        "application_cost_units": int(application_cost_units or 0),
+        "application_units_balance": (int(application_units_balance)
+                                      if application_units_balance is not None else None),
+        "application_spend_authorized": boolean_flag(
+            payload, "application_spend_authorized"),
         "requires_personal_data_collection": boolean_flag(
             payload, "requires_personal_data_collection"),
         "personal_data_authorized": boolean_flag(payload, "personal_data_authorized"),
@@ -243,6 +256,13 @@ def screen(opportunity):
         return False, "listing_filled"
     if not opportunity["preferred_qualifications_met"]:
         return False, "preferred_qualifications_unmet"
+    if (opportunity["application_cost_units"] > 0
+            and opportunity["application_units_balance"] is None):
+        return False, "application_balance_unverified"
+    if (opportunity["application_units_balance"] is not None
+            and opportunity["application_cost_units"]
+            > opportunity["application_units_balance"]):
+        return False, "insufficient_application_units"
     if opportunity["missing_execution_capabilities"]:
         return False, "execution_capabilities_unmet"
     if (opportunity["requires_personal_data_collection"]
@@ -283,6 +303,9 @@ def score(opportunity):
         "time_to_cash": 15 * speed_score,
         "payment_safety": 10 * (1 - opportunity["payment_risk"]),
         "reuse_and_recurring": 5 * opportunity["reuse_value"] + 5 * opportunity["recurring_value"],
+        "application_cost": -10 * min(
+            opportunity["application_cost_units"] /
+            max(opportunity["application_units_balance"] or 1, 1), 1),
     }
     return round(sum(components.values()), 2), {key: round(value, 2) for key, value in components.items()}
 
@@ -290,6 +313,8 @@ def score(opportunity):
 def action_mode(opportunity):
     if (opportunity["platform_allows_automation"] and opportunity["authenticated_channel"]
             and opportunity["submission_authorized"] and not opportunity["requires_owner_identity"]
+            and (opportunity["application_cost_units"] == 0
+                 or opportunity["application_spend_authorized"])
             and opportunity["payment_rail_status"] == "clear"
             and opportunity["submission_channel_status"] == "available"):
         return "autonomous_submit"
