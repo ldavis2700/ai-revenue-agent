@@ -1077,12 +1077,14 @@ def start_execution(path, opportunity_id, contract_receipt_id, plan, *, now=None
             if row is None:
                 raise ValueError("opportunity_not_found")
             contract = connection.execute(
-                "SELECT opportunity_id FROM contract_receipts WHERE receipt_id=?",
+                "SELECT opportunity_id,contracted_at FROM contract_receipts WHERE receipt_id=?",
                 (contract_receipt_id,)).fetchone()
             if contract is None:
                 raise ValueError("contract_receipt_not_found")
             if contract[0] != opportunity_id:
                 raise ValueError("contract_opportunity_mismatch")
+            if started_at < parse_time(contract[1], "contract_contracted_at"):
+                raise ValueError("execution_before_contract")
             existing = connection.execute(
                 "SELECT 1 FROM execution_plans WHERE plan_id=?", (plan_id,)).fetchone()
             if row[0] == "executing" and existing:
@@ -1163,12 +1165,14 @@ def pass_qa(path, opportunity_id, execution_plan_id, report, *, now=None):
             if row is None:
                 raise ValueError("opportunity_not_found")
             plan = connection.execute(
-                "SELECT opportunity_id FROM execution_plans WHERE plan_id=?",
+                "SELECT opportunity_id,started_at FROM execution_plans WHERE plan_id=?",
                 (execution_plan_id,)).fetchone()
             if plan is None:
                 raise ValueError("execution_plan_not_found")
             if plan[0] != opportunity_id:
                 raise ValueError("execution_plan_opportunity_mismatch")
+            if completed_at < parse_time(plan[1], "execution_started_at"):
+                raise ValueError("qa_before_execution")
             existing = connection.execute(
                 "SELECT 1 FROM qa_reports WHERE report_id=?", (report_id,)).fetchone()
             if row[0] == "qa_passed" and existing:
