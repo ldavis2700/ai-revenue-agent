@@ -43,6 +43,17 @@ def submission_authorization(external_id="job-123", authorized_at=NOW):
     }
 
 
+def spend_authorization(external_id="job-123", units=11, authorized_at=NOW):
+    return {
+        "application_spend_authorization_opportunity_id": (
+            opportunity_intake.stable_id(
+                "permitted-marketplace", external_id,
+                "https://example.com/jobs/123")),
+        "application_spend_authorized_units": units,
+        "application_spend_authorized_at": authorized_at.isoformat(),
+    }
+
+
 class OpportunityIntakeTests(unittest.TestCase):
     def proposal(self, **overrides):
         value = {
@@ -172,8 +183,52 @@ class OpportunityIntakeTests(unittest.TestCase):
         accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
         self.assertEqual(accepted["action_mode"], "prepare_only")
         item["application_spend_authorized"] = True
+        item.update(spend_authorization())
         accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
         self.assertEqual(accepted["action_mode"], "autonomous_submit")
+
+    def test_application_spend_authorization_is_scoped_and_fresh(self):
+        base = {
+            "application_cost_units": 11,
+            "application_units_balance": 150,
+            "application_balance_observed_at": NOW.isoformat(),
+            "application_spend_authorized": True,
+        }
+        values = [
+            candidate(external_id="missing-spend-scope", **base),
+            candidate(
+                external_id="job-123",
+                **base,
+                **dict(spend_authorization(),
+                       application_spend_authorization_opportunity_id="opp_wrong"),
+            ),
+            candidate(
+                external_id="job-123",
+                **base,
+                **spend_authorization(units=12),
+            ),
+            candidate(
+                external_id="job-123",
+                **base,
+                **spend_authorization(
+                    authorized_at=NOW - timedelta(minutes=31)),
+            ),
+            candidate(
+                external_id="job-123",
+                **base,
+                **spend_authorization(
+                    authorized_at=NOW + timedelta(minutes=6)),
+            ),
+        ]
+        reasons = [item["reason"] for item in
+                   opportunity_intake.ingest(values, now=NOW)["rejections"]]
+        self.assertEqual(reasons, [
+            "application_spend_authorization_opportunity_id_required",
+            "application_spend_authorization_opportunity_mismatch",
+            "application_spend_authorized_units_mismatch",
+            "application_spend_authorization_stale",
+            "application_spend_authorized_at_future",
+        ])
 
     def test_submission_authorization_is_fresh_and_opportunity_specific(self):
         values = [
