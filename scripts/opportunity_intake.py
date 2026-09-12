@@ -21,6 +21,7 @@ DEFAULT_MAX_AGE_DAYS = 30
 DEFAULT_DB_PATH = "/files/data/revenue_agent.db"
 MAX_FUTURE_SKEW = timedelta(minutes=5)
 MAX_APPLICATION_BALANCE_AGE = timedelta(minutes=15)
+MAX_SUBMISSION_AUTHORIZATION_AGE = timedelta(minutes=30)
 PROHIBITED_CATEGORIES = {
     "adult", "credential_theft", "deceptive_reviews", "fraud", "malware",
     "regulated_financial_advice", "spam", "surveillance",
@@ -149,6 +150,7 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         raise ValueError("source_required")
     if not external_id and not url:
         raise ValueError("external_id_or_url_required")
+    opportunity_id = stable_id(source, external_id, url)
 
     observed = parse_time(payload.get("observed_at"), "observed_at")
     if observed > now + MAX_FUTURE_SKEW:
@@ -200,13 +202,29 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
     platform_allows_automation = boolean_flag(payload, "platform_allows_automation")
     authenticated_channel = boolean_flag(payload, "authenticated_channel")
     submission_authorized = boolean_flag(payload, "submission_authorized")
+    submission_authorization_id = payload.get(
+        "submission_authorization_opportunity_id")
+    submission_authorized_at = None
+    if submission_authorized:
+        if (not isinstance(submission_authorization_id, str)
+                or not submission_authorization_id.strip()):
+            raise ValueError("submission_authorization_opportunity_id_required")
+        submission_authorization_id = submission_authorization_id.strip()
+        if submission_authorization_id != opportunity_id:
+            raise ValueError("submission_authorization_opportunity_mismatch")
+        submission_authorized_at = parse_time(
+            payload.get("submission_authorized_at"), "submission_authorized_at")
+        if submission_authorized_at > now + MAX_FUTURE_SKEW:
+            raise ValueError("submission_authorized_at_future")
+        if submission_authorized_at < now - MAX_SUBMISSION_AUTHORIZATION_AGE:
+            raise ValueError("submission_authorization_stale")
     requires_credential_access = boolean_flag(payload, "requires_credential_access")
     credential_access_method = str(
         payload.get("credential_access_method") or
         ("unclear" if requires_credential_access else "none")
     ).strip().lower()
     normalized = {
-        "id": stable_id(source, external_id, url),
+        "id": opportunity_id,
         "source": source,
         "external_id": external_id,
         "url": url,
@@ -237,6 +255,11 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         "platform_allows_automation": platform_allows_automation,
         "authenticated_channel": authenticated_channel,
         "submission_authorized": submission_authorized,
+        "submission_authorization_opportunity_id": (
+            submission_authorization_id if submission_authorized else None),
+        "submission_authorized_at": (
+            submission_authorized_at.isoformat()
+            if submission_authorized_at else None),
         "submission_channel_status": str(
             payload.get("submission_channel_status") or
             ("available" if authenticated_channel else "unclear")
