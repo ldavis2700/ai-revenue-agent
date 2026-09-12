@@ -440,13 +440,21 @@ def ingest(payloads, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
             record = {"item": item, "index": index,
                       "payload_hash": payload_hash(payload)}
             previous = by_id.get(item["id"])
-            if (previous
-                    and previous["item"]["observed_at"] >= item["observed_at"]):
-                rejection_by_index[index] = {
-                    "index": index, "reason": "duplicate_older_or_equal",
-                    "id": item["id"], "observed_at": item["observed_at"],
-                    "payload_hash": record["payload_hash"]}
-                continue
+            if previous:
+                previous_observed = previous["item"]["observed_at"]
+                same_time = previous_observed == item["observed_at"]
+                _, previous_reason = screen(previous["item"])
+                _, current_reason = screen(item)
+                current_is_terminal = current_reason in TERMINAL_SCREEN_REASONS
+                previous_is_terminal = previous_reason in TERMINAL_SCREEN_REASONS
+                if (previous_observed > item["observed_at"]
+                        or (same_time and not (
+                            current_is_terminal and not previous_is_terminal))):
+                    rejection_by_index[index] = {
+                        "index": index, "reason": "duplicate_older_or_equal",
+                        "id": item["id"], "observed_at": item["observed_at"],
+                        "payload_hash": record["payload_hash"]}
+                    continue
             if previous:
                 rejection_by_index[previous["index"]] = {
                     "index": previous["index"], "reason": "duplicate_superseded",
@@ -1649,7 +1657,9 @@ def persist(result, path=DEFAULT_DB_PATH, *, now=None):
                         <= parse_time(now, "recorded_at"))
                     newer_observation = (
                         rejected["observed_at"] > row[1] if row else False)
-                    if (row and (newer_observation or expired_now)
+                    current_observation = (
+                        rejected["observed_at"] >= row[1] if row else False)
+                    if (row and (current_observation or expired_now)
                             and target_state in PIPELINE_TRANSITIONS.get(row[0], set())):
                         payload = json.loads(row[2])
                         payload["pipeline_state"] = target_state

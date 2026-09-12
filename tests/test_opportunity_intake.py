@@ -384,6 +384,23 @@ class OpportunityIntakeTests(unittest.TestCase):
                     {"listing_closed", "duplicate_older_or_equal"},
                 )
 
+    def test_equal_timestamp_terminal_duplicate_wins_in_any_arrival_order(self):
+        open_item = candidate()
+        closed_item = candidate(listing_open=False)
+
+        for observations in ([open_item, closed_item],
+                             [closed_item, open_item]):
+            with self.subTest(order=[item.get("listing_open", True)
+                                     for item in observations]):
+                result = opportunity_intake.ingest(observations, now=NOW)
+                self.assertEqual(result["opportunities"], [])
+                self.assertEqual(
+                    {item["reason"] for item in result["rejections"]},
+                    {"listing_closed", "duplicate_superseded"}
+                    if observations[0].get("listing_open", True) else
+                    {"listing_closed", "duplicate_older_or_equal"},
+                )
+
     def test_rejects_stale_expired_and_future_observations(self):
         values = [
             candidate(external_id="stale", observed_at=(NOW - timedelta(days=31)).isoformat()),
@@ -660,6 +677,23 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(payload["latest_screen_reason"], "opportunity_expired")
         self.assertEqual(transition[:2], ("qualified", "expired"))
         self.assertTrue(transition[2].startswith("expiry:oppr_"))
+
+    def test_equal_timestamp_terminal_rejection_invalidates_persisted_listing(self):
+        open_item = candidate()
+        closed_item = candidate(listing_open=False)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(
+                opportunity_intake.ingest([open_item], now=NOW), path, now=NOW)
+            update = opportunity_intake.persist(
+                opportunity_intake.ingest([closed_item], now=NOW), path,
+                now=NOW + timedelta(minutes=1))
+            connection = sqlite3.connect(path)
+            state = connection.execute(
+                "SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(update["opportunities_written"], 1)
+        self.assertEqual(state, "unqualified")
 
     def test_terminal_rejection_does_not_regress_contracted_work(self):
         newer_closed = candidate(
