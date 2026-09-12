@@ -856,6 +856,53 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(receipt_count, 0)
         self.assertEqual(state, "proposal_ready")
 
+    def test_pipeline_receipts_reject_out_of_order_event_times(self):
+        result = opportunity_intake.ingest([candidate()], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            proposal = opportunity_intake.prepare_proposal(
+                path, opportunity_id, self.proposal(), now=NOW)
+            with self.assertRaisesRegex(ValueError, "submission_before_proposal"):
+                opportunity_intake.record_submission(path, opportunity_id, proposal["proposal_id"], {
+                    "provider": "marketplace", "external_submission_id": "application-early",
+                    "submission_url": "https://example.com/applications/early",
+                    "submitted_at": (NOW - timedelta(seconds=1)).isoformat()}, now=NOW)
+            submitted = opportunity_intake.record_submission(
+                path, opportunity_id, proposal["proposal_id"], {
+                    "provider": "marketplace", "external_submission_id": "application-456",
+                    "submission_url": "https://example.com/applications/456",
+                    "submitted_at": NOW.isoformat()}, now=NOW)
+            with self.assertRaisesRegex(ValueError, "response_before_submission"):
+                opportunity_intake.record_response(path, opportunity_id, submitted["receipt_id"], {
+                    "provider": "marketplace", "external_message_id": "message-early",
+                    "message_url": "https://example.com/messages/early",
+                    "received_at": (NOW - timedelta(seconds=1)).isoformat()}, now=NOW)
+            replied = opportunity_intake.record_response(
+                path, opportunity_id, submitted["receipt_id"], {
+                    "provider": "marketplace", "external_message_id": "message-789",
+                    "message_url": "https://example.com/messages/789",
+                    "received_at": NOW.isoformat()}, now=NOW)
+            with self.assertRaisesRegex(ValueError, "contract_before_response"):
+                opportunity_intake.record_contract(path, opportunity_id, replied["receipt_id"], {
+                    "provider": "marketplace", "external_contract_id": "contract-early",
+                    "contract_url": "https://example.com/contracts/early",
+                    "amount_cents": 100000, "currency": "USD",
+                    "contracted_at": (NOW - timedelta(seconds=1)).isoformat(),
+                    "terms_authority": "preapproved_standard_terms",
+                    "authority_evidence_url": "https://example.com/terms/standard-v1"}, now=NOW)
+            connection = sqlite3.connect(path)
+            counts = (
+                connection.execute("SELECT COUNT(*) FROM submission_receipts").fetchone()[0],
+                connection.execute("SELECT COUNT(*) FROM response_receipts").fetchone()[0],
+                connection.execute("SELECT COUNT(*) FROM contract_receipts").fetchone()[0])
+            state = connection.execute(
+                "SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(counts, (1, 1, 0))
+        self.assertEqual(state, "response_received")
+
     def test_response_receipt_atomically_advances_and_is_idempotent(self):
         result = opportunity_intake.ingest([candidate()], now=NOW)
         opportunity_id = result["opportunities"][0]["id"]
