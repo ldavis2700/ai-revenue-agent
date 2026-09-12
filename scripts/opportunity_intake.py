@@ -28,7 +28,7 @@ PROHIBITED_CATEGORIES = {
     "regulated_financial_advice", "spam", "surveillance",
 }
 PIPELINE_TRANSITIONS = {
-    "payment_rail_blocked": {"qualified", "unqualified"},
+    "payment_rail_blocked": {"qualified", "unqualified", "expired"},
     "qualified": {"proposal_ready", "unqualified", "expired"},
     "proposal_ready": {"submitted", "unqualified", "expired"},
     "submitted": {"response_received", "unqualified", "expired"},
@@ -40,7 +40,8 @@ PIPELINE_TRANSITIONS = {
     "invoiced": {"collected"},
 }
 TERMINAL_SCREEN_REASONS = {
-    "listing_closed", "listing_filled", "preferred_qualifications_unmet",
+    "opportunity_expired", "listing_closed", "listing_filled",
+    "preferred_qualifications_unmet",
     "execution_capabilities_unmet", "personal_data_authority_unverified",
     "credential_access_unsafe", "prohibited_category", "scam_signals_present",
     "deception_required", "unsolicited_contact_disallowed",
@@ -168,8 +169,6 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
     expires = None
     if payload.get("expires_at") is not None:
         expires = parse_time(payload.get("expires_at"), "expires_at")
-        if expires <= now:
-            raise ValueError("opportunity_expired")
 
     payout_cents = finite_number(payload, "payout_cents", minimum=1)
     if not payout_cents.is_integer():
@@ -279,6 +278,7 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         "description": str(payload.get("description") or "").strip(),
         "observed_at": observed.isoformat(),
         "expires_at": expires.isoformat() if expires else None,
+        "expired": expires is not None and expires <= now,
         "payout_cents": int(payout_cents),
         "currency": str(payload.get("currency") or "USD").strip().upper(),
         "effort_hours": effort_hours,
@@ -355,6 +355,8 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
 
 
 def screen(opportunity):
+    if opportunity["expired"]:
+        return False, "opportunity_expired"
     if not opportunity["listing_open"]:
         return False, "listing_closed"
     if (opportunity["positions_to_hire"] is not None
@@ -464,6 +466,7 @@ def ingest(payloads, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
             rejection_by_index[record["index"]] = {
                 "index": record["index"], "reason": reason, "id": item["id"],
                 "observed_at": item["observed_at"],
+                "expires_at": item["expires_at"],
                 "payload_hash": record["payload_hash"]}
             continue
         try:
@@ -1636,26 +1639,39 @@ def persist(result, path=DEFAULT_DB_PATH, *, now=None):
                     row = connection.execute(
                         "SELECT pipeline_state,observed_at,payload_json "
                         "FROM opportunities WHERE id=?", (rejected["id"],)).fetchone()
-                    if (row and rejected["observed_at"] > row[1]
-                            and "unqualified" in PIPELINE_TRANSITIONS.get(row[0], set())):
+                    target_state = ("expired"
+                                    if rejected["reason"] == "opportunity_expired"
+                                    else "unqualified")
+                    expired_now = (
+                        target_state == "expired"
+                        and rejected.get("expires_at")
+                        and parse_time(rejected["expires_at"], "expires_at")
+                        <= parse_time(now, "recorded_at"))
+                    newer_observation = (
+                        rejected["observed_at"] > row[1] if row else False)
+                    if (row and (newer_observation or expired_now)
+                            and target_state in PIPELINE_TRANSITIONS.get(row[0], set())):
                         payload = json.loads(row[2])
-                        payload["pipeline_state"] = "unqualified"
-                        payload["observed_at"] = rejected["observed_at"]
+                        payload["pipeline_state"] = target_state
+                        if newer_observation:
+                            payload["observed_at"] = rejected["observed_at"]
                         payload["latest_screen_reason"] = rejected["reason"]
-                        evidence_id = "screen:" + rid
+                        evidence_id = (
+                            "expiry:" if target_state == "expired" else "screen:") + rid
                         tid = transition_id(
-                            rejected["id"], row[0], "unqualified", evidence_id)
+                            rejected["id"], row[0], target_state, evidence_id)
                         connection.execute(
-                            "UPDATE opportunities SET pipeline_state='unqualified', "
+                            "UPDATE opportunities SET pipeline_state=?, "
                             "observed_at=?,payload_json=?,updated_at=? WHERE id=?", (
-                                rejected["observed_at"],
+                                target_state,
+                                rejected["observed_at"] if newer_observation else row[1],
                                 json.dumps(payload, sort_keys=True,
                                            separators=(",", ":")),
                                 now, rejected["id"]))
                         connection.execute("""INSERT OR IGNORE INTO opportunity_transitions
                             (transition_id,opportunity_id,from_state,to_state,evidence_id,
                              evidence_hash,recorded_at) VALUES (?,?,?,?,?,?,?)""", (
-                                tid, rejected["id"], row[0], "unqualified",
+                                tid, rejected["id"], row[0], target_state,
                                 evidence_id,
                                 hashlib.sha256(evidence_id.encode()).hexdigest(), now))
                         written += 1
