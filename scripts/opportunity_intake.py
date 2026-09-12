@@ -38,6 +38,8 @@ PIPELINE_TRANSITIONS = {
     "qa_passed": {"delivered"},
     "delivered": {"invoiced"},
     "invoiced": {"collected"},
+    "collected": {"withdrawable"},
+    "withdrawable": {"received"},
 }
 TERMINAL_SCREEN_REASONS = {
     "opportunity_expired", "listing_closed", "listing_filled",
@@ -58,6 +60,8 @@ PIPELINE_EVIDENCE_PREFIXES = {
     "delivered": ("delivery:",),
     "invoiced": ("invoice:",),
     "collected": ("verified_payment:",),
+    "withdrawable": ("withdrawable_balance:",),
+    "received": ("bank_receipt:",),
     "unqualified": ("screen:",),
     "expired": ("expiry:",),
 }
@@ -662,6 +666,39 @@ def open_ledger(path):
         FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
         FOREIGN KEY(invoice_receipt_id) REFERENCES invoice_receipts(receipt_id),
         UNIQUE(provider, external_transaction_id)
+    )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS payout_availability_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        payment_receipt_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        external_balance_id TEXT NOT NULL,
+        evidence_url TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL,
+        currency TEXT NOT NULL,
+        available_at TEXT NOT NULL,
+        receipt_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(payment_receipt_id) REFERENCES payment_receipts(receipt_id),
+        UNIQUE(provider, external_balance_id)
+    )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS bank_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        payout_availability_receipt_id TEXT NOT NULL,
+        financial_institution TEXT NOT NULL,
+        external_transfer_id TEXT NOT NULL,
+        evidence_url TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL,
+        currency TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        receipt_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(payout_availability_receipt_id)
+            REFERENCES payout_availability_receipts(receipt_id),
+        UNIQUE(financial_institution, external_transfer_id)
     )""")
     return connection
 
@@ -1530,6 +1567,197 @@ def record_collected_payment(path, opportunity_id, invoice_receipt_id, payment, 
         connection.close()
 
 
+def record_withdrawable_balance(path, opportunity_id, payment_receipt_id, evidence, *, now=None):
+    """Record provider evidence that a collected payment is available to withdraw."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(payment_receipt_id, str) or not payment_receipt_id.strip():
+        raise ValueError("payment_receipt_id_required")
+    if not isinstance(evidence, dict):
+        raise ValueError("withdrawable_evidence_object_required")
+    opportunity_id = opportunity_id.strip()
+    payment_receipt_id = payment_receipt_id.strip()
+    provider = _proposal_text(evidence.get("provider"), "payout_provider", 160)
+    external_id = _proposal_text(
+        evidence.get("external_balance_id"), "external_balance_id", 500)
+    evidence_url = canonical_url(
+        _proposal_text(evidence.get("evidence_url"), "payout_evidence_url", 2000))
+    if urlsplit(evidence_url).scheme != "https":
+        raise ValueError("payout_evidence_url_https_required")
+    amount = finite_number(evidence, "amount_cents", minimum=1)
+    if not amount.is_integer():
+        raise ValueError("amount_cents_invalid")
+    amount_cents = int(amount)
+    currency = _proposal_text(evidence.get("currency"), "payout_currency", 3).upper()
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        raise ValueError("payout_currency_invalid")
+    available_at = parse_time(evidence.get("available_at"), "available_at")
+    recorded = now or utc_now()
+    if available_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("available_at_future")
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            payment = connection.execute("""SELECT opportunity_id,provider,
+                    net_amount_cents,currency,settled_at
+                FROM payment_receipts WHERE receipt_id=?""",
+                (payment_receipt_id,)).fetchone()
+            if payment is None:
+                raise ValueError("payment_receipt_not_found")
+            if payment[0] != opportunity_id:
+                raise ValueError("payout_opportunity_mismatch")
+            if payment[1].casefold() != provider.casefold():
+                raise ValueError("payout_provider_mismatch")
+            if payment[2] != amount_cents:
+                raise ValueError("payout_amount_mismatch")
+            if payment[3] != currency:
+                raise ValueError("payout_currency_mismatch")
+            if available_at < parse_time(payment[4], "payment_settled_at"):
+                raise ValueError("withdrawable_before_settlement")
+            receipt = {"opportunity_id": opportunity_id,
+                       "payment_receipt_id": payment_receipt_id,
+                       "provider": provider, "external_balance_id": external_id,
+                       "evidence_url": evidence_url, "amount_cents": amount_cents,
+                       "currency": currency, "available_at": available_at.isoformat()}
+            serialized = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            rid = "pavr_" + receipt_hash[:24]
+            evidence_id = "withdrawable_balance:" + rid
+            existing = connection.execute(
+                "SELECT 1 FROM payout_availability_receipts WHERE receipt_id=?", (rid,)
+            ).fetchone()
+            if row[0] in {"withdrawable", "received"} and existing:
+                return {"receipt_id": rid, "changed": False, "state": row[0],
+                        "amount_cents": amount_cents}
+            if row[0] != "collected":
+                raise ValueError("pipeline_state_conflict")
+            recorded_at = recorded.isoformat()
+            tid = transition_id(opportunity_id, "collected", "withdrawable", evidence_id)
+            connection.execute("""INSERT INTO payout_availability_receipts
+                (receipt_id,opportunity_id,payment_receipt_id,provider,external_balance_id,
+                 evidence_url,amount_cents,currency,available_at,receipt_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (
+                    rid, opportunity_id, payment_receipt_id, provider, external_id,
+                    evidence_url, amount_cents, currency, available_at.isoformat(),
+                    receipt_hash, recorded_at))
+            payload = json.loads(row[1])
+            payload["pipeline_state"] = "withdrawable"
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                ("withdrawable", json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                 recorded_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, "collected", "withdrawable", evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
+        return {"receipt_id": rid, "changed": True, "state": "withdrawable",
+                "amount_cents": amount_cents}
+    finally:
+        connection.close()
+
+
+def record_bank_receipt(path, opportunity_id, payout_receipt_id, evidence, *, now=None):
+    """Record proof that one withdrawable payout reached the owner's bank account."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(payout_receipt_id, str) or not payout_receipt_id.strip():
+        raise ValueError("payout_receipt_id_required")
+    if not isinstance(evidence, dict):
+        raise ValueError("bank_receipt_object_required")
+    opportunity_id = opportunity_id.strip()
+    payout_receipt_id = payout_receipt_id.strip()
+    institution = _proposal_text(
+        evidence.get("financial_institution"), "financial_institution", 160)
+    external_id = _proposal_text(
+        evidence.get("external_transfer_id"), "external_transfer_id", 500)
+    evidence_url = canonical_url(
+        _proposal_text(evidence.get("evidence_url"), "bank_evidence_url", 2000))
+    if urlsplit(evidence_url).scheme != "https":
+        raise ValueError("bank_evidence_url_https_required")
+    amount = finite_number(evidence, "amount_cents", minimum=1)
+    if not amount.is_integer():
+        raise ValueError("amount_cents_invalid")
+    amount_cents = int(amount)
+    currency = _proposal_text(evidence.get("currency"), "bank_currency", 3).upper()
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        raise ValueError("bank_currency_invalid")
+    received_at = parse_time(evidence.get("received_at"), "received_at")
+    recorded = now or utc_now()
+    if received_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("received_at_future")
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            payout = connection.execute("""SELECT opportunity_id,amount_cents,currency,
+                    available_at FROM payout_availability_receipts WHERE receipt_id=?""",
+                (payout_receipt_id,)).fetchone()
+            if payout is None:
+                raise ValueError("payout_receipt_not_found")
+            if payout[0] != opportunity_id:
+                raise ValueError("bank_receipt_opportunity_mismatch")
+            if payout[1] != amount_cents:
+                raise ValueError("bank_receipt_amount_mismatch")
+            if payout[2] != currency:
+                raise ValueError("bank_receipt_currency_mismatch")
+            if received_at < parse_time(payout[3], "payout_available_at"):
+                raise ValueError("bank_receipt_before_withdrawable")
+            receipt = {"opportunity_id": opportunity_id,
+                       "payout_availability_receipt_id": payout_receipt_id,
+                       "financial_institution": institution,
+                       "external_transfer_id": external_id,
+                       "evidence_url": evidence_url, "amount_cents": amount_cents,
+                       "currency": currency, "received_at": received_at.isoformat()}
+            serialized = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            rid = "bankr_" + receipt_hash[:24]
+            evidence_id = "bank_receipt:" + rid
+            existing = connection.execute(
+                "SELECT 1 FROM bank_receipts WHERE receipt_id=?", (rid,)).fetchone()
+            if row[0] == "received" and existing:
+                return {"receipt_id": rid, "changed": False, "state": row[0],
+                        "amount_cents": amount_cents}
+            if row[0] != "withdrawable":
+                raise ValueError("pipeline_state_conflict")
+            recorded_at = recorded.isoformat()
+            tid = transition_id(opportunity_id, "withdrawable", "received", evidence_id)
+            connection.execute("""INSERT INTO bank_receipts
+                (receipt_id,opportunity_id,payout_availability_receipt_id,
+                 financial_institution,external_transfer_id,evidence_url,amount_cents,
+                 currency,received_at,receipt_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (
+                    rid, opportunity_id, payout_receipt_id, institution, external_id,
+                    evidence_url, amount_cents, currency, received_at.isoformat(),
+                    receipt_hash, recorded_at))
+            payload = json.loads(row[1])
+            payload["pipeline_state"] = "received"
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                ("received", json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                 recorded_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, "withdrawable", "received", evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
+        return {"receipt_id": rid, "changed": True, "state": "received",
+                "amount_cents": amount_cents}
+    finally:
+        connection.close()
+
+
 def record_transition(path, opportunity_id, expected_state, to_state, evidence_id, *, now=None):
     """Record one evidence-backed, no-skip pipeline transition atomically.
 
@@ -1560,6 +1788,10 @@ def record_transition(path, opportunity_id, expected_state, to_state, evidence_i
         raise ValueError("invoice_receipt_required")
     if to_state == "collected":
         raise ValueError("payment_receipt_required")
+    if to_state == "withdrawable":
+        raise ValueError("withdrawable_balance_receipt_required")
+    if to_state == "received":
+        raise ValueError("bank_receipt_required")
     if not evidence_id.startswith(PIPELINE_EVIDENCE_PREFIXES[to_state]):
         raise ValueError("transition_evidence_invalid")
     recorded_at = (now or utc_now()).isoformat()
