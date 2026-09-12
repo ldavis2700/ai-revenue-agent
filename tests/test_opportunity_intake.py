@@ -341,6 +341,20 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(result["rejections"][0]["reason"],
                          "submission_channel_status_invalid")
 
+    def test_rejects_conflicting_payment_rail_evidence(self):
+        values = [
+            candidate(external_id="false-clear", payment_rail_clear=False,
+                      payment_rail_status="clear"),
+            candidate(external_id="true-unavailable", payment_rail_clear=True,
+                      payment_rail_status="temporarily_unavailable"),
+        ]
+        reasons = [item["reason"] for item in
+                   opportunity_intake.ingest(values, now=NOW)["rejections"]]
+        self.assertEqual(reasons, [
+            "payment_rail_evidence_conflict",
+            "payment_rail_evidence_conflict",
+        ])
+
     def test_deduplicates_and_keeps_newest_observation(self):
         older = candidate(title="Older", url="https://example.com/jobs/123?old=true",
                           observed_at=(NOW - timedelta(hours=2)).isoformat())
