@@ -161,6 +161,8 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
             raise ValueError("opportunity_expired")
 
     payout_cents = finite_number(payload, "payout_cents", minimum=0)
+    if not payout_cents.is_integer():
+        raise ValueError("payout_cents_invalid")
     effort_hours = finite_number(payload, "effort_hours", minimum=0.25, maximum=10000)
     time_to_cash_days = finite_number(payload, "time_to_cash_days", minimum=0, maximum=3650)
     required_capabilities = capability_set(payload, "required_execution_capabilities")
@@ -169,10 +171,18 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         payload, "application_cost_units", minimum=0, maximum=10000, required=False)
     application_units_balance = finite_number(
         payload, "application_units_balance", minimum=0, maximum=1000000, required=False)
+    positions_to_hire = finite_number(
+        payload, "positions_to_hire", minimum=1, maximum=10000, required=False)
+    hires_for_listing = finite_number(
+        payload, "hires_for_listing", minimum=0, maximum=10000, required=False)
     if application_cost_units is not None and not application_cost_units.is_integer():
         raise ValueError("application_cost_units_invalid")
     if application_units_balance is not None and not application_units_balance.is_integer():
         raise ValueError("application_units_balance_invalid")
+    if positions_to_hire is not None and not positions_to_hire.is_integer():
+        raise ValueError("positions_to_hire_invalid")
+    if hires_for_listing is not None and not hires_for_listing.is_integer():
+        raise ValueError("hires_for_listing_invalid")
     payment_rail_clear = boolean_flag(payload, "payment_rail_clear")
     platform_allows_automation = boolean_flag(payload, "platform_allows_automation")
     authenticated_channel = boolean_flag(payload, "authenticated_channel")
@@ -219,10 +229,10 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
             ("available" if authenticated_channel else "unclear")
         ).strip().lower(),
         "listing_open": boolean_flag(payload, "listing_open", default=True),
-        "positions_to_hire": finite_number(payload, "positions_to_hire", minimum=1,
-                                             maximum=10000, required=False),
-        "hires_for_listing": finite_number(payload, "hires_for_listing", minimum=0,
-                                             maximum=10000, required=False),
+        "positions_to_hire": (int(positions_to_hire)
+                              if positions_to_hire is not None else None),
+        "hires_for_listing": (int(hires_for_listing)
+                              if hires_for_listing is not None else None),
         "preferred_qualifications_met": boolean_flag(
             payload, "preferred_qualifications_met", default=True),
         "application_cost_units": int(application_cost_units or 0),
