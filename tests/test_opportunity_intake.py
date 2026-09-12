@@ -1178,7 +1178,9 @@ class OpportunityIntakeTests(unittest.TestCase):
                         "acceptance_criteria": "Tests pass.",
                         "due_at": NOW.isoformat()}]), "deliverable_due_at_invalid"),
                     (dict(valid, started_at=(NOW + timedelta(minutes=6)).isoformat()),
-                     "started_at_future")):
+                     "started_at_future"),
+                    (dict(valid, started_at=(NOW - timedelta(seconds=1)).isoformat()),
+                     "execution_before_contract")):
                 with self.assertRaisesRegex(ValueError, reason):
                     opportunity_intake.start_execution(
                         path, opportunity_id, contract_id, plan, now=NOW)
@@ -1255,7 +1257,9 @@ class OpportunityIntakeTests(unittest.TestCase):
                      "qa_test_not_passed"),
                     (dict(valid, tests=[{"name": "Acceptance suite", "status": "passed",
                                         "evidence_url": "http://example.com/runs/123"}]),
-                     "qa_evidence_url_https_required")):
+                     "qa_evidence_url_https_required"),
+                    (dict(valid, completed_at=(NOW - timedelta(seconds=1)).isoformat()),
+                     "qa_before_execution")):
                 with self.assertRaisesRegex(ValueError, reason):
                     opportunity_intake.pass_qa(path, opportunity_id, plan_id, report, now=NOW)
             connection = sqlite3.connect(path)
