@@ -244,6 +244,20 @@ class OpportunityIntakeTests(unittest.TestCase):
         reasons = [x["reason"] for x in opportunity_intake.ingest(values, now=NOW)["rejections"]]
         self.assertEqual(reasons, ["payout_cents_invalid", "win_probability_invalid"])
 
+    def test_rejects_fractional_money_and_listing_counts(self):
+        values = [
+            candidate(external_id="fractional-payout", payout_cents=100000.5),
+            candidate(external_id="fractional-positions", positions_to_hire=1.5),
+            candidate(external_id="fractional-hires", hires_for_listing=0.5),
+        ]
+        reasons = [item["reason"] for item in
+                   opportunity_intake.ingest(values, now=NOW)["rejections"]]
+        self.assertEqual(reasons, [
+            "payout_cents_invalid",
+            "positions_to_hire_invalid",
+            "hires_for_listing_invalid",
+        ])
+
     def test_hard_rejects_risk_and_policy_failures(self):
         values = [
             candidate(external_id="fraud", prohibited_category="fraud"),
