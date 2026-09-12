@@ -797,12 +797,14 @@ def record_submission(path, opportunity_id, proposal_id, submission, *, now=None
             if row is None:
                 raise ValueError("opportunity_not_found")
             proposal = connection.execute(
-                "SELECT opportunity_id FROM proposal_artifacts WHERE proposal_id=?",
+                "SELECT opportunity_id,created_at FROM proposal_artifacts WHERE proposal_id=?",
                 (proposal_id,)).fetchone()
             if proposal is None:
                 raise ValueError("proposal_not_found")
             if proposal[0] != opportunity_id:
                 raise ValueError("proposal_opportunity_mismatch")
+            if submitted_at < parse_time(proposal[1], "proposal_created_at"):
+                raise ValueError("submission_before_proposal")
             existing = connection.execute(
                 "SELECT 1 FROM submission_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
             if row[0] == "submitted" and existing:
@@ -872,7 +874,7 @@ def record_response(path, opportunity_id, submission_receipt_id, response, *, no
             if row is None:
                 raise ValueError("opportunity_not_found")
             submission = connection.execute(
-                "SELECT opportunity_id,provider FROM submission_receipts WHERE receipt_id=?",
+                "SELECT opportunity_id,provider,submitted_at FROM submission_receipts WHERE receipt_id=?",
                 (submission_receipt_id,)).fetchone()
             if submission is None:
                 raise ValueError("submission_receipt_not_found")
@@ -880,6 +882,8 @@ def record_response(path, opportunity_id, submission_receipt_id, response, *, no
                 raise ValueError("submission_opportunity_mismatch")
             if submission[1].casefold() != provider.casefold():
                 raise ValueError("response_provider_mismatch")
+            if received_at < parse_time(submission[2], "submission_submitted_at"):
+                raise ValueError("response_before_submission")
             existing = connection.execute(
                 "SELECT 1 FROM response_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
             if row[0] == "response_received" and existing:
@@ -953,7 +957,8 @@ def record_contract(path, opportunity_id, response_receipt_id, contract, *, now=
                 (opportunity_id,)).fetchone()
             if row is None:
                 raise ValueError("opportunity_not_found")
-            response = connection.execute("""SELECT rr.opportunity_id,rr.provider,sr.proposal_id
+            response = connection.execute("""SELECT rr.opportunity_id,rr.provider,sr.proposal_id,
+                rr.received_at
                 FROM response_receipts rr JOIN submission_receipts sr
                 ON sr.receipt_id=rr.submission_receipt_id WHERE rr.receipt_id=?""",
                 (response_receipt_id,)).fetchone()
@@ -963,6 +968,8 @@ def record_contract(path, opportunity_id, response_receipt_id, contract, *, now=
                 raise ValueError("response_opportunity_mismatch")
             if response[1].casefold() != provider.casefold():
                 raise ValueError("contract_provider_mismatch")
+            if contracted_at < parse_time(response[3], "response_received_at"):
+                raise ValueError("contract_before_response")
             proposal_id = response[2]
             proposal = json.loads(connection.execute(
                 "SELECT artifact_json FROM proposal_artifacts WHERE proposal_id=?",
