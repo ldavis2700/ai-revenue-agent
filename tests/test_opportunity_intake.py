@@ -35,6 +35,14 @@ def candidate(**overrides):
     return value
 
 
+def submission_authorization(external_id="job-123", authorized_at=NOW):
+    return {
+        "submission_authorization_opportunity_id": opportunity_intake.stable_id(
+            "permitted-marketplace", external_id, "https://example.com/jobs/123"),
+        "submission_authorized_at": authorized_at.isoformat(),
+    }
+
+
 class OpportunityIntakeTests(unittest.TestCase):
     def proposal(self, **overrides):
         value = {
@@ -124,7 +132,8 @@ class OpportunityIntakeTests(unittest.TestCase):
 
     def test_autonomous_submit_requires_all_authorization_signals(self):
         item = candidate(platform_allows_automation=True, authenticated_channel=True,
-                         submission_authorized=True)
+                         submission_authorized=True,
+                         **submission_authorization())
         accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
         self.assertEqual(accepted["action_mode"], "autonomous_submit")
         item["requires_owner_identity"] = True
@@ -155,6 +164,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             platform_allows_automation=True,
             authenticated_channel=True,
             submission_authorized=True,
+            **submission_authorization(),
             application_cost_units=11,
             application_units_balance=150,
             application_balance_observed_at=NOW.isoformat(),
@@ -164,6 +174,37 @@ class OpportunityIntakeTests(unittest.TestCase):
         item["application_spend_authorized"] = True
         accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
         self.assertEqual(accepted["action_mode"], "autonomous_submit")
+
+    def test_submission_authorization_is_fresh_and_opportunity_specific(self):
+        values = [
+            candidate(external_id="missing-authorization", submission_authorized=True),
+            candidate(
+                external_id="job-123",
+                submission_authorized=True,
+                submission_authorization_opportunity_id="opp_wrong",
+                submission_authorized_at=NOW.isoformat(),
+            ),
+            candidate(
+                external_id="job-123",
+                submission_authorized=True,
+                **submission_authorization(
+                    authorized_at=NOW - timedelta(minutes=31)),
+            ),
+            candidate(
+                external_id="job-123",
+                submission_authorized=True,
+                **submission_authorization(
+                    authorized_at=NOW + timedelta(minutes=6)),
+            ),
+        ]
+        reasons = [item["reason"] for item in
+                   opportunity_intake.ingest(values, now=NOW)["rejections"]]
+        self.assertEqual(reasons, [
+            "submission_authorization_opportunity_id_required",
+            "submission_authorization_opportunity_mismatch",
+            "submission_authorization_stale",
+            "submission_authorized_at_future",
+        ])
 
     def test_rejects_paid_application_without_verified_sufficient_balance(self):
         values = [
@@ -230,6 +271,7 @@ class OpportunityIntakeTests(unittest.TestCase):
     def test_submission_channel_outage_preserves_opportunity_without_autonomous_submit(self):
         item = candidate(platform_allows_automation=True, authenticated_channel=True,
                          submission_authorized=True,
+                         **submission_authorization(),
                          submission_channel_status="temporarily_unavailable")
         accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
         self.assertEqual(accepted["pipeline_state"], "qualified")
@@ -415,7 +457,8 @@ class OpportunityIntakeTests(unittest.TestCase):
     def test_temporary_payment_outage_preserves_pipeline_without_submission(self):
         item = candidate(payment_rail_clear=False, payment_rail_status="temporarily_unavailable",
                          platform_allows_automation=True, authenticated_channel=True,
-                         submission_authorized=True)
+                         submission_authorized=True,
+                         **submission_authorization())
         accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
         self.assertEqual(accepted["pipeline_state"], "payment_rail_blocked")
         self.assertEqual(accepted["action_mode"], "prepare_only")
