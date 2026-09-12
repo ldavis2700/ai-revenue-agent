@@ -22,6 +22,7 @@ DEFAULT_DB_PATH = "/files/data/revenue_agent.db"
 MAX_FUTURE_SKEW = timedelta(minutes=5)
 MAX_APPLICATION_BALANCE_AGE = timedelta(minutes=15)
 MAX_SUBMISSION_AUTHORIZATION_AGE = timedelta(minutes=30)
+MAX_APPLICATION_SPEND_AUTHORIZATION_AGE = timedelta(minutes=30)
 PROHIBITED_CATEGORIES = {
     "adult", "credential_theft", "deceptive_reviews", "fraud", "malware",
     "regulated_financial_advice", "spam", "surveillance",
@@ -218,6 +219,37 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
             raise ValueError("submission_authorized_at_future")
         if submission_authorized_at < now - MAX_SUBMISSION_AUTHORIZATION_AGE:
             raise ValueError("submission_authorization_stale")
+    application_spend_authorized = boolean_flag(
+        payload, "application_spend_authorized")
+    application_spend_authorization_id = payload.get(
+        "application_spend_authorization_opportunity_id")
+    application_spend_authorized_units = None
+    application_spend_authorized_at = None
+    if application_spend_authorized:
+        if not application_cost_units:
+            raise ValueError("application_spend_authorization_unnecessary")
+        if (not isinstance(application_spend_authorization_id, str)
+                or not application_spend_authorization_id.strip()):
+            raise ValueError(
+                "application_spend_authorization_opportunity_id_required")
+        application_spend_authorization_id = (
+            application_spend_authorization_id.strip())
+        if application_spend_authorization_id != opportunity_id:
+            raise ValueError("application_spend_authorization_opportunity_mismatch")
+        application_spend_authorized_units = finite_number(
+            payload, "application_spend_authorized_units", minimum=0,
+            maximum=10000)
+        if (not application_spend_authorized_units.is_integer()
+                or application_spend_authorized_units != application_cost_units):
+            raise ValueError("application_spend_authorized_units_mismatch")
+        application_spend_authorized_at = parse_time(
+            payload.get("application_spend_authorized_at"),
+            "application_spend_authorized_at")
+        if application_spend_authorized_at > now + MAX_FUTURE_SKEW:
+            raise ValueError("application_spend_authorized_at_future")
+        if (application_spend_authorized_at
+                < now - MAX_APPLICATION_SPEND_AUTHORIZATION_AGE):
+            raise ValueError("application_spend_authorization_stale")
     requires_credential_access = boolean_flag(payload, "requires_credential_access")
     credential_access_method = str(
         payload.get("credential_access_method") or
@@ -277,8 +309,16 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         "application_balance_observed_at": (
             application_balance_observed.isoformat()
             if application_balance_observed else None),
-        "application_spend_authorized": boolean_flag(
-            payload, "application_spend_authorized"),
+        "application_spend_authorized": application_spend_authorized,
+        "application_spend_authorization_opportunity_id": (
+            application_spend_authorization_id
+            if application_spend_authorized else None),
+        "application_spend_authorized_units": (
+            int(application_spend_authorized_units)
+            if application_spend_authorized_units is not None else None),
+        "application_spend_authorized_at": (
+            application_spend_authorized_at.isoformat()
+            if application_spend_authorized_at else None),
         "requires_personal_data_collection": boolean_flag(
             payload, "requires_personal_data_collection"),
         "personal_data_authorized": boolean_flag(payload, "personal_data_authorized"),
