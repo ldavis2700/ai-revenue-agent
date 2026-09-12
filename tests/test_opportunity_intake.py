@@ -133,6 +133,19 @@ class OpportunityIntakeTests(unittest.TestCase):
             now=NOW + timedelta(minutes=2))
         return opportunity_id, invoice["receipt_id"]
 
+    def advance_to_collected(self, path):
+        opportunity_id, invoice_id = self.advance_to_invoice(path)
+        payment = opportunity_intake.record_collected_payment(
+            path, opportunity_id, invoice_id, {
+                "provider": "marketplace", "external_transaction_id": "payment-246",
+                "transaction_url": "https://example.com/payments/246",
+                "gross_amount_cents": 100000, "fee_amount_cents": 3000,
+                "net_amount_cents": 97000, "currency": "USD",
+                "paid_at": (NOW + timedelta(minutes=3)).isoformat(),
+                "settled_at": (NOW + timedelta(minutes=4)).isoformat()},
+            now=NOW + timedelta(minutes=4))
+        return opportunity_id, payment["receipt_id"]
+
     def test_normalizes_and_scores_valid_candidate(self):
         result = opportunity_intake.ingest([candidate()], now=NOW)
         item = result["opportunities"][0]
@@ -1684,6 +1697,102 @@ class OpportunityIntakeTests(unittest.TestCase):
             connection.close()
         self.assertEqual(count, 0)
         self.assertEqual(state, "invoiced")
+
+    def test_payout_lifecycle_distinguishes_collected_withdrawable_and_received(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, payment_id = self.advance_to_collected(path)
+            payout_evidence = {
+                "provider": "Marketplace", "external_balance_id": "balance-135",
+                "evidence_url": "HTTPS://EXAMPLE.COM/balances/135/",
+                "amount_cents": 97000, "currency": "usd",
+                "available_at": (NOW + timedelta(minutes=5)).isoformat()}
+            payout = opportunity_intake.record_withdrawable_balance(
+                path, opportunity_id, payment_id, payout_evidence,
+                now=NOW + timedelta(minutes=5))
+            payout_again = opportunity_intake.record_withdrawable_balance(
+                path, opportunity_id, payment_id, payout_evidence,
+                now=NOW + timedelta(minutes=5))
+            bank_evidence = {
+                "financial_institution": "Provider-managed bank rail",
+                "external_transfer_id": "transfer-864",
+                "evidence_url": "https://example.com/transfers/864",
+                "amount_cents": 97000, "currency": "USD",
+                "received_at": (NOW + timedelta(minutes=6)).isoformat()}
+            bank = opportunity_intake.record_bank_receipt(
+                path, opportunity_id, payout["receipt_id"], bank_evidence,
+                now=NOW + timedelta(minutes=6))
+            bank_again = opportunity_intake.record_bank_receipt(
+                path, opportunity_id, payout["receipt_id"], bank_evidence,
+                now=NOW + timedelta(minutes=6))
+            connection = sqlite3.connect(path)
+            state = connection.execute(
+                "SELECT pipeline_state FROM opportunities").fetchone()[0]
+            transitions = connection.execute(
+                "SELECT to_state,evidence_id FROM opportunity_transitions "
+                "WHERE to_state IN ('withdrawable','received') ORDER BY recorded_at"
+            ).fetchall()
+            counts = (
+                connection.execute(
+                    "SELECT COUNT(*) FROM payout_availability_receipts").fetchone()[0],
+                connection.execute("SELECT COUNT(*) FROM bank_receipts").fetchone()[0])
+            connection.close()
+        self.assertTrue(payout["changed"])
+        self.assertFalse(payout_again["changed"])
+        self.assertTrue(bank["changed"])
+        self.assertFalse(bank_again["changed"])
+        self.assertEqual(state, "received")
+        self.assertEqual(counts, (1, 1))
+        self.assertEqual(transitions, [
+            ("withdrawable", "withdrawable_balance:" + payout["receipt_id"]),
+            ("received", "bank_receipt:" + bank["receipt_id"]),
+        ])
+
+    def test_payout_lifecycle_rejects_bypass_and_mismatched_evidence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, payment_id = self.advance_to_collected(path)
+            with self.assertRaisesRegex(
+                    ValueError, "withdrawable_balance_receipt_required"):
+                opportunity_intake.record_transition(
+                    path, opportunity_id, "collected", "withdrawable",
+                    "withdrawable_balance:free-form", now=NOW)
+            valid = {
+                "provider": "marketplace", "external_balance_id": "balance-135",
+                "evidence_url": "https://example.com/balances/135",
+                "amount_cents": 97000, "currency": "USD",
+                "available_at": (NOW + timedelta(minutes=5)).isoformat()}
+            for evidence, reason in (
+                    (dict(valid, provider="other"), "payout_provider_mismatch"),
+                    (dict(valid, amount_cents=96999), "payout_amount_mismatch"),
+                    (dict(valid, currency="EUR"), "payout_currency_mismatch"),
+                    (dict(valid, available_at=(NOW + timedelta(minutes=3)).isoformat()),
+                     "withdrawable_before_settlement")):
+                with self.assertRaisesRegex(ValueError, reason):
+                    opportunity_intake.record_withdrawable_balance(
+                        path, opportunity_id, payment_id, evidence,
+                        now=NOW + timedelta(minutes=5))
+            payout = opportunity_intake.record_withdrawable_balance(
+                path, opportunity_id, payment_id, valid,
+                now=NOW + timedelta(minutes=5))
+            with self.assertRaisesRegex(ValueError, "bank_receipt_required"):
+                opportunity_intake.record_transition(
+                    path, opportunity_id, "withdrawable", "received",
+                    "bank_receipt:free-form", now=NOW)
+            bank = {
+                "financial_institution": "bank", "external_transfer_id": "transfer-864",
+                "evidence_url": "https://example.com/transfers/864",
+                "amount_cents": 97000, "currency": "USD",
+                "received_at": (NOW + timedelta(minutes=6)).isoformat()}
+            for evidence, reason in (
+                    (dict(bank, amount_cents=96999), "bank_receipt_amount_mismatch"),
+                    (dict(bank, currency="EUR"), "bank_receipt_currency_mismatch"),
+                    (dict(bank, received_at=(NOW + timedelta(minutes=4)).isoformat()),
+                     "bank_receipt_before_withdrawable")):
+                with self.assertRaisesRegex(ValueError, reason):
+                    opportunity_intake.record_bank_receipt(
+                        path, opportunity_id, payout["receipt_id"], evidence,
+                        now=NOW + timedelta(minutes=6))
 
     def test_ranking_favors_close_ready_high_confidence_work(self):
         slow = candidate(external_id="slow", time_to_cash_days=60, execution_confidence=0.7,
