@@ -20,6 +20,7 @@ from urllib.parse import urlsplit, urlunsplit
 DEFAULT_MAX_AGE_DAYS = 30
 DEFAULT_DB_PATH = "/files/data/revenue_agent.db"
 MAX_FUTURE_SKEW = timedelta(minutes=5)
+MAX_APPLICATION_BALANCE_AGE = timedelta(minutes=15)
 PROHIBITED_CATEGORIES = {
     "adult", "credential_theft", "deceptive_reviews", "fraud", "malware",
     "regulated_financial_advice", "spam", "surveillance",
@@ -183,6 +184,18 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         raise ValueError("positions_to_hire_invalid")
     if hires_for_listing is not None and not hires_for_listing.is_integer():
         raise ValueError("hires_for_listing_invalid")
+    application_balance_observed = None
+    if payload.get("application_balance_observed_at") is not None:
+        application_balance_observed = parse_time(
+            payload.get("application_balance_observed_at"),
+            "application_balance_observed_at")
+        if application_balance_observed > now + MAX_FUTURE_SKEW:
+            raise ValueError("application_balance_observed_at_future")
+    if application_cost_units and application_units_balance is not None:
+        if application_balance_observed is None:
+            raise ValueError("application_balance_observed_at_required")
+        if application_balance_observed < now - MAX_APPLICATION_BALANCE_AGE:
+            raise ValueError("application_balance_stale")
     payment_rail_clear = boolean_flag(payload, "payment_rail_clear")
     platform_allows_automation = boolean_flag(payload, "platform_allows_automation")
     authenticated_channel = boolean_flag(payload, "authenticated_channel")
@@ -238,6 +251,9 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         "application_cost_units": int(application_cost_units or 0),
         "application_units_balance": (int(application_units_balance)
                                       if application_units_balance is not None else None),
+        "application_balance_observed_at": (
+            application_balance_observed.isoformat()
+            if application_balance_observed else None),
         "application_spend_authorized": boolean_flag(
             payload, "application_spend_authorized"),
         "requires_personal_data_collection": boolean_flag(

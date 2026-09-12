@@ -157,6 +157,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             submission_authorized=True,
             application_cost_units=11,
             application_units_balance=150,
+            application_balance_observed_at=NOW.isoformat(),
         )
         accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
         self.assertEqual(accepted["action_mode"], "prepare_only")
@@ -168,7 +169,8 @@ class OpportunityIntakeTests(unittest.TestCase):
         values = [
             candidate(external_id="unknown-balance", application_cost_units=11),
             candidate(external_id="insufficient-balance", application_cost_units=11,
-                      application_units_balance=10),
+                      application_units_balance=10,
+                      application_balance_observed_at=NOW.isoformat()),
         ]
         reasons = [item["reason"] for item in
                    opportunity_intake.ingest(values, now=NOW)["rejections"]]
@@ -180,7 +182,8 @@ class OpportunityIntakeTests(unittest.TestCase):
     def test_application_cost_lowers_rank_without_rejecting_funded_work(self):
         free = candidate(external_id="free", application_cost_units=0)
         paid = candidate(external_id="paid", application_cost_units=15,
-                         application_units_balance=150)
+                         application_units_balance=150,
+                         application_balance_observed_at=NOW.isoformat())
         result = opportunity_intake.ingest([paid, free], now=NOW)
         self.assertEqual([item["external_id"] for item in result["opportunities"]],
                          ["free", "paid"])
@@ -201,6 +204,27 @@ class OpportunityIntakeTests(unittest.TestCase):
             "application_cost_units_invalid",
             "application_units_balance_invalid",
             "application_spend_authorized_invalid",
+        ])
+
+    def test_paid_application_requires_fresh_balance_evidence(self):
+        values = [
+            candidate(external_id="missing-timestamp", application_cost_units=11,
+                      application_units_balance=150),
+            candidate(external_id="stale-timestamp", application_cost_units=11,
+                      application_units_balance=150,
+                      application_balance_observed_at=(
+                          NOW - timedelta(minutes=16)).isoformat()),
+            candidate(external_id="future-timestamp", application_cost_units=11,
+                      application_units_balance=150,
+                      application_balance_observed_at=(
+                          NOW + timedelta(minutes=6)).isoformat()),
+        ]
+        reasons = [item["reason"] for item in
+                   opportunity_intake.ingest(values, now=NOW)["rejections"]]
+        self.assertEqual(reasons, [
+            "application_balance_observed_at_required",
+            "application_balance_stale",
+            "application_balance_observed_at_future",
         ])
 
     def test_submission_channel_outage_preserves_opportunity_without_autonomous_submit(self):
