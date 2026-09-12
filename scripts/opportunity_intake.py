@@ -423,45 +423,55 @@ def action_mode(opportunity):
 
 def ingest(payloads, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
     now = now or utc_now()
-    accepted, rejected, by_id = [], [], {}
+    accepted, records, by_id = [], [], {}
+    rejection_by_index = {}
     for index, payload in enumerate(payloads):
         try:
             item = normalize(payload, now=now, max_age_days=max_age_days)
-            eligible, reason = screen(item)
-            if not eligible:
-                rejected.append({"index": index, "reason": reason, "id": item["id"],
-                                 "payload_hash": payload_hash(payload)})
-                continue
+            record = {"item": item, "index": index,
+                      "payload_hash": payload_hash(payload)}
             previous = by_id.get(item["id"])
-            if previous and previous["observed_at"] >= item["observed_at"]:
-                rejected.append({"index": index, "reason": "duplicate_older_or_equal", "id": item["id"],
-                                 "payload_hash": payload_hash(payload)})
+            if (previous
+                    and previous["item"]["observed_at"] >= item["observed_at"]):
+                rejection_by_index[index] = {
+                    "index": index, "reason": "duplicate_older_or_equal",
+                    "id": item["id"], "payload_hash": record["payload_hash"]}
                 continue
             if previous:
-                accepted.remove(previous)
-                rejected.append({"index": previous["_index"], "reason": "duplicate_superseded", "id": item["id"],
-                                 "payload_hash": previous["_payload_hash"]})
+                rejection_by_index[previous["index"]] = {
+                    "index": previous["index"], "reason": "duplicate_superseded",
+                    "id": item["id"], "payload_hash": previous["payload_hash"]}
+                records.remove(previous)
+            by_id[item["id"]] = record
+            records.append(record)
+        except ValueError as exc:
+            rejection_by_index[index] = {"index": index, "reason": str(exc)}
+
+    for record in records:
+        item = record["item"]
+        eligible, reason = screen(item)
+        if not eligible:
+            rejection_by_index[record["index"]] = {
+                "index": record["index"], "reason": reason, "id": item["id"],
+                "payload_hash": record["payload_hash"]}
+            continue
+        try:
             item["score"], item["score_components"] = score(item)
             item["action_mode"] = action_mode(item)
             item["pipeline_state"] = ("payment_rail_blocked"
                                       if item["payment_rail_status"] == "temporarily_unavailable"
                                       else "qualified")
-            item["source_index"] = index
-            item["_index"] = index
-            item["_payload_hash"] = payload_hash(payload)
-            by_id[item["id"]] = item
+            item["source_index"] = record["index"]
             accepted.append(item)
         except ValueError as exc:
-            rejected.append({"index": index, "reason": str(exc)})
+            rejection_by_index[record["index"]] = {
+                "index": record["index"], "reason": str(exc)}
     accepted.sort(key=lambda item: (-item["score"], item["time_to_cash_days"], item["id"]))
-    for item in accepted:
-        item.pop("_index", None)
-        item.pop("_payload_hash", None)
+    rejected = [rejection_by_index[index] for index in sorted(rejection_by_index)]
     for rejection in rejected:
         rejection.setdefault("payload_hash", payload_hash(payloads[rejection["index"]]))
     return {"metrics": {"received": len(payloads), "eligible": len(accepted), "rejected": len(rejected)},
             "opportunities": accepted, "rejections": rejected}
-
 
 def open_ledger(path):
     connection = sqlite3.connect(path)

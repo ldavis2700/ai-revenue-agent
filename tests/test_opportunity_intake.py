@@ -364,6 +364,26 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual([x["title"] for x in result["opportunities"]], ["Newer"])
         self.assertEqual(result["rejections"][0]["reason"], "duplicate_superseded")
 
+    def test_newer_closed_duplicate_supersedes_stale_open_observation(self):
+        older_open = candidate(
+            observed_at=(NOW - timedelta(hours=2)).isoformat())
+        newer_closed = candidate(
+            observed_at=(NOW - timedelta(minutes=10)).isoformat(),
+            listing_open=False)
+
+        for observations in ([older_open, newer_closed],
+                             [newer_closed, older_open]):
+            with self.subTest(order=[item.get("listing_open", True)
+                                     for item in observations]):
+                result = opportunity_intake.ingest(observations, now=NOW)
+                self.assertEqual(result["opportunities"], [])
+                self.assertEqual(
+                    {item["reason"] for item in result["rejections"]},
+                    {"duplicate_superseded", "listing_closed"}
+                    if observations[0].get("listing_open", True) else
+                    {"listing_closed", "duplicate_older_or_equal"},
+                )
+
     def test_rejects_stale_expired_and_future_observations(self):
         values = [
             candidate(external_id="stale", observed_at=(NOW - timedelta(days=31)).isoformat()),
