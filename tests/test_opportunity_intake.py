@@ -466,6 +466,41 @@ class OpportunityIntakeTests(unittest.TestCase):
                                    "unsolicited_contact_disallowed", "suppressed_or_opted_out",
                                    "payment_rail_unclear", "execution_confidence_too_low"])
 
+    def test_direct_contract_flag_does_not_override_marketplace_eligibility(self):
+        result = opportunity_intake.ingest([
+            candidate(
+                marketplace_application_allowed=True,
+                direct_contract_proposal_available=False,
+            ),
+        ], now=NOW)
+        item = result["opportunities"][0]
+        self.assertTrue(item["marketplace_application_allowed"])
+        self.assertFalse(item["direct_contract_proposal_available"])
+
+    def test_marketplace_ineligibility_is_not_overridden_by_direct_contract_flag(self):
+        result = opportunity_intake.ingest([
+            candidate(
+                marketplace_application_allowed=False,
+                direct_contract_proposal_available=True,
+            ),
+        ], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(result["rejections"][0]["reason"],
+                         "marketplace_application_unavailable")
+
+    def test_rejects_ambiguous_marketplace_and_direct_contract_flags(self):
+        result = opportunity_intake.ingest([
+            candidate(external_id="marketplace-string",
+                      marketplace_application_allowed="true"),
+            candidate(external_id="direct-contract-string",
+                      direct_contract_proposal_available="false"),
+        ], now=NOW)
+        self.assertEqual(
+            [item["reason"] for item in result["rejections"]],
+            ["marketplace_application_allowed_invalid",
+             "direct_contract_proposal_available_invalid"],
+        )
+
     def test_rejects_closed_filled_and_profile_mismatched_marketplace_jobs(self):
         values = [
             candidate(external_id="closed", listing_open=False),
