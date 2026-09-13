@@ -43,7 +43,7 @@ PIPELINE_TRANSITIONS = {
 }
 TERMINAL_SCREEN_REASONS = {
     "opportunity_expired", "listing_closed", "listing_filled",
-    "preferred_qualifications_unmet",
+    "preferred_qualifications_unmet", "marketplace_application_unavailable",
     "execution_capabilities_unmet", "personal_data_authority_unverified",
     "credential_access_unsafe", "prohibited_category", "scam_signals_present",
     "deception_required", "unsolicited_contact_disallowed",
@@ -102,6 +102,13 @@ def boolean_flag(payload, field, *, default=False):
     if not isinstance(value, bool):
         raise ValueError(f"{field}_invalid")
     return value
+
+
+def optional_boolean_flag(payload, field):
+    """Preserve missing provider flags instead of guessing a boolean value."""
+    if field not in payload or payload[field] is None:
+        return None
+    return boolean_flag(payload, field)
 
 
 def capability_set(payload, field):
@@ -321,6 +328,10 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
                               if hires_for_listing is not None else None),
         "preferred_qualifications_met": boolean_flag(
             payload, "preferred_qualifications_met", default=True),
+        "marketplace_application_allowed": optional_boolean_flag(
+            payload, "marketplace_application_allowed"),
+        "direct_contract_proposal_available": optional_boolean_flag(
+            payload, "direct_contract_proposal_available"),
         "application_cost_units": int(application_cost_units or 0),
         "application_units_balance": (int(application_units_balance)
                                       if application_units_balance is not None else None),
@@ -363,6 +374,8 @@ def screen(opportunity):
         return False, "opportunity_expired"
     if not opportunity["listing_open"]:
         return False, "listing_closed"
+    if opportunity["marketplace_application_allowed"] is False:
+        return False, "marketplace_application_unavailable"
     if (opportunity["positions_to_hire"] is not None
             and opportunity["hires_for_listing"] is not None
             and opportunity["hires_for_listing"] >= opportunity["positions_to_hire"]):
