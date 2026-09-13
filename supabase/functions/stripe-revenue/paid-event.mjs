@@ -5,6 +5,13 @@
  * for the initial charge. We count subscription revenue only from invoice.paid
  * so the initial payment is not recorded twice.
  */
+export function normalizedLeadReference(value) {
+  const reference = String(value ?? "").trim().toLowerCase();
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(reference)
+    ? reference
+    : "";
+}
+
 export function paidEvent(event) {
   const object = event?.data?.object ?? {};
 
@@ -24,6 +31,7 @@ export function paidEvent(event) {
         object.customer_details?.email ?? object.customer_email ?? "",
       ).trim().toLowerCase(),
       paymentReference: String(object.payment_intent ?? object.id ?? ""),
+      clientReferenceId: normalizedLeadReference(object.client_reference_id),
       kind: "one_time_checkout",
     };
   }
@@ -41,6 +49,7 @@ export function paidEvent(event) {
       currency: String(object.currency ?? "usd").toUpperCase(),
       email: String(object.customer_email ?? "").trim().toLowerCase(),
       paymentReference: String(invoicePaymentIntent ?? object.id ?? ""),
+      clientReferenceId: "",
       kind: "subscription_invoice",
     };
   }

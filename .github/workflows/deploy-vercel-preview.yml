@@ -8,11 +8,21 @@ on:
         required: true
         default: main
 
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - sales/**
+      - supabase/functions/stripe-revenue/**
+      - tests/stripe_paid_event.test.mjs
+      - vercel.json
+      - .github/workflows/deploy-vercel-preview.yml
+
 permissions:
   contents: read
 
 concurrency:
-  group: ai-revenue-agent-preview-${{ inputs.target_ref }}
+  group: ai-revenue-agent-preview-${{ inputs.target_ref || github.event.pull_request.head.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -35,7 +45,7 @@ jobs:
       - name: Check out the requested source
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.target_ref }}
+          ref: ${{ inputs.target_ref || github.event.pull_request.head.sha }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -86,7 +96,7 @@ jobs:
         run: |
           {
             echo "## AI Revenue Agent isolated preview"
-            echo "- Source: \`${{ inputs.target_ref }}\`"
+            echo "- Source: \`${{ inputs.target_ref || github.event.pull_request.head.sha }}\`"
             echo "- Commit: \`$DEPLOYED_SHA\`"
             echo "- Deployment: $DEPLOYMENT_URL"
             echo "- Production flag: not used"

@@ -175,7 +175,7 @@
           <article class="message"><h3>Follow-up</h3><p id="instant-follow-up"></p></article>
         </div>
         <p>This starter preview is generated from the business details you submitted. It does not send messages to your customers or enroll you in a paid service.</p>
-        <a class="cta" href="https://buy.stripe.com/28E3cxedvdR92kOb3n87K02">Get the complete $100 setup</a>
+        <a id="instant-setup-link" class="cta" href="https://buy.stripe.com/28E3cxedvdR92kOb3n87K02">Get the complete $100 setup</a>
       </section>
     </form>
   </div>
@@ -226,6 +226,21 @@
     document.getElementById('instant-preview').hidden = false;
   }
 
+  function attributeCheckout(leadId) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(leadId)) return;
+    for (const id of ['setup-link', 'instant-setup-link']) {
+      const link = document.getElementById(id);
+      const url = new URL(link.href);
+      if (url.protocol !== 'https:' || url.hostname !== 'buy.stripe.com') continue;
+      url.searchParams.set('client_reference_id', leadId);
+      for (const name of ['utm_source', 'utm_medium', 'utm_campaign']) {
+        const value = campaignTag(name);
+        if (value) url.searchParams.set(name, value);
+      }
+      link.href = url.toString();
+    }
+  }
+
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     if (!/^https:\/\//i.test(endpoint)) return;
@@ -238,7 +253,9 @@
     if (campaign) payload.campaign = campaign;
     try {
       const response = await fetch(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-      if (!response.ok) throw new Error('request_failed');
+      const result = await response.json();
+      if (!response.ok || result?.accepted !== true) throw new Error('request_failed');
+      attributeCheckout(result.lead_id);
       showInstantPreview(payload);
       form.reset();
       status.textContent = 'Thank you. Your request was received and your starter preview is ready below.';

@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
-import { paidEvent } from "../supabase/functions/stripe-revenue/paid-event.mjs";
+import { normalizedLeadReference, paidEvent } from "../supabase/functions/stripe-revenue/paid-event.mjs";
 
 function event(type, object) {
   return { type, data: { object } };
@@ -15,6 +16,7 @@ test("counts a paid one-time Checkout Session", () => {
     amount_total: 12500,
     currency: "usd",
     payment_intent: "pi_one_time",
+    client_reference_id: "123e4567-e89b-42d3-a456-426614174000",
     customer_details: { email: " Buyer@Example.com " },
   }));
 
@@ -23,6 +25,7 @@ test("counts a paid one-time Checkout Session", () => {
     currency: "USD",
     email: "buyer@example.com",
     paymentReference: "pi_one_time",
+    clientReferenceId: "123e4567-e89b-42d3-a456-426614174000",
     kind: "one_time_checkout",
   });
 });
@@ -74,6 +77,7 @@ test("counts the subscription invoice, including the initial invoice", () => {
     currency: "USD",
     email: "member@example.com",
     paymentReference: "pi_subscription",
+    clientReferenceId: "",
     kind: "subscription_invoice",
   });
 });
@@ -100,4 +104,20 @@ test("ignores paid invoices that are not subscription revenue", () => {
     amount_paid: 3000,
     currency: "usd",
   })), null);
+});
+
+test("accepts only UUID lead references", () => {
+  assert.equal(
+    normalizedLeadReference("123E4567-E89B-42D3-A456-426614174000"),
+    "123e4567-e89b-42d3-a456-426614174000",
+  );
+  assert.equal(normalizedLeadReference("customer@example.com"), "");
+  assert.equal(normalizedLeadReference("../../../secret"), "");
+});
+
+test("consented preview checkout carries the non-sensitive lead reference", () => {
+  const offer = readFileSync(new URL("../sales/offer.html", import.meta.url), "utf8");
+  assert.match(offer, /id="instant-setup-link"/);
+  assert.match(offer, /url\.searchParams\.set\('client_reference_id', leadId\)/);
+  assert.match(offer, /attributeCheckout\(result\.lead_id\)/);
 });

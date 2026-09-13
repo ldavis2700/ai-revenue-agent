@@ -98,9 +98,22 @@ Deno.serve(async (req: Request) => {
   const supabase = createClient(url, key, { auth: { persistSession: false } });
   const emailHash = payment.email ? await sha256(payment.email) : null;
   let leadId: string | null = null;
-  if (emailHash) {
+
+  if (payment.clientReferenceId) {
     const { data } = await supabase.from("inbound_leads")
-      .select("id").eq("property_id", PROPERTY_ID).eq("email_hash", emailHash).maybeSingle();
+      .select("id")
+      .eq("property_id", PROPERTY_ID)
+      .eq("id", payment.clientReferenceId)
+      .maybeSingle();
+    leadId = data?.id ?? null;
+  }
+
+  if (!leadId && emailHash) {
+    const { data } = await supabase.from("inbound_leads")
+      .select("id")
+      .eq("property_id", PROPERTY_ID)
+      .eq("email_hash", emailHash)
+      .maybeSingle();
     leadId = data?.id ?? null;
   }
 
