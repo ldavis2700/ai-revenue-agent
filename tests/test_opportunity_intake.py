@@ -1829,6 +1829,50 @@ class OpportunityIntakeTests(unittest.TestCase):
                         path, opportunity_id, payout["receipt_id"], evidence,
                         now=NOW + timedelta(minutes=6))
 
+    def test_competition_penalty_uses_verified_proposal_range(self):
+        low = candidate(
+            external_id="low-competition",
+            proposal_count_min=5,
+            proposal_count_max=10,
+        )
+        high = candidate(
+            external_id="high-competition",
+            proposal_count_min=20,
+            proposal_count_max=50,
+        )
+        opportunities = opportunity_intake.ingest([high, low], now=NOW)["opportunities"]
+        by_id = {item["external_id"]: item for item in opportunities}
+        self.assertGreater(
+            by_id["low-competition"]["score"],
+            by_id["high-competition"]["score"],
+        )
+        self.assertEqual(
+            by_id["low-competition"]["score_components"]["competition"], -2.0
+        )
+        self.assertEqual(
+            by_id["high-competition"]["score_components"]["competition"], -10.0
+        )
+
+    def test_rejects_incomplete_or_invalid_proposal_ranges(self):
+        values = [
+            candidate(external_id="missing-max", proposal_count_min=5),
+            candidate(
+                external_id="fractional",
+                proposal_count_min=5,
+                proposal_count_max=10.5,
+            ),
+            candidate(
+                external_id="inverted",
+                proposal_count_min=20,
+                proposal_count_max=10,
+            ),
+        ]
+        reasons = [
+            item["reason"]
+            for item in opportunity_intake.ingest(values, now=NOW)["rejections"]
+        ]
+        self.assertEqual(reasons, ["proposal_count_range_invalid"] * 3)
+
     def test_ranking_favors_close_ready_high_confidence_work(self):
         slow = candidate(external_id="slow", time_to_cash_days=60, execution_confidence=0.7,
                          buyer_intent=0.5, win_probability=0.4)
