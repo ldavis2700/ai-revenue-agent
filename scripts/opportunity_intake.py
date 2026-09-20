@@ -196,6 +196,10 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         payload, "positions_to_hire", minimum=1, maximum=10000, required=False)
     hires_for_listing = finite_number(
         payload, "hires_for_listing", minimum=0, maximum=10000, required=False)
+    proposal_count_min = finite_number(
+        payload, "proposal_count_min", minimum=0, maximum=1000000, required=False)
+    proposal_count_max = finite_number(
+        payload, "proposal_count_max", minimum=0, maximum=1000000, required=False)
     if application_cost_units is not None and not application_cost_units.is_integer():
         raise ValueError("application_cost_units_invalid")
     if application_units_balance is not None and not application_units_balance.is_integer():
@@ -204,6 +208,12 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         raise ValueError("positions_to_hire_invalid")
     if hires_for_listing is not None and not hires_for_listing.is_integer():
         raise ValueError("hires_for_listing_invalid")
+    if ((proposal_count_min is None) != (proposal_count_max is None)
+            or (proposal_count_min is not None
+                and (not proposal_count_min.is_integer()
+                     or not proposal_count_max.is_integer()
+                     or proposal_count_min > proposal_count_max))):
+        raise ValueError("proposal_count_range_invalid")
     application_balance_observed = None
     if payload.get("application_balance_observed_at") is not None:
         application_balance_observed = parse_time(
@@ -326,6 +336,10 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
                               if positions_to_hire is not None else None),
         "hires_for_listing": (int(hires_for_listing)
                               if hires_for_listing is not None else None),
+        "proposal_count_min": (int(proposal_count_min)
+                               if proposal_count_min is not None else None),
+        "proposal_count_max": (int(proposal_count_max)
+                               if proposal_count_max is not None else None),
         "preferred_qualifications_met": boolean_flag(
             payload, "preferred_qualifications_met", default=True),
         "marketplace_application_allowed": optional_boolean_flag(
@@ -432,6 +446,8 @@ def score(opportunity):
         "application_cost": -10 * min(
             opportunity["application_cost_units"] /
             max(opportunity["application_units_balance"] or 1, 1), 1),
+        "competition": -10 * min(
+            (opportunity["proposal_count_max"] or 0) / 50, 1),
     }
     return round(sum(components.values()), 2), {key: round(value, 2) for key, value in components.items()}
 
