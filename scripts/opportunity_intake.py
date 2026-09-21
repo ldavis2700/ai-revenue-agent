@@ -177,6 +177,16 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         raise ValueError("observed_at_future")
     if observed < now - timedelta(days=max_age_days):
         raise ValueError("opportunity_stale")
+    published = None
+    listing_age_days = None
+    if payload.get("published_at") is not None:
+        published = parse_time(payload.get("published_at"), "published_at")
+        if published > now + MAX_FUTURE_SKEW:
+            raise ValueError("published_at_future")
+        if published > observed + MAX_FUTURE_SKEW:
+            raise ValueError("published_at_after_observation")
+        listing_age_days = max(
+            0, (now - published).total_seconds() / 86400)
     expires = None
     if payload.get("expires_at") is not None:
         expires = parse_time(payload.get("expires_at"), "expires_at")
@@ -298,6 +308,8 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         "title": title,
         "description": str(payload.get("description") or "").strip(),
         "observed_at": observed.isoformat(),
+        "published_at": published.isoformat() if published else None,
+        "listing_age_days": listing_age_days,
         "expires_at": expires.isoformat() if expires else None,
         "expired": expires is not None and expires <= now,
         "payout_cents": int(payout_cents),
@@ -448,6 +460,11 @@ def score(opportunity):
             max(opportunity["application_units_balance"] or 1, 1), 1),
         "competition": -10 * min(
             (opportunity["proposal_count_max"] or 0) / 50, 1),
+        # Penalize age only when the source supplies verified publication
+        # evidence. Missing evidence stays neutral instead of being guessed.
+        "listing_freshness": -5 * min(
+            (opportunity["listing_age_days"] or 0) / 30, 1)
+            if opportunity["listing_age_days"] is not None else 0,
     }
     return round(sum(components.values()), 2), {key: round(value, 2) for key, value in components.items()}
 
