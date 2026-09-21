@@ -1853,6 +1853,51 @@ class OpportunityIntakeTests(unittest.TestCase):
             by_id["high-competition"]["score_components"]["competition"], -10.0
         )
 
+    def test_competition_penalty_accounts_for_verified_remaining_openings(self):
+        single_seat = candidate(
+            external_id="single-seat",
+            proposal_count_min=5,
+            proposal_count_max=10,
+            positions_to_hire=1,
+            hires_for_listing=0,
+        )
+        five_seats = candidate(
+            external_id="five-seats",
+            proposal_count_min=5,
+            proposal_count_max=10,
+            positions_to_hire=5,
+            hires_for_listing=0,
+        )
+        partly_filled = candidate(
+            external_id="partly-filled",
+            proposal_count_min=5,
+            proposal_count_max=10,
+            positions_to_hire=5,
+            hires_for_listing=4,
+        )
+        no_seat_evidence = candidate(
+            external_id="no-seat-evidence",
+            proposal_count_min=5,
+            proposal_count_max=10,
+        )
+
+        opportunities = opportunity_intake.ingest(
+            [single_seat, five_seats, partly_filled, no_seat_evidence],
+            now=NOW,
+        )["opportunities"]
+        by_id = {item["external_id"]: item for item in opportunities}
+
+        self.assertEqual(
+            by_id["single-seat"]["score_components"]["competition"], -2.0)
+        self.assertEqual(
+            by_id["five-seats"]["score_components"]["competition"], -0.4)
+        self.assertEqual(
+            by_id["partly-filled"]["score_components"]["competition"], -2.0)
+        self.assertEqual(
+            by_id["no-seat-evidence"]["score_components"]["competition"], -2.0)
+        self.assertGreater(
+            by_id["five-seats"]["score"], by_id["single-seat"]["score"])
+
     def test_rejects_incomplete_or_invalid_proposal_ranges(self):
         values = [
             candidate(external_id="missing-max", proposal_count_min=5),

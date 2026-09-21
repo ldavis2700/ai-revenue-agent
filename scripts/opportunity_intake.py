@@ -447,6 +447,16 @@ def score(opportunity):
     dollars_per_hour = expected_value / 100 / opportunity["effort_hours"]
     value_score = min(dollars_per_hour / 100, 1)
     speed_score = max(0, 1 - opportunity["time_to_cash_days"] / 60)
+    remaining_positions = None
+    if (opportunity["positions_to_hire"] is not None
+            and opportunity["hires_for_listing"] is not None):
+        remaining_positions = max(
+            opportunity["positions_to_hire"] - opportunity["hires_for_listing"], 1)
+    competition_per_opening = (
+        (opportunity["proposal_count_max"] or 0) / remaining_positions
+        if remaining_positions is not None
+        else (opportunity["proposal_count_max"] or 0)
+    )
     components = {
         "buyer_intent": 15 * opportunity["buyer_intent"],
         "expected_value": 15 * value_score,
@@ -458,8 +468,10 @@ def score(opportunity):
         "application_cost": -10 * min(
             opportunity["application_cost_units"] /
             max(opportunity["application_units_balance"] or 1, 1), 1),
-        "competition": -10 * min(
-            (opportunity["proposal_count_max"] or 0) / 50, 1),
+        # Normalize verified competition by verified remaining openings. This
+        # avoids treating a multi-hire listing like a single-seat listing while
+        # preserving the conservative raw count when seat evidence is absent.
+        "competition": -10 * min(competition_per_opening / 50, 1),
         # Penalize age only when the source supplies verified publication
         # evidence. Missing evidence stays neutral instead of being guessed.
         "listing_freshness": -5 * min(
