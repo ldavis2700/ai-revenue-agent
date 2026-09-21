@@ -40,7 +40,7 @@ class NotificationPlan:
 
 
 _SECRET_PATTERN = re.compile(
-    r"(?i)(api[_-]?key|authorization|bearer|device[_-]?token|player[_-]?id)\\s*[:=]\\s*\\S+"
+    r"(?i)(api[_-]?key|authorization|bearer|device[_-]?token|player[_-]?id)\s*[:=]\s*\S+"
 )
 _REQUIRED_STRING_FIELDS = (
     "name",
