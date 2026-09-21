@@ -21,7 +21,7 @@ on:
       - 'tests/test_experiment_learning.py'
       - '.github/workflows/mission-control-experiment-queue.yml'
   schedule:
-    - cron: '47 */6 * * *'
+    - cron: '47 8 * * *'
   workflow_dispatch:
 
 concurrency:
