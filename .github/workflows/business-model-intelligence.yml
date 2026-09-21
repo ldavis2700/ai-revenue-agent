@@ -14,7 +14,7 @@ on:
       - 'scripts/business_model_intelligence.py'
       - 'tests/test_business_model_intelligence.py'
   schedule:
-    - cron: '17 */6 * * *'
+    - cron: '17 8 * * *'
   workflow_dispatch:
 
 concurrency:
