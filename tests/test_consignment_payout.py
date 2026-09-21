@@ -35,12 +35,33 @@ class CalculatePayoutTests(unittest.TestCase):
             PayoutStatus.ELIGIBLE,
         )
 
-    def test_refund_reverses_even_after_window(self):
+    def test_full_refund_reverses_even_after_window(self):
         result = calculate_payout(
-            self.base(refund_amount=Decimal("1000")),
+            self.base(
+                marketplace_fees=0,
+                approved_ad_fees=0,
+                other_deductions=0,
+                refund_amount=Decimal("1000"),
+            ),
             as_of=date(2026, 10, 15),
         )
         self.assertEqual(result.status, PayoutStatus.REVERSED)
+        self.assertEqual(result.consignor_amount, Decimal("0.00"))
+
+    def test_partial_refund_requires_human_review(self):
+        result = calculate_payout(
+            self.base(refund_amount=Decimal("100")),
+            as_of=date(2026, 10, 15),
+        )
+        self.assertEqual(result.status, PayoutStatus.HELD)
+        self.assertEqual(result.consignor_amount, Decimal("450.00"))
+
+    def test_refund_above_gross_requires_human_review(self):
+        result = calculate_payout(
+            self.base(refund_amount=Decimal("1000.01")),
+            as_of=date(2026, 10, 15),
+        )
+        self.assertEqual(result.status, PayoutStatus.HELD)
         self.assertEqual(result.consignor_amount, Decimal("0.00"))
 
     def test_hold_overrides_time_eligibility(self):
@@ -49,13 +70,14 @@ class CalculatePayoutTests(unittest.TestCase):
         )
         self.assertEqual(result.status, PayoutStatus.HELD)
 
-    def test_deductions_cannot_make_negative_payout(self):
+    def test_deductions_above_gross_hold_zero_payout_for_review(self):
         result = calculate_payout(
             self.base(marketplace_fees=Decimal("1500")),
             as_of=date(2026, 10, 15),
         )
         self.assertEqual(result.net_before_split, Decimal("0.00"))
         self.assertEqual(result.consignor_amount, Decimal("0.00"))
+        self.assertEqual(result.status, PayoutStatus.HELD)
 
     def test_rounds_currency_half_up(self):
         result = calculate_payout(
