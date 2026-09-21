@@ -47,15 +47,12 @@ class PayoutResult:
 def calculate_payout(data: PayoutInput, *, as_of: date) -> PayoutResult:
     """Calculate a review-ready payout without initiating any financial action."""
     gross = _money(data.gross_sale)
-    fees = sum(
-        (
-            _money(data.marketplace_fees),
-            _money(data.approved_ad_fees),
-            _money(data.other_deductions),
-            _money(data.refund_amount),
-        ),
-        Decimal("0"),
-    )
+    marketplace_fees = _money(data.marketplace_fees)
+    approved_ad_fees = _money(data.approved_ad_fees)
+    other_deductions = _money(data.other_deductions)
+    refund = _money(data.refund_amount)
+    non_refund_deductions = marketplace_fees + approved_ad_fees + other_deductions
+    fees = non_refund_deductions + refund
     split_rate = Decimal(str(data.split_rate))
     if not Decimal("0") <= split_rate <= Decimal("1"):
         raise ValueError("split_rate must be between 0 and 1")
@@ -66,7 +63,15 @@ def calculate_payout(data: PayoutInput, *, as_of: date) -> PayoutResult:
     consignor_amount = (net * split_rate).quantize(MONEY, rounding=ROUND_HALF_UP)
     clears_at = data.sold_at + timedelta(days=data.return_window_days)
 
-    if _money(data.refund_amount) > 0:
+    inconsistent_deductions = non_refund_deductions > gross or refund > gross
+    partial_refund = Decimal("0") < refund < gross
+    full_refund = refund == gross and gross > 0
+
+    if inconsistent_deductions or partial_refund:
+        # Ambiguous source records must be reviewed rather than silently becoming
+        # payable (or being presented as a complete reversal).
+        status = PayoutStatus.HELD
+    elif full_refund:
         status = PayoutStatus.REVERSED
     elif data.manual_hold:
         status = PayoutStatus.HELD
