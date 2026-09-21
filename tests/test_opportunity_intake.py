@@ -1882,5 +1882,53 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(result["opportunities"][0]["external_id"], "fast")
 
 
+    def test_publication_time_requires_valid_ordered_evidence(self):
+        values = [
+            candidate(external_id="naive-published", published_at="2026-09-08T01:00:00"),
+            candidate(
+                external_id="published-after-observation",
+                published_at=(NOW + timedelta(hours=1)).isoformat(),
+            ),
+        ]
+        reasons = [
+            item["reason"]
+            for item in opportunity_intake.ingest(values, now=NOW)["rejections"]
+        ]
+        self.assertEqual(
+            reasons,
+            ["published_at_timezone_required", "published_at_after_observation"],
+        )
+
+    def test_verified_listing_age_penalizes_older_opportunity(self):
+        fresh = candidate(
+            external_id="fresh-listing",
+            published_at=(NOW - timedelta(hours=2)).isoformat(),
+        )
+        old = candidate(
+            external_id="old-listing",
+            published_at=(NOW - timedelta(days=20)).isoformat(),
+        )
+
+        opportunities = opportunity_intake.ingest([old, fresh], now=NOW)["opportunities"]
+        by_id = {item["external_id"]: item for item in opportunities}
+
+        self.assertGreater(by_id["fresh-listing"]["score"], by_id["old-listing"]["score"])
+        self.assertGreater(
+            by_id["fresh-listing"]["score_components"]["listing_freshness"],
+            by_id["old-listing"]["score_components"]["listing_freshness"],
+        )
+        self.assertAlmostEqual(by_id["old-listing"]["listing_age_days"], 20.0)
+
+    def test_missing_publication_time_remains_neutral(self):
+        item = opportunity_intake.ingest(
+            [candidate(external_id="unknown-age")],
+            now=NOW,
+        )["opportunities"][0]
+
+        self.assertIsNone(item["published_at"])
+        self.assertIsNone(item["listing_age_days"])
+        self.assertEqual(item["score_components"]["listing_freshness"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()
