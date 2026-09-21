@@ -468,6 +468,13 @@ def score(opportunity):
         "application_cost": -10 * min(
             opportunity["application_cost_units"] /
             max(opportunity["application_units_balance"] or 1, 1), 1),
+        # Keep temporarily blocked opportunities prepared, but rank reachable
+        # channels first so a CAPTCHA/outage cannot monopolize pursuit.
+        "submission_access": {
+            "available": 0,
+            "unclear": -5,
+            "temporarily_unavailable": -25,
+        }[opportunity["submission_channel_status"]],
         # Normalize verified competition by verified remaining openings. This
         # avoids treating a multi-hire listing like a single-seat listing while
         # preserving the conservative raw count when seat evidence is absent.
