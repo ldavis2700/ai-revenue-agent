@@ -1887,7 +1887,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             candidate(external_id="naive-published", published_at="2026-09-08T01:00:00"),
             candidate(
                 external_id="published-after-observation",
-                published_at=(NOW + timedelta(hours=1)).isoformat(),
+                published_at=NOW.isoformat(),
             ),
         ]
         reasons = [
