@@ -346,6 +346,41 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(accepted["action_mode"], "prepare_only")
         self.assertEqual(accepted["submission_channel_status"], "temporarily_unavailable")
 
+    def test_submission_channel_friction_lowers_ranking_without_rejection(self):
+        available = candidate(
+            external_id="available-channel",
+            submission_channel_status="available",
+        )
+        unclear = candidate(
+            external_id="unclear-channel",
+            submission_channel_status="unclear",
+        )
+        blocked = candidate(
+            external_id="blocked-channel",
+            submission_channel_status="temporarily_unavailable",
+        )
+
+        opportunities = opportunity_intake.ingest(
+            [blocked, unclear, available], now=NOW
+        )["opportunities"]
+        by_id = {item["external_id"]: item for item in opportunities}
+
+        self.assertEqual(
+            [item["external_id"] for item in opportunities],
+            ["available-channel", "unclear-channel", "blocked-channel"],
+        )
+        self.assertEqual(
+            by_id["available-channel"]["score_components"]["submission_access"], 0
+        )
+        self.assertEqual(
+            by_id["unclear-channel"]["score_components"]["submission_access"], -5
+        )
+        self.assertEqual(
+            by_id["blocked-channel"]["score_components"]["submission_access"], -25
+        )
+        self.assertEqual(by_id["blocked-channel"]["pipeline_state"], "qualified")
+        self.assertEqual(by_id["blocked-channel"]["action_mode"], "prepare_only")
+
     def test_rejects_unknown_submission_channel_status(self):
         result = opportunity_intake.ingest([
             candidate(submission_channel_status="broken-ish"),
