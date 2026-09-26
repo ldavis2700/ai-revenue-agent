@@ -1564,6 +1564,34 @@ def open_ledger(path):
         FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
         FOREIGN KEY(term_id) REFERENCES recurring_pricing_terms(term_id)
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS recurring_payment_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        contract_receipt_id TEXT NOT NULL,
+        term_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        external_invoice_id TEXT NOT NULL,
+        invoice_url TEXT NOT NULL,
+        external_transaction_id TEXT NOT NULL,
+        transaction_url TEXT NOT NULL,
+        gross_amount_cents INTEGER NOT NULL,
+        fee_amount_cents INTEGER NOT NULL,
+        net_amount_cents INTEGER NOT NULL,
+        currency TEXT NOT NULL,
+        service_period_start TEXT NOT NULL,
+        service_period_end TEXT NOT NULL,
+        invoiced_at TEXT NOT NULL,
+        paid_at TEXT NOT NULL,
+        settled_at TEXT NOT NULL,
+        receipt_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(contract_receipt_id)
+          REFERENCES contract_recurring_terms(contract_receipt_id),
+        FOREIGN KEY(term_id) REFERENCES recurring_pricing_terms(term_id),
+        UNIQUE(provider, external_invoice_id),
+        UNIQUE(provider, external_transaction_id)
+    )""")
     connection.execute("""CREATE TABLE IF NOT EXISTS execution_plans (
         plan_id TEXT PRIMARY KEY,
         opportunity_id TEXT NOT NULL,
@@ -2990,6 +3018,186 @@ def record_collected_payment(path, opportunity_id, invoice_receipt_id, payment, 
                     hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
         return {"receipt_id": receipt_id, "changed": True, "state": "collected",
                 "net_amount_cents": amounts["net_amount_cents"]}
+    finally:
+        connection.close()
+
+
+def record_settled_recurring_payment(
+        path, opportunity_id, contract_receipt_id, payment, *, now=None):
+    """Record one settled recurring base-fee period; never invoice or charge."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(contract_receipt_id, str) or not contract_receipt_id.strip():
+        raise ValueError("contract_receipt_id_required")
+    if not isinstance(payment, dict):
+        raise ValueError("recurring_payment_object_required")
+    opportunity_id = opportunity_id.strip()
+    contract_receipt_id = contract_receipt_id.strip()
+    provider = _proposal_text(
+        payment.get("provider"), "recurring_payment_provider", 160)
+    external_invoice_id = _proposal_text(
+        payment.get("external_invoice_id"), "external_invoice_id", 500)
+    invoice_url = canonical_url(_proposal_text(
+        payment.get("invoice_url"), "invoice_url", 2000))
+    external_transaction_id = _proposal_text(
+        payment.get("external_transaction_id"),
+        "external_transaction_id", 500)
+    transaction_url = canonical_url(_proposal_text(
+        payment.get("transaction_url"), "transaction_url", 2000))
+    if urlsplit(invoice_url).scheme != "https":
+        raise ValueError("invoice_url_https_required")
+    if urlsplit(transaction_url).scheme != "https":
+        raise ValueError("transaction_url_https_required")
+    amounts = {}
+    for field, minimum in (("gross_amount_cents", 1), ("fee_amount_cents", 0),
+                           ("net_amount_cents", 1)):
+        value = finite_number(payment, field, minimum=minimum)
+        if not value.is_integer():
+            raise ValueError(f"{field}_invalid")
+        amounts[field] = int(value)
+    if amounts["net_amount_cents"] != (
+            amounts["gross_amount_cents"] - amounts["fee_amount_cents"]):
+        raise ValueError("payment_net_amount_mismatch")
+    currency = _proposal_text(
+        payment.get("currency"), "payment_currency", 3).upper()
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        raise ValueError("payment_currency_invalid")
+    period_start = parse_time(
+        payment.get("service_period_start"), "service_period_start")
+    period_end = parse_time(
+        payment.get("service_period_end"), "service_period_end")
+    invoiced_at = parse_time(payment.get("invoiced_at"), "invoiced_at")
+    paid_at = parse_time(payment.get("paid_at"), "paid_at")
+    settled_at = parse_time(payment.get("settled_at"), "settled_at")
+    recorded = now or utc_now()
+    if period_end <= period_start:
+        raise ValueError("service_period_invalid")
+    if not (invoiced_at <= paid_at <= settled_at):
+        raise ValueError("recurring_payment_time_order_invalid")
+    if any(value > recorded + MAX_FUTURE_SKEW for value in (
+            invoiced_at, paid_at, settled_at)):
+        raise ValueError("recurring_payment_time_future")
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            binding = connection.execute(
+                """SELECT crt.opportunity_id,crt.term_id,
+                          crt.accepted_base_fee_cents,rpt.billing_cadence,
+                          cr.provider,cr.currency,cr.contracted_at
+                   FROM contract_recurring_terms crt
+                   JOIN recurring_pricing_terms rpt ON rpt.term_id=crt.term_id
+                   JOIN contract_receipts cr
+                     ON cr.receipt_id=crt.contract_receipt_id
+                   WHERE crt.contract_receipt_id=?""",
+                (contract_receipt_id,)).fetchone()
+            if binding is None:
+                raise ValueError("accepted_recurring_terms_not_found")
+            if binding[0] != opportunity_id:
+                raise ValueError("recurring_payment_opportunity_mismatch")
+            if binding[4].casefold() != provider.casefold():
+                raise ValueError("recurring_payment_provider_mismatch")
+            if amounts["gross_amount_cents"] != binding[2]:
+                raise ValueError("recurring_payment_base_fee_mismatch")
+            if currency != binding[5]:
+                raise ValueError("recurring_payment_currency_mismatch")
+            contracted_at = parse_time(binding[6], "contracted_at")
+            if period_start < contracted_at or invoiced_at < contracted_at:
+                raise ValueError("recurring_payment_before_contract")
+            receipt = {
+                "opportunity_id": opportunity_id,
+                "contract_receipt_id": contract_receipt_id,
+                "term_id": binding[1],
+                "provider": provider,
+                "external_invoice_id": external_invoice_id,
+                "invoice_url": invoice_url,
+                "external_transaction_id": external_transaction_id,
+                "transaction_url": transaction_url,
+                **amounts,
+                "currency": currency,
+                "service_period_start": period_start.isoformat(),
+                "service_period_end": period_end.isoformat(),
+                "invoiced_at": invoiced_at.isoformat(),
+                "paid_at": paid_at.isoformat(),
+                "settled_at": settled_at.isoformat(),
+            }
+            serialized = json.dumps(
+                receipt, sort_keys=True, separators=(",", ":"))
+            receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            receipt_id = "recurpay_" + receipt_hash[:24]
+            existing = connection.execute(
+                """SELECT receipt_id,receipt_hash FROM recurring_payment_receipts
+                   WHERE provider=? AND
+                         (external_invoice_id=? OR external_transaction_id=?)""",
+                (provider, external_invoice_id,
+                 external_transaction_id)).fetchone()
+            if existing:
+                if existing[1] != receipt_hash:
+                    raise ValueError("recurring_payment_provider_id_conflict")
+                return {
+                    "receipt_id": existing[0], "changed": False,
+                    "status": "settled_recurring_collected",
+                    "gross_amount_cents": amounts["gross_amount_cents"],
+                    "net_amount_cents": amounts["net_amount_cents"],
+                }
+            overlap = connection.execute(
+                """SELECT 1 FROM recurring_payment_receipts
+                   WHERE contract_receipt_id=?
+                     AND service_period_start < ?
+                     AND service_period_end > ?""",
+                (contract_receipt_id, period_end.isoformat(),
+                 period_start.isoformat())).fetchone()
+            if overlap:
+                raise ValueError("recurring_service_period_overlap")
+            recorded_at = recorded.isoformat()
+            connection.execute(
+                """INSERT INTO recurring_payment_receipts
+                   (receipt_id,opportunity_id,contract_receipt_id,term_id,
+                    provider,external_invoice_id,invoice_url,
+                    external_transaction_id,transaction_url,
+                    gross_amount_cents,fee_amount_cents,net_amount_cents,currency,
+                    service_period_start,service_period_end,invoiced_at,paid_at,
+                    settled_at,receipt_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                    receipt_id, opportunity_id, contract_receipt_id, binding[1],
+                    provider, external_invoice_id, invoice_url,
+                    external_transaction_id, transaction_url,
+                    amounts["gross_amount_cents"], amounts["fee_amount_cents"],
+                    amounts["net_amount_cents"], currency,
+                    period_start.isoformat(), period_end.isoformat(),
+                    invoiced_at.isoformat(), paid_at.isoformat(),
+                    settled_at.isoformat(), receipt_hash, recorded_at))
+            return {
+                "receipt_id": receipt_id, "changed": True,
+                "status": "settled_recurring_collected",
+                "gross_amount_cents": amounts["gross_amount_cents"],
+                "net_amount_cents": amounts["net_amount_cents"],
+            }
+    finally:
+        connection.close()
+
+
+def summarize_settled_recurring_revenue(path, opportunity_id):
+    """Expose recurring revenue only from settled recurring-payment receipts."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    connection = open_ledger(path)
+    try:
+        row = connection.execute(
+            """SELECT COUNT(*),COALESCE(SUM(gross_amount_cents),0),
+                      COALESCE(SUM(fee_amount_cents),0),
+                      COALESCE(SUM(net_amount_cents),0)
+               FROM recurring_payment_receipts WHERE opportunity_id=?""",
+            (opportunity_id.strip(),)).fetchone()
+        return {
+            "settled_receipt_count": row[0],
+            "recurring_collected_gross_cents": row[1],
+            "recurring_collected_fee_cents": row[2],
+            "recurring_collected_net_cents": row[3],
+            "withdrawable_cents": 0,
+            "bank_received_cents": 0,
+            "status": "settled_receipts_only",
+        }
     finally:
         connection.close()
 
