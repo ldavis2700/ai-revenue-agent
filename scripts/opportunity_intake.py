@@ -576,6 +576,92 @@ def reusable_ip_assets(payload):
     return normalized
 
 
+def derive_offer_architecture(opportunity, proposal_price_cents, milestones):
+    """Build a family-specific, evidence-labeled issue #164 offer ladder."""
+    selection = opportunity.get("offer_family_selection") or {}
+    family_id = selection.get("id")
+    if not family_id:
+        return None
+    asset = OFFER_FAMILY_CATALOG.get(family_id)
+    if asset is None or selection.get("asset_hash") != payload_hash(asset):
+        raise ValueError("offer_family_asset_mismatch")
+    if selection.get("maturity") != "learned":
+        raise ValueError("offer_family_maturity_requires_ledger")
+
+    declared = set(opportunity.get("offer_phases") or [])
+    qa = asset["qa_checklist"]
+    delivery = asset["delivery_playbook"]
+    outcome_terms = None
+    if opportunity.get("outcome_pricing"):
+        outcome_terms = {
+            "opportunity_id": opportunity["id"],
+            "success_definition": opportunity["outcome_success_definition"],
+            "attribution_method": opportunity["outcome_attribution_method"],
+            "exclusions": opportunity["outcome_exclusions"],
+            "fee_cap_cents": opportunity["outcome_fee_cap_cents"],
+            "human_escalation_rule": opportunity["human_escalation_rule"],
+        }
+        outcome_terms["terms_hash"] = payload_hash(outcome_terms)
+
+    stages = [
+        {
+            "id": "diagnostic_pilot",
+            "status": ("included" if declared.intersection(
+                {"diagnostic", "pilot"}) else "recommended_not_included"),
+            "commercial_model": "fixed_bounded",
+            "scope_basis": delivery[:2],
+            "acceptance_tests": qa[:2],
+        },
+        {
+            "id": "implementation",
+            "status": ("included" if "implementation" in declared
+                       else "recommended_not_included"),
+            "commercial_model": "fixed_bounded",
+            "scope_basis": delivery[1:4],
+            "acceptance_tests": qa[:4],
+        },
+        {
+            "id": "managed_recurring",
+            "status": ("included" if "managed_recurring" in declared
+                       else "recommended_not_included"),
+            "commercial_model": "recurring_base_platform_fee",
+            "scope_basis": asset["retention_upsell"],
+            "acceptance_tests": qa[-2:],
+        },
+        {
+            "id": "outcome_component",
+            "status": ("included" if outcome_terms else "not_configured"),
+            "commercial_model": "auditable_usage_or_outcome_capped",
+            "scope_basis": ([asset["measurable_value"]]
+                            if outcome_terms else []),
+            "acceptance_tests": (
+                [qa[-1], "accepted terms hash and cap resolve before accrual"]
+                if outcome_terms else []),
+            "terms": outcome_terms,
+        },
+    ]
+    economics = dict(opportunity["unit_economics"])
+    economics.update({
+        "proposal_price_cents": int(proposal_price_cents),
+        "milestone_total_cents": sum(
+            milestone["amount_cents"] for milestone in milestones),
+        "required_input_keys": asset["economics_inputs"],
+        "evidence_status": "projected_not_collected",
+    })
+    architecture = {
+        "family_id": family_id,
+        "catalog_version": selection["catalog_version"],
+        "family_asset_hash": selection["asset_hash"],
+        "maturity": "learned",
+        "stages": stages,
+        "economics": economics,
+        "reusable_ip_target": asset["reusable_ip_target"],
+        "evidence_status": "prepared_not_contracted_not_revenue",
+    }
+    architecture["architecture_hash"] = payload_hash(architecture)
+    return architecture
+
+
 def projected_unit_economics(opportunity):
     """Return explicit projected economics; these are not collected revenue."""
     contract_value = opportunity["contract_value_cents"]
@@ -1621,6 +1707,8 @@ def prepare_proposal(path, opportunity_id, proposal, *, now=None):
                 "evidence": selection.get("evidence", []),
                 "maturity": selection.get("maturity"),
             } if selection.get("id") else None)
+            artifact["offer_architecture"] = derive_offer_architecture(
+                opportunity, int(price_cents), normalized_milestones)
             serialized = json.dumps(artifact, sort_keys=True, separators=(",", ":"))
             artifact_hash = hashlib.sha256(serialized.encode()).hexdigest()
             proposal_id = "prop_" + artifact_hash[:24]

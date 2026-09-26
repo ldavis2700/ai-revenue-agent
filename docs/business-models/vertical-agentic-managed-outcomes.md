@@ -258,3 +258,30 @@ fit score, qualification facts, evidence references, and maturity label into
 the immutable proposal artifact. All six families begin at `learned`; this
 selection does not create paid validation, a case study, a customer outcome,
 or revenue. Existing ledger-backed mastery promotion gates remain authoritative.
+
+
+## Family-specific offer architecture
+
+When a qualified offer family is selected, APEX now derives a proposal-bound
+commercial ladder from that exact catalog asset:
+
+1. a bounded fixed-price diagnostic or pilot;
+2. a bounded implementation;
+3. managed recurring operations with a base/platform fee; and
+4. an optional capped usage/outcome component.
+
+Each stage is marked as included, recommended but not included, or not
+configured. Included stages carry family-specific scope guidance and acceptance
+tests. The proposal snapshot also carries projected contribution economics,
+human operating time, required economics-input keys, the reusable-IP target,
+and an immutable architecture hash.
+
+The outcome stage is never inferred from a family selection. It appears as
+included only after intake has validated the objective success definition,
+attribution method, exclusions, fee cap, and human-escalation rule. Its terms
+hash is the same immutable hash later persisted and required at contract
+acceptance before outcome accrual.
+
+These records are labeled `prepared_not_contracted_not_revenue` and
+`projected_not_collected`. They do not create a buyer offer, contract,
+customer outcome, invoice, payment, case study, or earned mastery.
