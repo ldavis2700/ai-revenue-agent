@@ -2336,13 +2336,8 @@ def persist(result, path=DEFAULT_DB_PATH, *, now=None):
                                 evidence_id,
                                 hashlib.sha256(evidence_id.encode()).hexdigest(), now))
                         written += 1
-        return {
-            "opportunities_written": written,
-            "opportunities_unchanged": unchanged,
-            "receipts_written": receipt_writes,
-            "offer_evidence_written": offer_evidence_writes,
-            "reusable_ip_assets_written": reusable_ip_writes,
-        }
+        return {"opportunities_written": written, "opportunities_unchanged": unchanged,
+                "receipts_written": receipt_writes}
     finally:
         connection.close()
 
