@@ -3072,6 +3072,12 @@ class OpportunityIntakeTests(unittest.TestCase):
             offer_family_evidence=["github:ldavis2700/ai-revenue-agent#164"],
             offer_phases=[
                 "diagnostic", "implementation", "managed_recurring"],
+            reusable_ip_assets=[{
+                "name": "Managed integration workflow",
+                "type": "workflow",
+                "maturity": "learned",
+                "evidence": ["github:issue-164"],
+            }],
         )], now=NOW)
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "opportunities.db")
@@ -3233,6 +3239,129 @@ class OpportunityIntakeTests(unittest.TestCase):
                             "https://example.com/evidence/human-time",
                         "measured_at": NOW.isoformat(),
                     }, now=NOW))
+            second_now = NOW + timedelta(days=30)
+            second_payment = dict(
+                recurring_payment,
+                external_invoice_id="managed-invoice-2",
+                invoice_url="https://example.com/invoices/managed-2",
+                external_transaction_id="managed-payment-2",
+                transaction_url="https://example.com/payments/managed-2",
+                service_period_start=(NOW + timedelta(days=30)).isoformat(),
+                service_period_end=(NOW + timedelta(days=60)).isoformat(),
+                invoiced_at=second_now.isoformat(),
+                paid_at=second_now.isoformat(),
+                settled_at=second_now.isoformat(),
+            )
+            second_settled = (
+                opportunity_intake.record_settled_recurring_payment(
+                    path, opportunity_id, accepted["receipt_id"],
+                    second_payment, now=second_now))
+            with self.assertRaisesRegex(
+                    ValueError, "positive_recurring_contribution_required"):
+                opportunity_intake.record_recurring_growth_evidence(
+                    path, opportunity_id, second_settled["receipt_id"],
+                    "retention", {
+                        "provider": "marketplace",
+                        "external_event_id": "managed-retention-early",
+                        "evidence_url":
+                            "https://example.com/contracts/managed-retention-early",
+                        "prior_recurring_payment_receipt_id":
+                            settled["receipt_id"],
+                        "occurred_at": second_now.isoformat(),
+                    }, now=second_now)
+            second_realized = (
+                opportunity_intake.record_recurring_realized_unit_economics(
+                    path, opportunity_id, second_settled["receipt_id"], {
+                        "delivery_cost_cents": 1000,
+                        "inference_cost_cents": 500,
+                        "cac_cents": 250,
+                        "human_operating_minutes": 30,
+                        "delivery_cost_evidence_url":
+                            "https://example.com/evidence/delivery-cost-2",
+                        "inference_cost_evidence_url":
+                            "https://example.com/evidence/inference-cost-2",
+                        "cac_evidence_url":
+                            "https://example.com/evidence/cac-2",
+                        "human_time_evidence_url":
+                            "https://example.com/evidence/human-time-2",
+                        "measured_at": second_now.isoformat(),
+                    }, now=second_now))
+            retention = (
+                opportunity_intake.record_recurring_growth_evidence(
+                    path, opportunity_id, second_settled["receipt_id"],
+                    "retention", {
+                        "provider": "marketplace",
+                        "external_event_id": "managed-retention-1",
+                        "evidence_url":
+                            "https://example.com/contracts/managed-retention-1",
+                        "prior_recurring_payment_receipt_id":
+                            settled["receipt_id"],
+                        "occurred_at": second_now.isoformat(),
+                    }, now=second_now))
+            retention_duplicate = (
+                opportunity_intake.record_recurring_growth_evidence(
+                    path, opportunity_id, second_settled["receipt_id"],
+                    "retention", {
+                        "provider": "marketplace",
+                        "external_event_id": "managed-retention-1",
+                        "evidence_url":
+                            "https://example.com/contracts/managed-retention-1",
+                        "prior_recurring_payment_receipt_id":
+                            settled["receipt_id"],
+                        "occurred_at": second_now.isoformat(),
+                    }, now=second_now))
+            with self.assertRaisesRegex(
+                    ValueError, "expansion_value_growth_required"):
+                opportunity_intake.record_recurring_growth_evidence(
+                    path, opportunity_id, second_settled["receipt_id"],
+                    "expansion", {
+                        "provider": "marketplace",
+                        "external_event_id": "managed-expansion-flat",
+                        "evidence_url":
+                            "https://example.com/contracts/managed-expansion-flat",
+                        "baseline_scope": "One integration",
+                        "expanded_scope": "Two integrations",
+                        "baseline_value_cents": 50000,
+                        "expanded_value_cents": 50000,
+                        "occurred_at": second_now.isoformat(),
+                    }, now=second_now)
+            expansion = (
+                opportunity_intake.record_recurring_growth_evidence(
+                    path, opportunity_id, second_settled["receipt_id"],
+                    "expansion", {
+                        "provider": "marketplace",
+                        "external_event_id": "managed-expansion-1",
+                        "evidence_url":
+                            "https://example.com/contracts/managed-expansion-1",
+                        "baseline_scope": "One integration",
+                        "expanded_scope": "Two integrations and monitoring",
+                        "baseline_value_cents": 50000,
+                        "expanded_value_cents": 75000,
+                        "occurred_at": second_now.isoformat(),
+                    }, now=second_now))
+            connection = sqlite3.connect(path)
+            asset_id = connection.execute(
+                "SELECT asset_id FROM reusable_ip_assets").fetchone()[0]
+            connection.close()
+            paid = opportunity_intake.promote_reusable_ip_asset(
+                path, opportunity_id, asset_id, "paid_validated", {
+                    "recurring_payment_receipt_id":
+                        second_settled["receipt_id"],
+                }, now=second_now)
+            repeatable = opportunity_intake.promote_reusable_ip_asset(
+                path, opportunity_id, asset_id,
+                "repeatable_positive_margin", {
+                    "recurring_economics_id":
+                        second_realized["economics_id"],
+                }, now=second_now)
+            scale = opportunity_intake.promote_reusable_ip_asset(
+                path, opportunity_id, asset_id, "scale_candidate", {
+                    "recurring_growth_receipt_id": retention["receipt_id"],
+                }, now=second_now)
+            productized = opportunity_intake.promote_reusable_ip_asset(
+                path, opportunity_id, asset_id, "productize_candidate", {
+                    "recurring_growth_receipt_id": expansion["receipt_id"],
+                }, now=second_now)
             connection = sqlite3.connect(path)
             binding = connection.execute(
                 """SELECT term_id,accepted_terms_hash,
@@ -3275,6 +3404,19 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(
             realized["evidence_status"],
             "realized_from_settled_recurring_payment")
+        self.assertTrue(second_settled["changed"])
+        self.assertTrue(second_realized["changed"])
+        self.assertTrue(retention["changed"])
+        self.assertFalse(retention_duplicate["changed"])
+        self.assertTrue(expansion["changed"])
+        self.assertTrue(paid["changed"])
+        self.assertTrue(repeatable["changed"])
+        self.assertTrue(scale["changed"])
+        self.assertTrue(productized["changed"])
+        self.assertEqual(productized["maturity"], "productize_candidate")
+        self.assertEqual(
+            retention["recurring_economics_id"],
+            second_realized["economics_id"])
         self.assertEqual(state, "contracted")
 
     def test_issue_164_recurring_terms_fail_closed_without_managed_contract(self):
