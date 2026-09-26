@@ -2689,5 +2689,102 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(allocations, [(event["event_id"], 20000)])
 
 
+    def test_issue_164_offer_family_catalog_is_machine_readable_and_in_sync(self):
+        catalog_path = os.path.join(
+            os.path.dirname(__file__), "..", "docs", "business-models",
+            "issue-164-offer-families.json")
+        with open(catalog_path, encoding="utf-8") as handle:
+            documented = json.load(handle)
+        self.assertEqual(documented["catalog_version"],
+                         opportunity_intake.OFFER_FAMILY_CATALOG_VERSION)
+        self.assertEqual(documented["families"],
+                         opportunity_intake.OFFER_FAMILY_CATALOG)
+        self.assertEqual(len(documented["families"]), 6)
+        required_fields = {
+            "icp", "qualification", "measurable_value", "decision_rule",
+            "delivery_playbook", "qa_checklist", "economics_inputs",
+            "retention_upsell", "reusable_ip_target", "maturity",
+        }
+        for asset in documented["families"].values():
+            self.assertEqual(set(asset), required_fields)
+            self.assertEqual(asset["maturity"], "learned")
+
+    def test_issue_164_selected_offer_family_adds_evidence_backed_fit_score(self):
+        family_id = "lead_intake_qualification_routing_booking"
+        qualification = {
+            key: True
+            for key in opportunity_intake.OFFER_FAMILY_CATALOG[
+                family_id]["qualification"]
+        }
+        item = opportunity_intake.ingest([candidate(
+            offer_family=family_id,
+            offer_family_fit_score=0.8,
+            offer_family_qualification=qualification,
+            offer_family_evidence=["github:ldavis2700/ai-revenue-agent#164"],
+        )], now=NOW)["opportunities"][0]
+        selection = item["offer_family_selection"]
+        self.assertEqual(selection["id"], family_id)
+        self.assertTrue(selection["qualified"])
+        self.assertEqual(selection["maturity"], "learned")
+        self.assertEqual(len(selection["asset_hash"]), 64)
+        self.assertEqual(item["score_components"]["offer_family_fit"], 4.8)
+
+    def test_issue_164_offer_family_qualification_fails_closed(self):
+        family_id = "support_resolution_routing"
+        qualification = {
+            key: True
+            for key in opportunity_intake.OFFER_FAMILY_CATALOG[
+                family_id]["qualification"]
+        }
+        qualification["escalation_sla_defined"] = False
+        result = opportunity_intake.ingest([candidate(
+            offer_family=family_id,
+            offer_family_fit_score=0.9,
+            offer_family_qualification=qualification,
+            offer_family_evidence=["github:ldavis2700/ai-revenue-agent#164"],
+        )], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(
+            result["rejections"][0]["reason"],
+            "offer_family_qualification_failed")
+
+    def test_issue_164_proposal_binds_selected_offer_family_snapshot(self):
+        family_id = "multi_system_operational_integration"
+        qualification = {
+            key: True
+            for key in opportunity_intake.OFFER_FAMILY_CATALOG[
+                family_id]["qualification"]
+        }
+        result = opportunity_intake.ingest([candidate(
+            offer_family=family_id,
+            offer_family_fit_score=0.95,
+            offer_family_qualification=qualification,
+            offer_family_evidence=[
+                "github:ldavis2700/ai-revenue-agent#164",
+                "artifact:authorized-system-map",
+            ],
+        )], now=NOW)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            opportunity_id = result["opportunities"][0]["id"]
+            prepared = opportunity_intake.prepare_proposal(
+                path, opportunity_id, self.proposal(), now=NOW)
+            connection = sqlite3.connect(path)
+            artifact = json.loads(connection.execute(
+                "SELECT artifact_json FROM proposal_artifacts WHERE proposal_id=?",
+                (prepared["proposal_id"],)).fetchone()[0])
+            connection.close()
+        family = artifact["offer_family"]
+        self.assertEqual(family["id"], family_id)
+        self.assertEqual(
+            family["catalog_version"],
+            opportunity_intake.OFFER_FAMILY_CATALOG_VERSION)
+        self.assertEqual(len(family["asset_hash"]), 64)
+        self.assertEqual(family["maturity"], "learned")
+        self.assertEqual(family["fit_score"], 0.95)
+        self.assertEqual(len(family["evidence"]), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
