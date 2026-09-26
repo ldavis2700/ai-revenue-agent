@@ -45,26 +45,43 @@ class MissionControlTests(unittest.TestCase):
             fee_amount_cents INTEGER NOT NULL,
             net_amount_cents INTEGER NOT NULL
         )''')
+        conn.execute('''CREATE TABLE recurring_payment_receipts (
+            receipt_id TEXT PRIMARY KEY,
+            gross_amount_cents INTEGER NOT NULL,
+            fee_amount_cents INTEGER NOT NULL,
+            net_amount_cents INTEGER NOT NULL
+        )''')
         conn.executemany('INSERT INTO events VALUES (?,?,?)', [
             ('l1', 'sent', 0), ('l1', 'sale', 100), ('l1', 'refund', 20)])
-        conn.execute("INSERT INTO payment_receipts VALUES ('payr_1',50000,2500,47500)")
+        conn.execute(
+            "INSERT INTO payment_receipts VALUES ('payr_1',50000,2500,47500)")
+        conn.execute(
+            "INSERT INTO recurring_payment_receipts "
+            "VALUES ('recurpay_1',15000,500,14500)")
         conn.commit()
         metrics = mission_control.snapshot(conn)
         conn.close()
-        self.assertEqual(metrics['sales'], 2)
-        self.assertEqual(metrics['verified_collected_payments'], 1)
-        self.assertEqual(metrics['verified_opportunity_gross_revenue'], 500)
-        self.assertEqual(metrics['verified_opportunity_fees'], 25)
-        self.assertEqual(metrics['verified_opportunity_net_revenue'], 475)
-        self.assertEqual(metrics['verified_gross_revenue'], 600)
-        self.assertEqual(metrics['verified_net_revenue'], 555)
-        self.assertEqual(mission_control.objective_score(metrics), 655)
+        self.assertEqual(metrics['sales'], 3)
+        self.assertEqual(metrics['verified_collected_payments'], 2)
+        self.assertEqual(metrics['verified_one_time_payment_receipts'], 1)
+        self.assertEqual(metrics['verified_recurring_payment_receipts'], 1)
+        self.assertEqual(metrics['verified_recurring_gross_revenue'], 150)
+        self.assertEqual(metrics['verified_recurring_fees'], 5)
+        self.assertEqual(metrics['verified_recurring_net_revenue'], 145)
+        self.assertEqual(metrics['verified_opportunity_gross_revenue'], 650)
+        self.assertEqual(metrics['verified_opportunity_fees'], 30)
+        self.assertEqual(metrics['verified_opportunity_net_revenue'], 620)
+        self.assertEqual(metrics['verified_gross_revenue'], 750)
+        self.assertEqual(metrics['verified_net_revenue'], 700)
+        self.assertEqual(mission_control.objective_score(metrics), 850)
 
     def test_missing_payment_table_remains_backward_compatible(self):
         conn = sqlite3.connect(self.path)
         metrics = mission_control.snapshot(conn)
         conn.close()
         self.assertEqual(metrics['verified_collected_payments'], 0)
+        self.assertEqual(metrics['verified_recurring_payment_receipts'], 0)
+        self.assertEqual(metrics['verified_recurring_net_revenue'], 0)
         self.assertEqual(metrics['verified_opportunity_net_revenue'], 0)
 
     def test_no_leads_prioritizes_approved_source(self):
