@@ -28,14 +28,6 @@ class MissionControlTests(unittest.TestCase):
     def test_verified_revenue_drives_score_and_plan(self):
         conn = sqlite3.connect(self.path)
         conn.execute("INSERT INTO leads VALUES ('l1', 80, 1)")
-        conn.execute('''CREATE TABLE recurring_payout_availability_receipts (
-            receipt_id TEXT PRIMARY KEY,
-            amount_cents INTEGER NOT NULL
-        )''')
-        conn.execute('''CREATE TABLE recurring_bank_receipts (
-            receipt_id TEXT PRIMARY KEY,
-            amount_cents INTEGER NOT NULL
-        )''')
         conn.executemany('INSERT INTO events VALUES (?,?,?)', [
             ('l1', 'sent', 0), ('l1', 'reply', 0), ('l1', 'interested', 0), ('l1', 'sale', 100)])
         conn.commit()
@@ -58,6 +50,14 @@ class MissionControlTests(unittest.TestCase):
             gross_amount_cents INTEGER NOT NULL,
             fee_amount_cents INTEGER NOT NULL,
             net_amount_cents INTEGER NOT NULL
+        )''')
+        conn.execute('''CREATE TABLE recurring_payout_availability_receipts (
+            receipt_id TEXT PRIMARY KEY,
+            amount_cents INTEGER NOT NULL
+        )''')
+        conn.execute('''CREATE TABLE recurring_bank_receipts (
+            receipt_id TEXT PRIMARY KEY,
+            amount_cents INTEGER NOT NULL
         )''')
         conn.executemany('INSERT INTO events VALUES (?,?,?)', [
             ('l1', 'sent', 0), ('l1', 'sale', 100), ('l1', 'refund', 20)])
