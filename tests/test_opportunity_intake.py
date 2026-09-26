@@ -2385,5 +2385,131 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(item["score_components"]["listing_freshness"], 0)
 
 
+
+    def test_issue_164_persist_rejects_self_asserted_ip_maturity(self):
+        result = opportunity_intake.ingest([candidate(
+            reusable_ip_assets=[{
+                "name": "Lead recovery workflow",
+                "type": "workflow",
+                "maturity": "productize_candidate",
+                "evidence": [
+                    "verified_payment:unresolved",
+                    "verified_margin:unresolved",
+                    "retention:unresolved",
+                    "expansion:unresolved",
+                ],
+            }],
+        )], now=NOW)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            with self.assertRaisesRegex(
+                    ValueError, "reusable_ip_promotion_requires_ledger"):
+                opportunity_intake.persist(result, path, now=NOW)
+            connection = sqlite3.connect(path)
+            count = connection.execute(
+                "SELECT COUNT(*) FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(count, 0)
+
+    def test_issue_164_ip_promotion_resolves_payment_margin_and_growth_receipts(self):
+        result = opportunity_intake.ingest([candidate(
+            reusable_ip_assets=[{
+                "name": "Lead recovery workflow",
+                "type": "workflow",
+                "maturity": "learned",
+                "evidence": ["github:issue-164"],
+            }],
+        )], now=NOW)
+        economics_evidence = {
+            "delivery_cost_cents": 20000,
+            "inference_cost_cents": 2000,
+            "cac_cents": 5000,
+            "human_operating_minutes": 120,
+            "delivery_cost_evidence_url": "https://example.com/costs/delivery",
+            "inference_cost_evidence_url": "https://example.com/costs/inference",
+            "cac_evidence_url": "https://example.com/costs/cac",
+            "human_time_evidence_url": "https://example.com/time/ledger",
+            "measured_at": (NOW + timedelta(minutes=5)).isoformat(),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            opportunity_id, payment_id = self.advance_to_collected(path)
+            connection = sqlite3.connect(path)
+            asset_id = connection.execute(
+                "SELECT asset_id FROM reusable_ip_assets").fetchone()[0]
+            connection.close()
+            economics = opportunity_intake.record_realized_unit_economics(
+                path, opportunity_id, payment_id, economics_evidence,
+                now=NOW + timedelta(minutes=5))
+            retention = opportunity_intake.record_growth_evidence(
+                path, opportunity_id, payment_id, "retention", {
+                    "provider": "marketplace",
+                    "external_event_id": "renewal-1",
+                    "evidence_url": "https://example.com/contracts/renewal-1",
+                    "occurred_at": (NOW + timedelta(minutes=6)).isoformat(),
+                }, now=NOW + timedelta(minutes=6))
+            expansion = opportunity_intake.record_growth_evidence(
+                path, opportunity_id, payment_id, "expansion", {
+                    "provider": "marketplace",
+                    "external_event_id": "expansion-1",
+                    "evidence_url": "https://example.com/contracts/expansion-1",
+                    "occurred_at": (NOW + timedelta(minutes=7)).isoformat(),
+                }, now=NOW + timedelta(minutes=7))
+
+            with self.assertRaisesRegex(
+                    ValueError, "reusable_ip_promotion_sequence_invalid"):
+                opportunity_intake.promote_reusable_ip_asset(
+                    path, opportunity_id, asset_id, "scale_candidate",
+                    {"growth_receipt_id": retention["receipt_id"]},
+                    now=NOW + timedelta(minutes=8))
+
+            paid = opportunity_intake.promote_reusable_ip_asset(
+                path, opportunity_id, asset_id, "paid_validated",
+                {"payment_receipt_id": payment_id},
+                now=NOW + timedelta(minutes=8))
+            repeatable = opportunity_intake.promote_reusable_ip_asset(
+                path, opportunity_id, asset_id, "repeatable_positive_margin",
+                {"economics_id": economics["economics_id"]},
+                now=NOW + timedelta(minutes=8))
+            scale = opportunity_intake.promote_reusable_ip_asset(
+                path, opportunity_id, asset_id, "scale_candidate",
+                {"growth_receipt_id": retention["receipt_id"]},
+                now=NOW + timedelta(minutes=8))
+            productized = opportunity_intake.promote_reusable_ip_asset(
+                path, opportunity_id, asset_id, "productize_candidate",
+                {"growth_receipt_id": expansion["receipt_id"]},
+                now=NOW + timedelta(minutes=8))
+            duplicate = opportunity_intake.promote_reusable_ip_asset(
+                path, opportunity_id, asset_id, "productize_candidate",
+                {"growth_receipt_id": expansion["receipt_id"]},
+                now=NOW + timedelta(minutes=8))
+
+            connection = sqlite3.connect(path)
+            maturity = connection.execute(
+                "SELECT maturity FROM reusable_ip_assets WHERE asset_id=?",
+                (asset_id,)).fetchone()[0]
+            promotions = connection.execute(
+                """SELECT from_maturity,to_maturity
+                   FROM reusable_ip_promotions ORDER BY rowid""").fetchall()
+            growth_count = connection.execute(
+                "SELECT COUNT(*) FROM growth_evidence_receipts").fetchone()[0]
+            connection.close()
+
+        self.assertTrue(paid["changed"])
+        self.assertTrue(repeatable["changed"])
+        self.assertTrue(scale["changed"])
+        self.assertTrue(productized["changed"])
+        self.assertFalse(duplicate["changed"])
+        self.assertEqual(maturity, "productize_candidate")
+        self.assertEqual(promotions, [
+            ("learned", "paid_validated"),
+            ("paid_validated", "repeatable_positive_margin"),
+            ("repeatable_positive_margin", "scale_candidate"),
+            ("scale_candidate", "productize_candidate"),
+        ])
+        self.assertEqual(growth_count, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -176,3 +176,24 @@ The record does not advance collected funds to withdrawable or received. A
 payment can have only one realized-economics record; conflicting replacement
 evidence fails closed and requires reconciliation rather than silent rewriting.
 
+## Ledger-backed reusable-IP promotion
+
+Reusable-IP maturity is now a ledger operation, not an intake claim. Intake may
+capture an asset only at `learned`; persistence rejects higher self-asserted
+maturity even when reference-shaped strings are supplied.
+
+Promotion is sequential and evidence-resolved:
+
+- `paid_validated` requires a settled payment receipt for the same opportunity.
+- `repeatable_positive_margin` requires realized unit economics for that
+  opportunity with positive contribution.
+- `scale_candidate` requires a retention receipt linked to the settled payment.
+- `productize_candidate` requires an expansion receipt linked to the settled
+  payment.
+
+Each promotion receives its own immutable receipt and evidence hash. Retention
+and expansion evidence also carry provider event identifiers, HTTPS evidence,
+timestamps after settlement, and conflict detection. This prevents a standalone
+`verified_payment:`, `retention:`, or `expansion:` string from promoting an
+asset or overstating mastery.
+
