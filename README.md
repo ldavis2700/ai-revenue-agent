@@ -77,6 +77,10 @@ margin and revenue/contribution per required human hour only from one settled
 recurring receipt plus separately evidenced delivery, inference/API, CAC, and
 human-time costs. Mission Control consolidates one-time and recurring settled
 receipts exactly once and exposes recurring totals separately.
+Recurring withdrawable balance and money actually received require their own
+provider-balance and bank-transfer evidence, exact settled-net/currency
+reconciliation, ordered timestamps, and idempotent external IDs. These later
+stages are reported independently and never increase collected revenue again.
 
 ## Mission control
 

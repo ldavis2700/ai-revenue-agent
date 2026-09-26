@@ -1765,6 +1765,40 @@ def open_ledger(path):
         FOREIGN KEY(recurring_payment_receipt_id)
           REFERENCES recurring_payment_receipts(receipt_id)
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS recurring_payout_availability_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        recurring_payment_receipt_id TEXT NOT NULL UNIQUE,
+        provider TEXT NOT NULL,
+        external_balance_id TEXT NOT NULL,
+        evidence_url TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL,
+        currency TEXT NOT NULL,
+        available_at TEXT NOT NULL,
+        receipt_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(recurring_payment_receipt_id)
+          REFERENCES recurring_payment_receipts(receipt_id),
+        UNIQUE(provider, external_balance_id)
+    )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS recurring_bank_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        recurring_payout_receipt_id TEXT NOT NULL UNIQUE,
+        financial_institution TEXT NOT NULL,
+        external_transfer_id TEXT NOT NULL,
+        evidence_url TEXT NOT NULL,
+        amount_cents INTEGER NOT NULL,
+        currency TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        receipt_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(recurring_payout_receipt_id)
+          REFERENCES recurring_payout_availability_receipts(receipt_id),
+        UNIQUE(financial_institution, external_transfer_id)
+    )""")
     connection.execute("""CREATE TABLE IF NOT EXISTS payout_availability_receipts (
         receipt_id TEXT PRIMARY KEY,
         opportunity_id TEXT NOT NULL,
@@ -3211,14 +3245,23 @@ def summarize_settled_recurring_revenue(path, opportunity_id):
                       COALESCE(SUM(net_amount_cents),0)
                FROM recurring_payment_receipts WHERE opportunity_id=?""",
             (opportunity_id.strip(),)).fetchone()
+        withdrawable = connection.execute(
+            """SELECT COALESCE(SUM(amount_cents),0)
+               FROM recurring_payout_availability_receipts
+               WHERE opportunity_id=?""",
+            (opportunity_id.strip(),)).fetchone()[0]
+        received = connection.execute(
+            """SELECT COALESCE(SUM(amount_cents),0)
+               FROM recurring_bank_receipts WHERE opportunity_id=?""",
+            (opportunity_id.strip(),)).fetchone()[0]
         return {
             "settled_receipt_count": row[0],
             "recurring_collected_gross_cents": row[1],
             "recurring_collected_fee_cents": row[2],
             "recurring_collected_net_cents": row[3],
-            "withdrawable_cents": 0,
-            "bank_received_cents": 0,
-            "status": "settled_receipts_only",
+            "withdrawable_cents": withdrawable,
+            "bank_received_cents": received,
+            "status": "independently_verified_recurring_stages",
         }
     finally:
         connection.close()
@@ -3332,6 +3375,208 @@ def record_realized_unit_economics(
                  json.dumps(evidence, sort_keys=True, separators=(",", ":")),
                  evidence_hash, measured_at.isoformat(), recorded_at))
         return {"economics_id": economics_id, "changed": True, **normalized}
+    finally:
+        connection.close()
+
+
+def record_recurring_withdrawable_balance(
+        path, opportunity_id, recurring_payment_receipt_id, evidence, *, now=None):
+    """Record provider evidence that settled recurring net is withdrawable."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if (not isinstance(recurring_payment_receipt_id, str)
+            or not recurring_payment_receipt_id.strip()):
+        raise ValueError("recurring_payment_receipt_id_required")
+    if not isinstance(evidence, dict):
+        raise ValueError("recurring_withdrawable_evidence_object_required")
+    opportunity_id = opportunity_id.strip()
+    recurring_payment_receipt_id = recurring_payment_receipt_id.strip()
+    provider = _proposal_text(
+        evidence.get("provider"), "withdrawable_provider", 160)
+    external_id = _proposal_text(
+        evidence.get("external_balance_id"), "external_balance_id", 500)
+    evidence_url = canonical_url(_proposal_text(
+        evidence.get("evidence_url"), "withdrawable_evidence_url", 2000))
+    if urlsplit(evidence_url).scheme != "https":
+        raise ValueError("withdrawable_evidence_url_https_required")
+    amount = finite_number(evidence, "amount_cents", minimum=1)
+    if not amount.is_integer():
+        raise ValueError("amount_cents_invalid")
+    amount_cents = int(amount)
+    currency = _proposal_text(
+        evidence.get("currency"), "withdrawable_currency", 3).upper()
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        raise ValueError("withdrawable_currency_invalid")
+    available_at = parse_time(evidence.get("available_at"), "available_at")
+    recorded = now or utc_now()
+    if available_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("available_at_future")
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            payment = connection.execute(
+                """SELECT opportunity_id,provider,net_amount_cents,currency,
+                          settled_at
+                   FROM recurring_payment_receipts WHERE receipt_id=?""",
+                (recurring_payment_receipt_id,)).fetchone()
+            if payment is None:
+                raise ValueError("recurring_payment_receipt_not_found")
+            if payment[0] != opportunity_id:
+                raise ValueError("recurring_withdrawable_opportunity_mismatch")
+            if payment[1].casefold() != provider.casefold():
+                raise ValueError("recurring_withdrawable_provider_mismatch")
+            if payment[2] != amount_cents:
+                raise ValueError("recurring_withdrawable_amount_mismatch")
+            if payment[3] != currency:
+                raise ValueError("recurring_withdrawable_currency_mismatch")
+            if available_at < parse_time(payment[4], "payment_settled_at"):
+                raise ValueError("recurring_withdrawable_before_settlement")
+            normalized = {
+                "opportunity_id": opportunity_id,
+                "recurring_payment_receipt_id":
+                    recurring_payment_receipt_id,
+                "provider": provider,
+                "external_balance_id": external_id,
+                "evidence_url": evidence_url,
+                "amount_cents": amount_cents,
+                "currency": currency,
+                "available_at": available_at.isoformat(),
+            }
+            serialized = json.dumps(
+                normalized, sort_keys=True, separators=(",", ":"))
+            receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            receipt_id = "recuravail_" + receipt_hash[:24]
+            existing = connection.execute(
+                """SELECT receipt_id,receipt_hash
+                   FROM recurring_payout_availability_receipts
+                   WHERE recurring_payment_receipt_id=?
+                      OR (provider=? AND external_balance_id=?)""",
+                (recurring_payment_receipt_id, provider,
+                 external_id)).fetchone()
+            if existing:
+                if existing[1] != receipt_hash:
+                    raise ValueError(
+                        "recurring_withdrawable_evidence_conflict")
+                return {
+                    "receipt_id": existing[0], "changed": False,
+                    "status": "recurring_withdrawable_verified",
+                    "amount_cents": amount_cents}
+            connection.execute(
+                """INSERT INTO recurring_payout_availability_receipts
+                   (receipt_id,opportunity_id,recurring_payment_receipt_id,
+                    provider,external_balance_id,evidence_url,amount_cents,
+                    currency,available_at,receipt_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (
+                    receipt_id, opportunity_id,
+                    recurring_payment_receipt_id, provider, external_id,
+                    evidence_url, amount_cents, currency,
+                    available_at.isoformat(), receipt_hash,
+                    recorded.isoformat()))
+            return {
+                "receipt_id": receipt_id, "changed": True,
+                "status": "recurring_withdrawable_verified",
+                "amount_cents": amount_cents}
+    finally:
+        connection.close()
+
+
+def record_recurring_bank_receipt(
+        path, opportunity_id, recurring_payout_receipt_id, evidence, *, now=None):
+    """Record proof that recurring withdrawable funds reached the bank."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if (not isinstance(recurring_payout_receipt_id, str)
+            or not recurring_payout_receipt_id.strip()):
+        raise ValueError("recurring_payout_receipt_id_required")
+    if not isinstance(evidence, dict):
+        raise ValueError("recurring_bank_receipt_object_required")
+    opportunity_id = opportunity_id.strip()
+    recurring_payout_receipt_id = recurring_payout_receipt_id.strip()
+    institution = _proposal_text(
+        evidence.get("financial_institution"), "financial_institution", 160)
+    external_id = _proposal_text(
+        evidence.get("external_transfer_id"), "external_transfer_id", 500)
+    evidence_url = canonical_url(_proposal_text(
+        evidence.get("evidence_url"), "bank_evidence_url", 2000))
+    if urlsplit(evidence_url).scheme != "https":
+        raise ValueError("bank_evidence_url_https_required")
+    amount = finite_number(evidence, "amount_cents", minimum=1)
+    if not amount.is_integer():
+        raise ValueError("amount_cents_invalid")
+    amount_cents = int(amount)
+    currency = _proposal_text(
+        evidence.get("currency"), "bank_currency", 3).upper()
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        raise ValueError("bank_currency_invalid")
+    received_at = parse_time(evidence.get("received_at"), "received_at")
+    recorded = now or utc_now()
+    if received_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("received_at_future")
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            payout = connection.execute(
+                """SELECT opportunity_id,amount_cents,currency,available_at
+                   FROM recurring_payout_availability_receipts
+                   WHERE receipt_id=?""",
+                (recurring_payout_receipt_id,)).fetchone()
+            if payout is None:
+                raise ValueError("recurring_payout_receipt_not_found")
+            if payout[0] != opportunity_id:
+                raise ValueError("recurring_bank_opportunity_mismatch")
+            if payout[1] != amount_cents:
+                raise ValueError("recurring_bank_amount_mismatch")
+            if payout[2] != currency:
+                raise ValueError("recurring_bank_currency_mismatch")
+            if received_at < parse_time(
+                    payout[3], "recurring_payout_available_at"):
+                raise ValueError("recurring_bank_before_withdrawable")
+            normalized = {
+                "opportunity_id": opportunity_id,
+                "recurring_payout_receipt_id":
+                    recurring_payout_receipt_id,
+                "financial_institution": institution,
+                "external_transfer_id": external_id,
+                "evidence_url": evidence_url,
+                "amount_cents": amount_cents,
+                "currency": currency,
+                "received_at": received_at.isoformat(),
+            }
+            serialized = json.dumps(
+                normalized, sort_keys=True, separators=(",", ":"))
+            receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            receipt_id = "recurbank_" + receipt_hash[:24]
+            existing = connection.execute(
+                """SELECT receipt_id,receipt_hash
+                   FROM recurring_bank_receipts
+                   WHERE recurring_payout_receipt_id=?
+                      OR (financial_institution=? AND external_transfer_id=?)""",
+                (recurring_payout_receipt_id, institution,
+                 external_id)).fetchone()
+            if existing:
+                if existing[1] != receipt_hash:
+                    raise ValueError("recurring_bank_evidence_conflict")
+                return {
+                    "receipt_id": existing[0], "changed": False,
+                    "status": "recurring_bank_received_verified",
+                    "amount_cents": amount_cents}
+            connection.execute(
+                """INSERT INTO recurring_bank_receipts
+                   (receipt_id,opportunity_id,recurring_payout_receipt_id,
+                    financial_institution,external_transfer_id,evidence_url,
+                    amount_cents,currency,received_at,receipt_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (
+                    receipt_id, opportunity_id,
+                    recurring_payout_receipt_id, institution, external_id,
+                    evidence_url, amount_cents, currency,
+                    received_at.isoformat(), receipt_hash,
+                    recorded.isoformat()))
+            return {
+                "receipt_id": receipt_id, "changed": True,
+                "status": "recurring_bank_received_verified",
+                "amount_cents": amount_cents}
     finally:
         connection.close()
 
