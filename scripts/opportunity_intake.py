@@ -882,6 +882,34 @@ def open_ledger(path):
         FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
         UNIQUE(opportunity_id, asset_type, name)
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS growth_evidence_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        payment_receipt_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('retention','expansion')),
+        provider TEXT NOT NULL,
+        external_event_id TEXT NOT NULL,
+        evidence_url TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        receipt_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(payment_receipt_id) REFERENCES payment_receipts(receipt_id),
+        UNIQUE(provider, kind, external_event_id)
+    )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS reusable_ip_promotions (
+        promotion_id TEXT PRIMARY KEY,
+        asset_id TEXT NOT NULL,
+        opportunity_id TEXT NOT NULL,
+        from_maturity TEXT NOT NULL,
+        to_maturity TEXT NOT NULL,
+        evidence_json TEXT NOT NULL,
+        evidence_hash TEXT NOT NULL,
+        promoted_at TEXT NOT NULL,
+        FOREIGN KEY(asset_id) REFERENCES reusable_ip_assets(asset_id),
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        UNIQUE(asset_id, to_maturity)
+    )""")
     connection.execute("""CREATE TABLE IF NOT EXISTS opportunity_receipts (
         receipt_id TEXT PRIMARY KEY,
         opportunity_id TEXT,
@@ -2082,6 +2110,202 @@ def record_realized_unit_economics(
         connection.close()
 
 
+def record_growth_evidence(
+        path, opportunity_id, payment_receipt_id, kind, evidence, *, now=None):
+    """Record retention or expansion evidence linked to a settled payment."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(payment_receipt_id, str) or not payment_receipt_id.strip():
+        raise ValueError("payment_receipt_id_required")
+    kind = str(kind or "").strip().lower()
+    if kind not in {"retention", "expansion"}:
+        raise ValueError("growth_evidence_kind_invalid")
+    if not isinstance(evidence, dict):
+        raise ValueError("growth_evidence_object_required")
+    opportunity_id = opportunity_id.strip()
+    payment_receipt_id = payment_receipt_id.strip()
+    provider = _proposal_text(evidence.get("provider"), "growth_provider", 160)
+    external_event_id = _proposal_text(
+        evidence.get("external_event_id"), "growth_external_event_id", 500)
+    evidence_url = canonical_url(
+        _proposal_text(evidence.get("evidence_url"), "growth_evidence_url", 2000))
+    if urlsplit(evidence_url).scheme != "https":
+        raise ValueError("growth_evidence_url_https_required")
+    occurred_at = parse_time(evidence.get("occurred_at"), "growth_occurred_at")
+    recorded = now or utc_now()
+    if occurred_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("growth_occurred_at_future")
+
+    normalized = {
+        "opportunity_id": opportunity_id,
+        "payment_receipt_id": payment_receipt_id,
+        "kind": kind,
+        "provider": provider,
+        "external_event_id": external_event_id,
+        "evidence_url": evidence_url,
+        "occurred_at": occurred_at.isoformat(),
+    }
+    serialized = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+    receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    receipt_id = "grow_" + receipt_hash[:24]
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            if connection.execute(
+                    "SELECT 1 FROM opportunities WHERE id=?",
+                    (opportunity_id,)).fetchone() is None:
+                raise ValueError("opportunity_not_found")
+            payment = connection.execute(
+                """SELECT opportunity_id,settled_at FROM payment_receipts
+                   WHERE receipt_id=?""", (payment_receipt_id,)).fetchone()
+            if payment is None:
+                raise ValueError("payment_receipt_not_found")
+            if payment[0] != opportunity_id:
+                raise ValueError("growth_evidence_opportunity_mismatch")
+            if occurred_at < parse_time(payment[1], "payment_settled_at"):
+                raise ValueError("growth_evidence_before_settlement")
+            existing = connection.execute(
+                """SELECT receipt_id,receipt_hash FROM growth_evidence_receipts
+                   WHERE provider=? AND kind=? AND external_event_id=?""",
+                (provider, kind, external_event_id)).fetchone()
+            if existing:
+                if existing[1] != receipt_hash:
+                    raise ValueError("growth_evidence_conflict")
+                return {"receipt_id": existing[0], "changed": False, **normalized}
+            connection.execute(
+                """INSERT INTO growth_evidence_receipts
+                   (receipt_id,opportunity_id,payment_receipt_id,kind,provider,
+                    external_event_id,evidence_url,occurred_at,receipt_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (receipt_id, opportunity_id, payment_receipt_id, kind, provider,
+                 external_event_id, evidence_url, occurred_at.isoformat(),
+                 receipt_hash, recorded.isoformat()))
+            return {"receipt_id": receipt_id, "changed": True, **normalized}
+    finally:
+        connection.close()
+
+
+def promote_reusable_ip_asset(
+        path, opportunity_id, asset_id, target_maturity, evidence, *, now=None):
+    """Promote reusable IP only through evidence resolved from the ledger."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(asset_id, str) or not asset_id.strip():
+        raise ValueError("asset_id_required")
+    if not isinstance(evidence, dict):
+        raise ValueError("promotion_evidence_object_required")
+    opportunity_id = opportunity_id.strip()
+    asset_id = asset_id.strip()
+    target_maturity = str(target_maturity or "").strip().lower()
+    if target_maturity not in REUSABLE_IP_MATURITY or target_maturity == "learned":
+        raise ValueError("promotion_target_invalid")
+    recorded = now or utc_now()
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            asset = connection.execute(
+                """SELECT opportunity_id,maturity FROM reusable_ip_assets
+                   WHERE asset_id=?""", (asset_id,)).fetchone()
+            if asset is None:
+                raise ValueError("reusable_ip_asset_not_found")
+            if asset[0] != opportunity_id:
+                raise ValueError("reusable_ip_asset_opportunity_mismatch")
+            current = asset[1]
+            existing = connection.execute(
+                """SELECT promotion_id,evidence_json FROM reusable_ip_promotions
+                   WHERE asset_id=? AND to_maturity=?""",
+                (asset_id, target_maturity)).fetchone()
+            if current == target_maturity and existing:
+                return {
+                    "promotion_id": existing[0], "changed": False,
+                    "asset_id": asset_id, "maturity": target_maturity,
+                    "evidence": json.loads(existing[1]),
+                }
+            if REUSABLE_IP_MATURITY[target_maturity] != (
+                    REUSABLE_IP_MATURITY.get(current, -100) + 1):
+                raise ValueError("reusable_ip_promotion_sequence_invalid")
+
+            resolved = {}
+            if target_maturity == "paid_validated":
+                reference = _proposal_text(
+                    evidence.get("payment_receipt_id"), "payment_receipt_id", 160)
+                row = connection.execute(
+                    """SELECT opportunity_id FROM payment_receipts
+                       WHERE receipt_id=?""", (reference,)).fetchone()
+                if row is None:
+                    raise ValueError("payment_receipt_not_found")
+                if row[0] != opportunity_id:
+                    raise ValueError("promotion_evidence_opportunity_mismatch")
+                resolved = {"payment_receipt_id": reference}
+            elif target_maturity == "repeatable_positive_margin":
+                reference = _proposal_text(
+                    evidence.get("economics_id"), "economics_id", 160)
+                row = connection.execute(
+                    """SELECT opportunity_id,contribution_cents
+                       FROM realized_unit_economics WHERE economics_id=?""",
+                    (reference,)).fetchone()
+                if row is None:
+                    raise ValueError("realized_economics_not_found")
+                if row[0] != opportunity_id:
+                    raise ValueError("promotion_evidence_opportunity_mismatch")
+                if row[1] <= 0:
+                    raise ValueError("positive_contribution_required")
+                resolved = {"economics_id": reference}
+            else:
+                expected_kind = (
+                    "retention" if target_maturity == "scale_candidate"
+                    else "expansion")
+                reference = _proposal_text(
+                    evidence.get("growth_receipt_id"), "growth_receipt_id", 160)
+                row = connection.execute(
+                    """SELECT opportunity_id,kind FROM growth_evidence_receipts
+                       WHERE receipt_id=?""", (reference,)).fetchone()
+                if row is None:
+                    raise ValueError("growth_evidence_receipt_not_found")
+                if row[0] != opportunity_id:
+                    raise ValueError("promotion_evidence_opportunity_mismatch")
+                if row[1] != expected_kind:
+                    raise ValueError(f"{expected_kind}_evidence_required")
+                resolved = {
+                    "growth_receipt_id": reference,
+                    "growth_kind": expected_kind,
+                }
+
+            normalized = {
+                "asset_id": asset_id,
+                "opportunity_id": opportunity_id,
+                "from_maturity": current,
+                "to_maturity": target_maturity,
+                **resolved,
+            }
+            evidence_json = json.dumps(
+                normalized, sort_keys=True, separators=(",", ":"))
+            evidence_hash = hashlib.sha256(evidence_json.encode()).hexdigest()
+            promotion_id = "ipp_" + evidence_hash[:24]
+            connection.execute(
+                """INSERT INTO reusable_ip_promotions
+                   (promotion_id,asset_id,opportunity_id,from_maturity,to_maturity,
+                    evidence_json,evidence_hash,promoted_at)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (promotion_id, asset_id, opportunity_id, current, target_maturity,
+                 evidence_json, evidence_hash, recorded.isoformat()))
+            connection.execute(
+                """UPDATE reusable_ip_assets
+                   SET maturity=?,evidence_json=?,evidence_hash=?,updated_at=?
+                   WHERE asset_id=?""",
+                (target_maturity, evidence_json, evidence_hash,
+                 recorded.isoformat(), asset_id))
+            return {
+                "promotion_id": promotion_id, "changed": True,
+                "asset_id": asset_id, "maturity": target_maturity,
+                "evidence": normalized,
+            }
+    finally:
+        connection.close()
+
+
 def record_withdrawable_balance(path, opportunity_id, payment_receipt_id, evidence, *, now=None):
     """Record provider evidence that a collected payment is available to withdraw."""
     if not isinstance(opportunity_id, str) or not opportunity_id.strip():
@@ -2352,6 +2576,10 @@ def persist(result, path=DEFAULT_DB_PATH, *, now=None):
     try:
         with connection:
             for index, item in enumerate(result["opportunities"]):
+                if any(
+                        asset.get("maturity", "learned") != "learned"
+                        for asset in item.get("reusable_ip_assets", [])):
+                    raise ValueError("reusable_ip_promotion_requires_ledger")
                 serialized = json.dumps(item, sort_keys=True, separators=(",", ":"))
                 cursor = connection.execute("""INSERT INTO opportunities
                     (id,source,external_id,url,title,score,action_mode,pipeline_state,
