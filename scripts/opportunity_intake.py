@@ -1444,6 +1444,32 @@ def open_ledger(path):
         FOREIGN KEY(payment_receipt_id) REFERENCES payment_receipts(receipt_id),
         UNIQUE(provider, kind, external_event_id)
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS recurring_growth_evidence_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        recurring_payment_receipt_id TEXT NOT NULL,
+        recurring_economics_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('retention','expansion')),
+        provider TEXT NOT NULL,
+        external_event_id TEXT NOT NULL,
+        evidence_url TEXT NOT NULL,
+        prior_recurring_payment_receipt_id TEXT,
+        baseline_scope TEXT,
+        expanded_scope TEXT,
+        baseline_value_cents INTEGER,
+        expanded_value_cents INTEGER,
+        occurred_at TEXT NOT NULL,
+        receipt_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(recurring_payment_receipt_id)
+          REFERENCES recurring_payment_receipts(receipt_id),
+        FOREIGN KEY(recurring_economics_id)
+          REFERENCES recurring_realized_unit_economics(economics_id),
+        FOREIGN KEY(prior_recurring_payment_receipt_id)
+          REFERENCES recurring_payment_receipts(receipt_id),
+        UNIQUE(provider, kind, external_event_id)
+    )""")
     connection.execute("""CREATE TABLE IF NOT EXISTS reusable_ip_promotions (
         promotion_id TEXT PRIMARY KEY,
         asset_id TEXT NOT NULL,
@@ -3771,6 +3797,143 @@ def record_growth_evidence(
         connection.close()
 
 
+def record_recurring_growth_evidence(
+        path, opportunity_id, recurring_payment_receipt_id, kind, evidence,
+        *, now=None):
+    """Record ledger-backed retention or expansion from settled recurring work."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(recurring_payment_receipt_id, str) or not recurring_payment_receipt_id.strip():
+        raise ValueError("recurring_payment_receipt_id_required")
+    if not isinstance(evidence, dict):
+        raise ValueError("recurring_growth_evidence_object_required")
+    opportunity_id = opportunity_id.strip()
+    recurring_payment_receipt_id = recurring_payment_receipt_id.strip()
+    kind = str(kind or "").strip().lower()
+    if kind not in {"retention", "expansion"}:
+        raise ValueError("growth_evidence_kind_invalid")
+    provider = _proposal_text(evidence.get("provider"), "growth_provider", 160)
+    external_event_id = _proposal_text(
+        evidence.get("external_event_id"), "growth_external_event_id", 500)
+    evidence_url = canonical_url(
+        _proposal_text(evidence.get("evidence_url"), "growth_evidence_url", 2000))
+    if urlsplit(evidence_url).scheme != "https":
+        raise ValueError("growth_evidence_url_https_required")
+    occurred_at = parse_time(evidence.get("occurred_at"), "growth_occurred_at")
+    recorded = now or utc_now()
+    if occurred_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("growth_occurred_at_future")
+
+    normalized = {
+        "opportunity_id": opportunity_id,
+        "recurring_payment_receipt_id": recurring_payment_receipt_id,
+        "kind": kind,
+        "provider": provider,
+        "external_event_id": external_event_id,
+        "evidence_url": evidence_url,
+        "occurred_at": occurred_at.isoformat(),
+    }
+    connection = open_ledger(path)
+    try:
+        with connection:
+            payment = connection.execute(
+                """SELECT opportunity_id,service_period_start,
+                          service_period_end,settled_at
+                   FROM recurring_payment_receipts WHERE receipt_id=?""",
+                (recurring_payment_receipt_id,)).fetchone()
+            if payment is None:
+                raise ValueError("recurring_payment_receipt_not_found")
+            if payment[0] != opportunity_id:
+                raise ValueError("growth_evidence_opportunity_mismatch")
+            if occurred_at < parse_time(payment[3], "recurring_settled_at"):
+                raise ValueError("growth_evidence_before_settlement")
+            economics = connection.execute(
+                """SELECT economics_id,contribution_cents
+                   FROM recurring_realized_unit_economics
+                   WHERE recurring_payment_receipt_id=?""",
+                (recurring_payment_receipt_id,)).fetchone()
+            if economics is None or economics[1] <= 0:
+                raise ValueError("positive_recurring_contribution_required")
+            normalized["recurring_economics_id"] = economics[0]
+
+            prior_id = None
+            baseline_scope = None
+            expanded_scope = None
+            baseline_value = None
+            expanded_value = None
+            if kind == "retention":
+                prior_id = _proposal_text(
+                    evidence.get("prior_recurring_payment_receipt_id"),
+                    "prior_recurring_payment_receipt_id", 160)
+                if prior_id == recurring_payment_receipt_id:
+                    raise ValueError("retention_prior_receipt_invalid")
+                prior = connection.execute(
+                    """SELECT opportunity_id,service_period_end
+                       FROM recurring_payment_receipts WHERE receipt_id=?""",
+                    (prior_id,)).fetchone()
+                if prior is None:
+                    raise ValueError("prior_recurring_payment_receipt_not_found")
+                if prior[0] != opportunity_id:
+                    raise ValueError("growth_evidence_opportunity_mismatch")
+                if parse_time(payment[1], "service_period_start") < parse_time(
+                        prior[1], "prior_service_period_end"):
+                    raise ValueError("retention_subsequent_service_period_required")
+                normalized["prior_recurring_payment_receipt_id"] = prior_id
+            else:
+                baseline_scope = _proposal_text(
+                    evidence.get("baseline_scope"), "baseline_scope", 1000)
+                expanded_scope = _proposal_text(
+                    evidence.get("expanded_scope"), "expanded_scope", 1000)
+                if baseline_scope == expanded_scope:
+                    raise ValueError("expansion_scope_growth_required")
+                baseline_number = finite_number(
+                    evidence, "baseline_value_cents", minimum=0)
+                expanded_number = finite_number(
+                    evidence, "expanded_value_cents", minimum=1)
+                if not baseline_number.is_integer() or not expanded_number.is_integer():
+                    raise ValueError("expansion_value_cents_invalid")
+                baseline_value = int(baseline_number)
+                expanded_value = int(expanded_number)
+                if expanded_value <= baseline_value:
+                    raise ValueError("expansion_value_growth_required")
+                normalized.update({
+                    "baseline_scope": baseline_scope,
+                    "expanded_scope": expanded_scope,
+                    "baseline_value_cents": baseline_value,
+                    "expanded_value_cents": expanded_value,
+                })
+
+            serialized = json.dumps(
+                normalized, sort_keys=True, separators=(",", ":"))
+            receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            receipt_id = "rgrow_" + receipt_hash[:24]
+            existing = connection.execute(
+                """SELECT receipt_id,receipt_hash
+                   FROM recurring_growth_evidence_receipts
+                   WHERE provider=? AND kind=? AND external_event_id=?""",
+                (provider, kind, external_event_id)).fetchone()
+            if existing:
+                if existing[1] != receipt_hash:
+                    raise ValueError("growth_evidence_conflict")
+                return {"receipt_id": existing[0], "changed": False, **normalized}
+            connection.execute(
+                """INSERT INTO recurring_growth_evidence_receipts
+                   (receipt_id,opportunity_id,recurring_payment_receipt_id,
+                    recurring_economics_id,kind,provider,external_event_id,
+                    evidence_url,prior_recurring_payment_receipt_id,
+                    baseline_scope,expanded_scope,baseline_value_cents,
+                    expanded_value_cents,occurred_at,receipt_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (receipt_id, opportunity_id, recurring_payment_receipt_id,
+                 economics[0], kind, provider, external_event_id, evidence_url,
+                 prior_id, baseline_scope, expanded_scope, baseline_value,
+                 expanded_value, occurred_at.isoformat(), receipt_hash,
+                 recorded.isoformat()))
+            return {"receipt_id": receipt_id, "changed": True, **normalized}
+    finally:
+        connection.close()
+
+
 def promote_reusable_ip_asset(
         path, opportunity_id, asset_id, target_maturity, evidence, *, now=None):
     """Promote reusable IP only through evidence resolved from the ledger."""
@@ -3814,47 +3977,101 @@ def promote_reusable_ip_asset(
 
             resolved = {}
             if target_maturity == "paid_validated":
-                reference = _proposal_text(
-                    evidence.get("payment_receipt_id"), "payment_receipt_id", 160)
-                row = connection.execute(
-                    """SELECT opportunity_id FROM payment_receipts
-                       WHERE receipt_id=?""", (reference,)).fetchone()
+                payment_reference = evidence.get("payment_receipt_id")
+                recurring_reference = evidence.get(
+                    "recurring_payment_receipt_id")
+                if bool(payment_reference) == bool(recurring_reference):
+                    raise ValueError("exactly_one_payment_receipt_required")
+                if recurring_reference:
+                    reference = _proposal_text(
+                        recurring_reference,
+                        "recurring_payment_receipt_id", 160)
+                    row = connection.execute(
+                        """SELECT opportunity_id
+                           FROM recurring_payment_receipts
+                           WHERE receipt_id=?""", (reference,)).fetchone()
+                    missing_error = "recurring_payment_receipt_not_found"
+                    resolved_key = "recurring_payment_receipt_id"
+                else:
+                    reference = _proposal_text(
+                        payment_reference, "payment_receipt_id", 160)
+                    row = connection.execute(
+                        """SELECT opportunity_id FROM payment_receipts
+                           WHERE receipt_id=?""", (reference,)).fetchone()
+                    missing_error = "payment_receipt_not_found"
+                    resolved_key = "payment_receipt_id"
                 if row is None:
-                    raise ValueError("payment_receipt_not_found")
+                    raise ValueError(missing_error)
                 if row[0] != opportunity_id:
                     raise ValueError("promotion_evidence_opportunity_mismatch")
-                resolved = {"payment_receipt_id": reference}
+                resolved = {resolved_key: reference}
             elif target_maturity == "repeatable_positive_margin":
-                reference = _proposal_text(
-                    evidence.get("economics_id"), "economics_id", 160)
-                row = connection.execute(
-                    """SELECT opportunity_id,contribution_cents
-                       FROM realized_unit_economics WHERE economics_id=?""",
-                    (reference,)).fetchone()
+                economics_reference = evidence.get("economics_id")
+                recurring_reference = evidence.get("recurring_economics_id")
+                if bool(economics_reference) == bool(recurring_reference):
+                    raise ValueError("exactly_one_realized_economics_required")
+                if recurring_reference:
+                    reference = _proposal_text(
+                        recurring_reference, "recurring_economics_id", 160)
+                    row = connection.execute(
+                        """SELECT opportunity_id,contribution_cents
+                           FROM recurring_realized_unit_economics
+                           WHERE economics_id=?""", (reference,)).fetchone()
+                    missing_error = "recurring_realized_economics_not_found"
+                    resolved_key = "recurring_economics_id"
+                else:
+                    reference = _proposal_text(
+                        economics_reference, "economics_id", 160)
+                    row = connection.execute(
+                        """SELECT opportunity_id,contribution_cents
+                           FROM realized_unit_economics WHERE economics_id=?""",
+                        (reference,)).fetchone()
+                    missing_error = "realized_economics_not_found"
+                    resolved_key = "economics_id"
                 if row is None:
-                    raise ValueError("realized_economics_not_found")
+                    raise ValueError(missing_error)
                 if row[0] != opportunity_id:
                     raise ValueError("promotion_evidence_opportunity_mismatch")
                 if row[1] <= 0:
                     raise ValueError("positive_contribution_required")
-                resolved = {"economics_id": reference}
+                resolved = {resolved_key: reference}
             else:
                 expected_kind = (
                     "retention" if target_maturity == "scale_candidate"
                     else "expansion")
-                reference = _proposal_text(
-                    evidence.get("growth_receipt_id"), "growth_receipt_id", 160)
-                row = connection.execute(
-                    """SELECT opportunity_id,kind FROM growth_evidence_receipts
-                       WHERE receipt_id=?""", (reference,)).fetchone()
+                growth_reference = evidence.get("growth_receipt_id")
+                recurring_reference = evidence.get(
+                    "recurring_growth_receipt_id")
+                if bool(growth_reference) == bool(recurring_reference):
+                    raise ValueError("exactly_one_growth_receipt_required")
+                if recurring_reference:
+                    reference = _proposal_text(
+                        recurring_reference,
+                        "recurring_growth_receipt_id", 160)
+                    row = connection.execute(
+                        """SELECT opportunity_id,kind
+                           FROM recurring_growth_evidence_receipts
+                           WHERE receipt_id=?""", (reference,)).fetchone()
+                    missing_error = (
+                        "recurring_growth_evidence_receipt_not_found")
+                    resolved_key = "recurring_growth_receipt_id"
+                else:
+                    reference = _proposal_text(
+                        growth_reference, "growth_receipt_id", 160)
+                    row = connection.execute(
+                        """SELECT opportunity_id,kind
+                           FROM growth_evidence_receipts WHERE receipt_id=?""",
+                        (reference,)).fetchone()
+                    missing_error = "growth_evidence_receipt_not_found"
+                    resolved_key = "growth_receipt_id"
                 if row is None:
-                    raise ValueError("growth_evidence_receipt_not_found")
+                    raise ValueError(missing_error)
                 if row[0] != opportunity_id:
                     raise ValueError("promotion_evidence_opportunity_mismatch")
                 if row[1] != expected_kind:
                     raise ValueError(f"{expected_kind}_evidence_required")
                 resolved = {
-                    "growth_receipt_id": reference,
+                    resolved_key: reference,
                     "growth_kind": expected_kind,
                 }
 
