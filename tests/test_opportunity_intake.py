@@ -74,7 +74,7 @@ class OpportunityIntakeTests(unittest.TestCase):
         value.update(overrides)
         return value
 
-    def advance_to_contract(self, path):
+    def advance_to_contract(self, path, contract_overrides=None):
         result = opportunity_intake.ingest([candidate()], now=NOW)
         opportunity_id = result["opportunities"][0]["id"]
         opportunity_intake.persist(result, path, now=NOW)
@@ -87,12 +87,28 @@ class OpportunityIntakeTests(unittest.TestCase):
             "provider": "marketplace", "external_message_id": "message-789",
             "message_url": "https://example.com/messages/789",
             "received_at": NOW.isoformat()}, now=NOW)
-        contracted = opportunity_intake.record_contract(path, opportunity_id, replied["receipt_id"], {
+        contract = {
             "provider": "marketplace", "external_contract_id": "contract-321",
             "contract_url": "https://example.com/contracts/321",
             "amount_cents": 100000, "currency": "USD", "contracted_at": NOW.isoformat(),
             "terms_authority": "preapproved_standard_terms",
-            "authority_evidence_url": "https://example.com/terms/standard-v1"}, now=NOW)
+            "authority_evidence_url": "https://example.com/terms/standard-v1"}
+        connection = sqlite3.connect(path)
+        outcome_terms = connection.execute(
+            """SELECT terms_hash,fee_cap_cents FROM outcome_pricing_terms
+               WHERE opportunity_id=?""", (opportunity_id,)).fetchone()
+        connection.close()
+        if outcome_terms:
+            contract.update({
+                "outcome_terms_hash": outcome_terms[0],
+                "outcome_fee_cap_cents": outcome_terms[1],
+                "outcome_terms_acceptance_url":
+                    "https://example.com/contracts/321/outcome-terms",
+                "outcome_terms_accepted_at": NOW.isoformat(),
+            })
+        contract.update(contract_overrides or {})
+        contracted = opportunity_intake.record_contract(
+            path, opportunity_id, replied["receipt_id"], contract, now=NOW)
         return opportunity_id, contracted["receipt_id"]
 
     def advance_to_execution(self, path):
@@ -2543,6 +2559,35 @@ class OpportunityIntakeTests(unittest.TestCase):
             missing_rule["rejections"][0]["reason"],
             "outcome_human_escalation_required")
 
+    def test_issue_164_outcome_contract_rejects_unaccepted_or_changed_terms(self):
+        result = opportunity_intake.ingest([candidate(
+            outcome_pricing=True,
+            offer_phases=["outcome_pricing"],
+            outcome_success_definition="Qualified appointment attended.",
+            outcome_attribution_method="CRM event tied to approved lead ID.",
+            outcome_exclusions=["Duplicates and refunds."],
+            outcome_fee_cap_cents=25000,
+            human_escalation_defined=True,
+            human_escalation_rule="Pause disputes for owner review.",
+        )], now=NOW)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            with self.assertRaisesRegex(ValueError, "outcome_terms_hash_mismatch"):
+                self.advance_to_contract(
+                    path, contract_overrides={"outcome_terms_hash": "0" * 64})
+            connection = sqlite3.connect(path)
+            contracts = connection.execute(
+                "SELECT COUNT(*) FROM contract_receipts").fetchone()[0]
+            bindings = connection.execute(
+                "SELECT COUNT(*) FROM contract_outcome_terms").fetchone()[0]
+            state = connection.execute(
+                "SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(contracts, 0)
+        self.assertEqual(bindings, 0)
+        self.assertIn(state, {"response_received", "buyer_reply"})
+
     def test_issue_164_outcome_events_are_attributed_capped_and_invoice_bound(self):
         result = opportunity_intake.ingest([candidate(
             outcome_pricing=True,
@@ -2565,6 +2610,10 @@ class OpportunityIntakeTests(unittest.TestCase):
                 """SELECT success_definition,attribution_method,exclusions_json,
                           fee_cap_cents,human_escalation_rule,LENGTH(terms_hash)
                    FROM outcome_pricing_terms""").fetchone()
+            binding = connection.execute(
+                """SELECT accepted_fee_cap_cents,acceptance_evidence_url,
+                          LENGTH(accepted_terms_hash),LENGTH(binding_hash)
+                   FROM contract_outcome_terms""").fetchone()
             connection.close()
 
             event = opportunity_intake.record_attributed_outcome(
@@ -2632,6 +2681,8 @@ class OpportunityIntakeTests(unittest.TestCase):
             "Duplicates, test records, and refunds."])
         self.assertEqual(terms[3:], (
             25000, "Pause disputed events for owner review.", 64))
+        self.assertEqual(binding, (
+            25000, "https://example.com/contracts/321/outcome-terms", 64, 64))
         self.assertTrue(event["changed"])
         self.assertFalse(duplicate["changed"])
         self.assertEqual(invoice["outcome_fee_cents"], 20000)
