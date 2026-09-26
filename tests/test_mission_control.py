@@ -28,6 +28,14 @@ class MissionControlTests(unittest.TestCase):
     def test_verified_revenue_drives_score_and_plan(self):
         conn = sqlite3.connect(self.path)
         conn.execute("INSERT INTO leads VALUES ('l1', 80, 1)")
+        conn.execute('''CREATE TABLE recurring_payout_availability_receipts (
+            receipt_id TEXT PRIMARY KEY,
+            amount_cents INTEGER NOT NULL
+        )''')
+        conn.execute('''CREATE TABLE recurring_bank_receipts (
+            receipt_id TEXT PRIMARY KEY,
+            amount_cents INTEGER NOT NULL
+        )''')
         conn.executemany('INSERT INTO events VALUES (?,?,?)', [
             ('l1', 'sent', 0), ('l1', 'reply', 0), ('l1', 'interested', 0), ('l1', 'sale', 100)])
         conn.commit()
@@ -58,6 +66,12 @@ class MissionControlTests(unittest.TestCase):
         conn.execute(
             "INSERT INTO recurring_payment_receipts "
             "VALUES ('recurpay_1',15000,500,14500)")
+        conn.execute(
+            "INSERT INTO recurring_payout_availability_receipts "
+            "VALUES ('recuravail_1',14500)")
+        conn.execute(
+            "INSERT INTO recurring_bank_receipts "
+            "VALUES ('recurbank_1',14500)")
         conn.commit()
         metrics = mission_control.snapshot(conn)
         conn.close()
@@ -68,6 +82,9 @@ class MissionControlTests(unittest.TestCase):
         self.assertEqual(metrics['verified_recurring_gross_revenue'], 150)
         self.assertEqual(metrics['verified_recurring_fees'], 5)
         self.assertEqual(metrics['verified_recurring_net_revenue'], 145)
+        self.assertEqual(
+            metrics['verified_recurring_withdrawable_balance'], 145)
+        self.assertEqual(metrics['verified_recurring_money_received'], 145)
         self.assertEqual(metrics['verified_opportunity_gross_revenue'], 650)
         self.assertEqual(metrics['verified_opportunity_fees'], 30)
         self.assertEqual(metrics['verified_opportunity_net_revenue'], 620)
@@ -82,6 +99,8 @@ class MissionControlTests(unittest.TestCase):
         self.assertEqual(metrics['verified_collected_payments'], 0)
         self.assertEqual(metrics['verified_recurring_payment_receipts'], 0)
         self.assertEqual(metrics['verified_recurring_net_revenue'], 0)
+        self.assertEqual(metrics['verified_recurring_withdrawable_balance'], 0)
+        self.assertEqual(metrics['verified_recurring_money_received'], 0)
         self.assertEqual(metrics['verified_opportunity_net_revenue'], 0)
 
     def test_no_leads_prioritizes_approved_source(self):
