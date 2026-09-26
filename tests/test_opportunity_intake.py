@@ -240,8 +240,10 @@ class OpportunityIntakeTests(unittest.TestCase):
             offer_phases=["diagnostic", "pilot", "outcome_pricing"],
             outcome_success_definition="Qualified appointment attended.",
             outcome_attribution_method="CRM event tied to the approved lead ID.",
+            outcome_exclusions=["Duplicates, test records, and refunded appointments."],
             outcome_fee_cap_cents=250000,
             human_escalation_defined=True,
+            human_escalation_rule="Pause disputed events for owner review.",
         )
         accepted = opportunity_intake.ingest([complete], now=NOW)
         self.assertEqual(len(accepted["opportunities"]), 1)
@@ -2509,6 +2511,131 @@ class OpportunityIntakeTests(unittest.TestCase):
             ("scale_candidate", "productize_candidate"),
         ])
         self.assertEqual(growth_count, 2)
+
+
+
+    def test_issue_164_outcome_terms_require_exclusions_and_explicit_escalation(self):
+        missing_exclusions = opportunity_intake.ingest([candidate(
+            external_id="missing-exclusions",
+            outcome_pricing=True,
+            offer_phases=["outcome_pricing"],
+            outcome_success_definition="Qualified appointment attended.",
+            outcome_attribution_method="CRM event tied to approved lead ID.",
+            outcome_fee_cap_cents=25000,
+            human_escalation_defined=True,
+            human_escalation_rule="Pause disputes for owner review.",
+        )], now=NOW)
+        self.assertEqual(
+            missing_exclusions["rejections"][0]["reason"],
+            "outcome_exclusions_required")
+
+        missing_rule = opportunity_intake.ingest([candidate(
+            external_id="missing-rule",
+            outcome_pricing=True,
+            offer_phases=["outcome_pricing"],
+            outcome_success_definition="Qualified appointment attended.",
+            outcome_attribution_method="CRM event tied to approved lead ID.",
+            outcome_exclusions=["Duplicates and refunded appointments."],
+            outcome_fee_cap_cents=25000,
+            human_escalation_defined=True,
+        )], now=NOW)
+        self.assertEqual(
+            missing_rule["rejections"][0]["reason"],
+            "outcome_human_escalation_required")
+
+    def test_issue_164_outcome_events_are_attributed_capped_and_invoice_bound(self):
+        result = opportunity_intake.ingest([candidate(
+            outcome_pricing=True,
+            offer_phases=["diagnostic", "outcome_pricing"],
+            outcome_success_definition="Qualified appointment attended.",
+            outcome_attribution_method="CRM event tied to approved lead ID.",
+            outcome_exclusions=["Duplicates, test records, and refunds."],
+            outcome_fee_cap_cents=25000,
+            human_escalation_defined=True,
+            human_escalation_rule="Pause disputed events for owner review.",
+        )], now=NOW)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            opportunity_id, delivery_id = self.advance_to_delivery(path)
+            connection = sqlite3.connect(path)
+            contract_id = connection.execute(
+                "SELECT receipt_id FROM contract_receipts").fetchone()[0]
+            terms = connection.execute(
+                """SELECT success_definition,attribution_method,exclusions_json,
+                          fee_cap_cents,human_escalation_rule,LENGTH(terms_hash)
+                   FROM outcome_pricing_terms""").fetchone()
+            connection.close()
+
+            event = opportunity_intake.record_attributed_outcome(
+                path, opportunity_id, contract_id, {
+                    "provider": "marketplace",
+                    "external_event_id": "appointment-1",
+                    "evidence_url": "https://example.com/crm/appointments/1",
+                    "attribution_reference": "approved-lead-1",
+                    "units": 2,
+                    "unit_fee_cents": 10000,
+                    "occurred_at": (NOW + timedelta(seconds=30)).isoformat(),
+                }, now=NOW + timedelta(minutes=1))
+            duplicate = opportunity_intake.record_attributed_outcome(
+                path, opportunity_id, contract_id, {
+                    "provider": "marketplace",
+                    "external_event_id": "appointment-1",
+                    "evidence_url": "https://example.com/crm/appointments/1",
+                    "attribution_reference": "approved-lead-1",
+                    "units": 2,
+                    "unit_fee_cents": 10000,
+                    "occurred_at": (NOW + timedelta(seconds=30)).isoformat(),
+                }, now=NOW + timedelta(minutes=1))
+            with self.assertRaisesRegex(ValueError, "outcome_fee_cap_exceeded"):
+                opportunity_intake.record_attributed_outcome(
+                    path, opportunity_id, contract_id, {
+                        "provider": "marketplace",
+                        "external_event_id": "appointment-2",
+                        "evidence_url": "https://example.com/crm/appointments/2",
+                        "attribution_reference": "approved-lead-2",
+                        "units": 1,
+                        "unit_fee_cents": 10000,
+                        "occurred_at": (NOW + timedelta(seconds=40)).isoformat(),
+                    }, now=NOW + timedelta(minutes=1))
+
+            invoice_base = {
+                "provider": "marketplace",
+                "external_invoice_id": "invoice-outcome-1",
+                "invoice_url": "https://example.com/invoices/outcome-1",
+                "amount_cents": 100000,
+                "outcome_fee_cents": 20000,
+                "currency": "USD",
+                "issued_at": (NOW + timedelta(minutes=2)).isoformat(),
+                "due_at": (NOW + timedelta(days=7)).isoformat(),
+            }
+            with self.assertRaisesRegex(
+                    ValueError, "attributed_outcome_event_not_found"):
+                opportunity_intake.record_invoice(
+                    path, opportunity_id, delivery_id,
+                    dict(invoice_base, outcome_event_ids=["oute_missing"]),
+                    now=NOW + timedelta(minutes=2))
+            invoice = opportunity_intake.record_invoice(
+                path, opportunity_id, delivery_id,
+                dict(invoice_base, outcome_event_ids=[event["event_id"]]),
+                now=NOW + timedelta(minutes=2))
+            connection = sqlite3.connect(path)
+            allocations = connection.execute(
+                """SELECT event_id,outcome_fee_cents
+                   FROM invoice_outcome_events""").fetchall()
+            connection.close()
+
+        self.assertEqual(terms[:2], (
+            "Qualified appointment attended.",
+            "CRM event tied to approved lead ID."))
+        self.assertEqual(json.loads(terms[2]), [
+            "Duplicates, test records, and refunds."])
+        self.assertEqual(terms[3:], (
+            25000, "Pause disputed events for owner review.", 64))
+        self.assertTrue(event["changed"])
+        self.assertFalse(duplicate["changed"])
+        self.assertEqual(invoice["outcome_fee_cents"], 20000)
+        self.assertEqual(allocations, [(event["event_id"], 20000)])
 
 
 if __name__ == "__main__":
