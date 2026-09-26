@@ -3154,6 +3154,48 @@ class OpportunityIntakeTests(unittest.TestCase):
                         invoice_url="https://example.com/invoices/managed-overlap",
                         transaction_url="https://example.com/payments/managed-overlap",
                     ), now=NOW)
+            withdrawable = (
+                opportunity_intake.record_recurring_withdrawable_balance(
+                    path, opportunity_id, settled["receipt_id"], {
+                        "provider": "marketplace",
+                        "external_balance_id": "managed-balance-1",
+                        "evidence_url":
+                            "https://example.com/balances/managed-1",
+                        "amount_cents": 14500,
+                        "currency": "USD",
+                        "available_at": NOW.isoformat(),
+                    }, now=NOW))
+            withdrawable_duplicate = (
+                opportunity_intake.record_recurring_withdrawable_balance(
+                    path, opportunity_id, settled["receipt_id"], {
+                        "provider": "marketplace",
+                        "external_balance_id": "managed-balance-1",
+                        "evidence_url":
+                            "https://example.com/balances/managed-1",
+                        "amount_cents": 14500,
+                        "currency": "USD",
+                        "available_at": NOW.isoformat(),
+                    }, now=NOW))
+            bank = opportunity_intake.record_recurring_bank_receipt(
+                path, opportunity_id, withdrawable["receipt_id"], {
+                    "financial_institution": "Owner Bank",
+                    "external_transfer_id": "managed-transfer-1",
+                    "evidence_url":
+                        "https://example.com/bank/managed-transfer-1",
+                    "amount_cents": 14500,
+                    "currency": "USD",
+                    "received_at": NOW.isoformat(),
+                }, now=NOW)
+            bank_duplicate = opportunity_intake.record_recurring_bank_receipt(
+                path, opportunity_id, withdrawable["receipt_id"], {
+                    "financial_institution": "Owner Bank",
+                    "external_transfer_id": "managed-transfer-1",
+                    "evidence_url":
+                        "https://example.com/bank/managed-transfer-1",
+                    "amount_cents": 14500,
+                    "currency": "USD",
+                    "received_at": NOW.isoformat(),
+                }, now=NOW)
             recurring_revenue = (
                 opportunity_intake.summarize_settled_recurring_revenue(
                     path, opportunity_id))
@@ -3215,10 +3257,14 @@ class OpportunityIntakeTests(unittest.TestCase):
             "recurring_collected_gross_cents": 15000,
             "recurring_collected_fee_cents": 500,
             "recurring_collected_net_cents": 14500,
-            "withdrawable_cents": 0,
-            "bank_received_cents": 0,
-            "status": "settled_receipts_only",
+            "withdrawable_cents": 14500,
+            "bank_received_cents": 14500,
+            "status": "independently_verified_recurring_stages",
         })
+        self.assertTrue(withdrawable["changed"])
+        self.assertFalse(withdrawable_duplicate["changed"])
+        self.assertTrue(bank["changed"])
+        self.assertFalse(bank_duplicate["changed"])
         self.assertTrue(realized["changed"])
         self.assertFalse(realized_duplicate["changed"])
         self.assertEqual(realized["net_collected_cents"], 14500)
