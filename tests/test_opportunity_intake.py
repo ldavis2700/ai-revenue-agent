@@ -2786,5 +2786,125 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(len(family["evidence"]), 2)
 
 
+    def test_issue_164_offer_architecture_binds_ladder_qa_and_economics(self):
+        family_id = "back_office_document_data_workflows"
+        qualification = {
+            key: True
+            for key in opportunity_intake.OFFER_FAMILY_CATALOG[
+                family_id]["qualification"]
+        }
+        result = opportunity_intake.ingest([candidate(
+            offer_family=family_id,
+            offer_family_fit_score=0.9,
+            offer_family_qualification=qualification,
+            offer_family_evidence=["github:ldavis2700/ai-revenue-agent#164"],
+            offer_phases=[
+                "diagnostic", "implementation", "managed_recurring"],
+            contract_value_cents=100000,
+            delivery_cost_cents=20000,
+            inference_cost_cents=5000,
+            cac_cents=3000,
+            human_operating_hours=4,
+        )], now=NOW)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            opportunity_id = result["opportunities"][0]["id"]
+            prepared = opportunity_intake.prepare_proposal(
+                path, opportunity_id, self.proposal(), now=NOW)
+            connection = sqlite3.connect(path)
+            artifact = json.loads(connection.execute(
+                "SELECT artifact_json FROM proposal_artifacts WHERE proposal_id=?",
+                (prepared["proposal_id"],)).fetchone()[0])
+            connection.close()
+        architecture = artifact["offer_architecture"]
+        self.assertEqual(architecture["family_id"], family_id)
+        self.assertEqual(architecture["maturity"], "learned")
+        self.assertEqual(
+            architecture["evidence_status"],
+            "prepared_not_contracted_not_revenue")
+        self.assertEqual(len(architecture["architecture_hash"]), 64)
+        stages = {stage["id"]: stage for stage in architecture["stages"]}
+        self.assertEqual(stages["diagnostic_pilot"]["status"], "included")
+        self.assertEqual(stages["implementation"]["status"], "included")
+        self.assertEqual(stages["managed_recurring"]["status"], "included")
+        self.assertEqual(stages["outcome_component"]["status"], "not_configured")
+        self.assertTrue(all(
+            stage["acceptance_tests"]
+            for stage in architecture["stages"]
+            if stage["status"] == "included"))
+        self.assertEqual(
+            architecture["economics"]["projected_contribution_cents"], 72000)
+        self.assertEqual(
+            architecture["economics"]["proposal_price_cents"], 100000)
+        self.assertEqual(
+            architecture["economics"]["evidence_status"],
+            "projected_not_collected")
+
+    def test_issue_164_outcome_offer_stage_resolves_persisted_terms_hash(self):
+        family_id = "lead_intake_qualification_routing_booking"
+        qualification = {
+            key: True
+            for key in opportunity_intake.OFFER_FAMILY_CATALOG[
+                family_id]["qualification"]
+        }
+        result = opportunity_intake.ingest([candidate(
+            offer_family=family_id,
+            offer_family_fit_score=0.95,
+            offer_family_qualification=qualification,
+            offer_family_evidence=["github:ldavis2700/ai-revenue-agent#164"],
+            offer_phases=[
+                "diagnostic", "implementation", "managed_recurring",
+                "outcome_pricing"],
+            outcome_pricing=True,
+            outcome_success_definition="Qualified appointment attended.",
+            outcome_attribution_method=(
+                "CRM event tied to an approved consented lead ID."),
+            outcome_exclusions=["Duplicates, tests, refunds, and no-shows."],
+            outcome_fee_cap_cents=25000,
+            human_escalation_defined=True,
+            human_escalation_rule=(
+                "Pause disputed events for documented owner review."),
+        )], now=NOW)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            opportunity_id = result["opportunities"][0]["id"]
+            prepared = opportunity_intake.prepare_proposal(
+                path, opportunity_id, self.proposal(), now=NOW)
+            connection = sqlite3.connect(path)
+            artifact = json.loads(connection.execute(
+                "SELECT artifact_json FROM proposal_artifacts WHERE proposal_id=?",
+                (prepared["proposal_id"],)).fetchone()[0])
+            persisted_hash = connection.execute(
+                "SELECT terms_hash FROM outcome_pricing_terms WHERE opportunity_id=?",
+                (opportunity_id,)).fetchone()[0]
+            connection.close()
+        stage = {
+            item["id"]: item
+            for item in artifact["offer_architecture"]["stages"]
+        }["outcome_component"]
+        self.assertEqual(stage["status"], "included")
+        self.assertEqual(stage["terms"]["terms_hash"], persisted_hash)
+        self.assertEqual(stage["terms"]["fee_cap_cents"], 25000)
+        self.assertIn("refunds", stage["terms"]["exclusions"][0])
+        self.assertTrue(stage["acceptance_tests"])
+
+    def test_issue_164_unselected_family_does_not_invent_offer_architecture(self):
+        result = opportunity_intake.ingest([candidate()], now=NOW)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            opportunity_id = result["opportunities"][0]["id"]
+            prepared = opportunity_intake.prepare_proposal(
+                path, opportunity_id, self.proposal(), now=NOW)
+            connection = sqlite3.connect(path)
+            artifact = json.loads(connection.execute(
+                "SELECT artifact_json FROM proposal_artifacts WHERE proposal_id=?",
+                (prepared["proposal_id"],)).fetchone()[0])
+            connection.close()
+        self.assertIsNone(artifact["offer_architecture"])
+
+
 if __name__ == "__main__":
     unittest.main()
