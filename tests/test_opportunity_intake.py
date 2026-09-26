@@ -365,10 +365,8 @@ class OpportunityIntakeTests(unittest.TestCase):
                           LENGTH(evidence_hash)
                    FROM reusable_ip_assets""").fetchone()
             connection.close()
-        self.assertEqual(first["offer_evidence_written"], 2)
-        self.assertEqual(first["reusable_ip_assets_written"], 1)
-        self.assertEqual(second["offer_evidence_written"], 0)
-        self.assertEqual(second["reusable_ip_assets_written"], 0)
+        self.assertEqual(first["opportunities_written"], 1)
+        self.assertEqual(second["opportunities_unchanged"], 1)
         self.assertEqual(offer_rows, [
             ("diagnostic", "github:issue-164", 64),
             ("vertical_ip", "artifact:lead-routing-eval", 64),
