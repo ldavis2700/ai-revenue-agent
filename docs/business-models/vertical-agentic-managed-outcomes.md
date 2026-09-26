@@ -197,3 +197,21 @@ timestamps after settlement, and conflict detection. This prevents a standalone
 `verified_payment:`, `retention:`, or `expansion:` string from promoting an
 asset or overstating mastery.
 
+## Auditable outcome pricing
+
+Outcome-priced work now requires immutable terms before delivery evidence can
+be billed: an objective success definition, attribution method, explicit
+exclusions, fee cap, and a written human-escalation rule. Merely setting a flag
+or supplying a free-form reference is insufficient.
+
+Attributed outcome events must resolve to those terms and the same opportunity's
+contract. Each event records a provider event ID, HTTPS evidence, attribution
+reference, integer units and unit price, and a post-contract timestamp. Duplicate
+provider events are idempotent, conflicting duplicates fail closed, and total
+recorded fees cannot exceed the approved cap.
+
+Invoices may allocate outcome fees only to uninvoiced attributed events. The
+declared outcome fee must exactly equal the selected event total, and cumulative
+allocations remain cap-bound. This records an external invoice; it does not
+create a charge or alter production billing.
+
