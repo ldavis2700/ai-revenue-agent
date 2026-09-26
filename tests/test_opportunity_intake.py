@@ -3072,6 +3072,12 @@ class OpportunityIntakeTests(unittest.TestCase):
             offer_family_evidence=["github:ldavis2700/ai-revenue-agent#164"],
             offer_phases=[
                 "diagnostic", "implementation", "managed_recurring"],
+            reusable_ip_assets=[{
+                "name": "Managed integration workflow",
+                "type": "workflow",
+                "maturity": "learned",
+                "evidence": ["github:issue-164"],
+            }],
         )], now=NOW)
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "opportunities.db")
