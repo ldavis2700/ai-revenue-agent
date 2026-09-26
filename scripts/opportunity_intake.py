@@ -44,6 +44,7 @@ PIPELINE_TRANSITIONS = {
 TERMINAL_SCREEN_REASONS = {
     "opportunity_expired", "listing_closed", "listing_filled",
     "preferred_qualifications_unmet", "marketplace_application_unavailable",
+    "location_ineligible",
     "execution_capabilities_unmet", "personal_data_authority_unverified",
     "credential_access_unsafe", "prohibited_category", "scam_signals_present",
     "deception_required", "unsolicited_contact_disallowed",
@@ -356,6 +357,7 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
             payload, "preferred_qualifications_met", default=True),
         "marketplace_application_allowed": optional_boolean_flag(
             payload, "marketplace_application_allowed"),
+        "location_eligible": optional_boolean_flag(payload, "location_eligible"),
         "direct_contract_proposal_available": optional_boolean_flag(
             payload, "direct_contract_proposal_available"),
         "application_cost_units": int(application_cost_units or 0),
@@ -402,6 +404,8 @@ def screen(opportunity):
         return False, "listing_closed"
     if opportunity["marketplace_application_allowed"] is False:
         return False, "marketplace_application_unavailable"
+    if opportunity["location_eligible"] is False:
+        return False, "location_ineligible"
     if (opportunity["positions_to_hire"] is not None
             and opportunity["hires_for_listing"] is not None
             and opportunity["hires_for_listing"] >= opportunity["positions_to_hire"]):
