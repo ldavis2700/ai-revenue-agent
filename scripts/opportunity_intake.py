@@ -662,8 +662,50 @@ def derive_offer_architecture(opportunity, proposal_price_cents, milestones):
     return architecture
 
 
+def normalize_recurring_terms(proposal, recurring_base_fee_cents):
+    """Normalize managed-service terms without accepting or billing them."""
+    value = proposal.get("recurring_terms")
+    if recurring_base_fee_cents <= 0:
+        if value is not None:
+            raise ValueError("recurring_terms_fee_required")
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("recurring_terms_required")
+    cadence = str(value.get("billing_cadence") or "").strip().lower()
+    if cadence not in {"weekly", "monthly", "quarterly", "annual"}:
+        raise ValueError("recurring_billing_cadence_invalid")
+    raw_services = value.get("included_services")
+    if not isinstance(raw_services, list) or not 1 <= len(raw_services) <= 20:
+        raise ValueError("recurring_included_services_invalid")
+    services = []
+    for service in raw_services:
+        service = _proposal_text(service, "recurring_included_service", 500)
+        if service not in services:
+            services.append(service)
+    terms = {
+        "base_fee_cents": int(recurring_base_fee_cents),
+        "billing_cadence": cadence,
+        "included_services": services,
+        "included_usage_definition": _proposal_text(
+            value.get("included_usage_definition"),
+            "recurring_included_usage_definition", 1000),
+        "support_boundaries": _proposal_text(
+            value.get("support_boundaries"), "recurring_support_boundaries", 1000),
+        "exception_boundaries": _proposal_text(
+            value.get("exception_boundaries"),
+            "recurring_exception_boundaries", 1000),
+        "renewal_terms": _proposal_text(
+            value.get("renewal_terms"), "recurring_renewal_terms", 1000),
+        "termination_terms": _proposal_text(
+            value.get("termination_terms"), "recurring_termination_terms", 1000),
+        "evidence_status": "proposed_not_accepted_not_revenue",
+    }
+    terms["terms_hash"] = payload_hash(terms)
+    return terms
+
+
 def validate_offer_pricing(architecture, milestones, fixed_price_cents,
-                           recurring_base_fee_cents):
+                           recurring_base_fee_cents, recurring_terms):
     """Bind fixed, recurring, and outcome pricing without conflating them."""
     bound = any(
         milestone.get("stage_id") or milestone.get("acceptance_criteria")
@@ -713,6 +755,8 @@ def validate_offer_pricing(architecture, milestones, fixed_price_cents,
         "fixed_stage_totals_cents": {
             key: stage_totals[key] for key in sorted(stage_totals)},
         "recurring_base_fee_cents": int(recurring_base_fee_cents),
+        "recurring_terms_hash": (
+            recurring_terms["terms_hash"] if recurring_terms else None),
         "outcome_fee_cap_cents": outcome_cap,
         "outcome_fee_in_fixed_total_cents": 0,
         "currency_timing": {
@@ -1441,6 +1485,23 @@ def open_ledger(path):
         FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
         UNIQUE(opportunity_id, artifact_hash)
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS recurring_pricing_terms (
+        term_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        proposal_id TEXT NOT NULL UNIQUE,
+        base_fee_cents INTEGER NOT NULL,
+        billing_cadence TEXT NOT NULL,
+        included_services_json TEXT NOT NULL,
+        included_usage_definition TEXT NOT NULL,
+        support_boundaries TEXT NOT NULL,
+        exception_boundaries TEXT NOT NULL,
+        renewal_terms TEXT NOT NULL,
+        termination_terms TEXT NOT NULL,
+        terms_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(proposal_id) REFERENCES proposal_artifacts(proposal_id)
+    )""")
     connection.execute("""CREATE TABLE IF NOT EXISTS submission_receipts (
         receipt_id TEXT PRIMARY KEY,
         opportunity_id TEXT NOT NULL,
@@ -1488,6 +1549,20 @@ def open_ledger(path):
         FOREIGN KEY(response_receipt_id) REFERENCES response_receipts(receipt_id),
         FOREIGN KEY(proposal_id) REFERENCES proposal_artifacts(proposal_id),
         UNIQUE(provider, external_contract_id)
+    )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS contract_recurring_terms (
+        contract_receipt_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        term_id TEXT NOT NULL,
+        accepted_terms_hash TEXT NOT NULL,
+        accepted_base_fee_cents INTEGER NOT NULL,
+        acceptance_evidence_url TEXT NOT NULL,
+        accepted_at TEXT NOT NULL,
+        binding_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(contract_receipt_id) REFERENCES contract_receipts(receipt_id),
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(term_id) REFERENCES recurring_pricing_terms(term_id)
     )""")
     connection.execute("""CREATE TABLE IF NOT EXISTS execution_plans (
         plan_id TEXT PRIMARY KEY,
@@ -1755,6 +1830,8 @@ def prepare_proposal(path, opportunity_id, proposal, *, now=None):
         raise ValueError("recurring_base_fee_cents_invalid")
     if proposal.get("outcome_fee_cents") is not None:
         raise ValueError("outcome_fee_must_remain_variable_and_capped")
+    recurring_terms = normalize_recurring_terms(
+        proposal, int(recurring_base_fee_cents))
 
     claims = proposal.get("claims", [])
     if not isinstance(claims, list) or len(claims) > 20:
@@ -1778,6 +1855,7 @@ def prepare_proposal(path, opportunity_id, proposal, *, now=None):
     artifact = {"opportunity_id": opportunity_id, "scope": scope,
                 "price_cents": int(price_cents), "milestones": normalized_milestones,
                 "recurring_base_fee_cents": int(recurring_base_fee_cents),
+                "recurring_terms": recurring_terms,
                 "claims": normalized_claims}
     created_at = (now or utc_now()).isoformat()
     connection = open_ledger(path)
@@ -1803,7 +1881,7 @@ def prepare_proposal(path, opportunity_id, proposal, *, now=None):
                 opportunity, int(price_cents), normalized_milestones)
             artifact["pricing_composition"] = validate_offer_pricing(
                 artifact["offer_architecture"], normalized_milestones,
-                int(price_cents), int(recurring_base_fee_cents))
+                int(price_cents), int(recurring_base_fee_cents), recurring_terms)
             serialized = json.dumps(artifact, sort_keys=True, separators=(",", ":"))
             artifact_hash = hashlib.sha256(serialized.encode()).hexdigest()
             proposal_id = "prop_" + artifact_hash[:24]
@@ -1822,6 +1900,27 @@ def prepare_proposal(path, opportunity_id, proposal, *, now=None):
                 (proposal_id,opportunity_id,artifact_hash,artifact_json,created_at)
                 VALUES (?,?,?,?,?)""", (
                     proposal_id, opportunity_id, artifact_hash, serialized, created_at))
+            if recurring_terms:
+                term_id = "rect_" + recurring_terms["terms_hash"][:24]
+                connection.execute(
+                    """INSERT INTO recurring_pricing_terms
+                       (term_id,opportunity_id,proposal_id,base_fee_cents,
+                        billing_cadence,included_services_json,
+                        included_usage_definition,support_boundaries,
+                        exception_boundaries,renewal_terms,termination_terms,
+                        terms_hash,recorded_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                        term_id, opportunity_id, proposal_id,
+                        recurring_terms["base_fee_cents"],
+                        recurring_terms["billing_cadence"],
+                        json.dumps(recurring_terms["included_services"],
+                                   sort_keys=True, separators=(",", ":")),
+                        recurring_terms["included_usage_definition"],
+                        recurring_terms["support_boundaries"],
+                        recurring_terms["exception_boundaries"],
+                        recurring_terms["renewal_terms"],
+                        recurring_terms["termination_terms"],
+                        recurring_terms["terms_hash"], created_at))
             opportunity["pipeline_state"] = "proposal_ready"
             connection.execute(
                 "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
@@ -2079,6 +2178,52 @@ def record_contract(path, opportunity_id, response_receipt_id, contract, *, now=
             if currency != opportunity["currency"]:
                 raise ValueError("contract_currency_mismatch")
 
+            recurring_binding = None
+            recurring_fields = (
+                "recurring_terms_hash", "recurring_base_fee_cents",
+                "recurring_terms_acceptance_url", "recurring_terms_accepted_at")
+            proposed_recurring = proposal.get("recurring_terms")
+            if proposed_recurring:
+                recurring = connection.execute(
+                    """SELECT term_id,terms_hash,base_fee_cents
+                       FROM recurring_pricing_terms WHERE proposal_id=?""",
+                    (proposal_id,)).fetchone()
+                if recurring is None:
+                    raise ValueError("recurring_pricing_terms_not_found")
+                accepted_hash = _proposal_text(
+                    contract.get("recurring_terms_hash"),
+                    "recurring_terms_hash", 64).lower()
+                if not re.fullmatch(r"[0-9a-f]{64}", accepted_hash):
+                    raise ValueError("recurring_terms_hash_invalid")
+                accepted_fee = finite_number(
+                    contract, "recurring_base_fee_cents", minimum=1)
+                if not accepted_fee.is_integer():
+                    raise ValueError("recurring_base_fee_cents_invalid")
+                acceptance_url = canonical_url(_proposal_text(
+                    contract.get("recurring_terms_acceptance_url"),
+                    "recurring_terms_acceptance_url", 2000))
+                if urlsplit(acceptance_url).scheme != "https":
+                    raise ValueError(
+                        "recurring_terms_acceptance_url_https_required")
+                accepted_at = parse_time(
+                    contract.get("recurring_terms_accepted_at"),
+                    "recurring_terms_accepted_at")
+                if accepted_at < response_at or accepted_at > contracted_at:
+                    raise ValueError("recurring_terms_acceptance_time_invalid")
+                if accepted_hash != recurring[1]:
+                    raise ValueError("recurring_terms_hash_mismatch")
+                if int(accepted_fee) != recurring[2]:
+                    raise ValueError("recurring_base_fee_mismatch")
+                recurring_binding = {
+                    "term_id": recurring[0],
+                    "accepted_terms_hash": accepted_hash,
+                    "accepted_base_fee_cents": int(accepted_fee),
+                    "acceptance_evidence_url": acceptance_url,
+                    "accepted_at": accepted_at.isoformat(),
+                }
+            elif any(contract.get(field) is not None for field in recurring_fields):
+                raise ValueError("recurring_pricing_not_configured")
+
             outcome_binding = None
             outcome_fields = (
                 "outcome_terms_hash", "outcome_fee_cap_cents",
@@ -2130,6 +2275,7 @@ def record_contract(path, opportunity_id, response_receipt_id, contract, *, now=
                        "contracted_at": contracted_at.isoformat(),
                        "terms_authority": terms_authority,
                        "authority_evidence_url": authority_url,
+                       "recurring_terms_binding": recurring_binding,
                        "outcome_terms_binding": outcome_binding}
             serialized = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
             receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
@@ -2173,6 +2319,26 @@ def record_contract(path, opportunity_id, response_receipt_id, contract, *, now=
                      outcome_binding["accepted_fee_cap_cents"],
                      outcome_binding["acceptance_evidence_url"],
                      outcome_binding["accepted_at"], binding_hash, recorded_at))
+            if recurring_binding:
+                binding = {
+                    "contract_receipt_id": receipt_id,
+                    "opportunity_id": opportunity_id,
+                    **recurring_binding,
+                }
+                binding_json = json.dumps(
+                    binding, sort_keys=True, separators=(",", ":"))
+                binding_hash = hashlib.sha256(binding_json.encode()).hexdigest()
+                connection.execute(
+                    """INSERT INTO contract_recurring_terms
+                       (contract_receipt_id,opportunity_id,term_id,
+                        accepted_terms_hash,accepted_base_fee_cents,
+                        acceptance_evidence_url,accepted_at,binding_hash,recorded_at)
+                       VALUES (?,?,?,?,?,?,?,?,?)""", (
+                        receipt_id, opportunity_id, recurring_binding["term_id"],
+                        recurring_binding["accepted_terms_hash"],
+                        recurring_binding["accepted_base_fee_cents"],
+                        recurring_binding["acceptance_evidence_url"],
+                        recurring_binding["accepted_at"], binding_hash, recorded_at))
             opportunity["pipeline_state"] = "contracted"
             connection.execute(
                 "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
@@ -2184,6 +2350,7 @@ def record_contract(path, opportunity_id, response_receipt_id, contract, *, now=
                     tid, opportunity_id, source_state, "contracted", evidence_id,
                     hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
         return {"receipt_id": receipt_id, "changed": True, "state": "contracted",
+                "recurring_terms_bound": bool(recurring_binding),
                 "outcome_terms_bound": bool(outcome_binding)}
     finally:
         connection.close()
