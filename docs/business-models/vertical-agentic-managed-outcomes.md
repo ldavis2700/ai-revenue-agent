@@ -153,7 +153,10 @@ maturity ladder is:
 5. `productize_candidate`
 
 Promotion to paid validation requires verified-payment evidence. Promotion to
-repeatable positive margin also requires verified-margin evidence. Captured
-artifacts are labeled `captured_not_revenue`; they never increase collected,
-withdrawable, or received balances.
+repeatable positive margin also requires verified-margin evidence. Scale
+candidates additionally require retention evidence; productization candidates
+require expansion evidence. Captured offer references and reusable-IP assets are
+persisted in dedicated append-safe ledger tables with stable IDs and evidence
+hashes. Captured artifacts remain labeled `captured_not_revenue`; they never
+increase collected, withdrawable, or received balances.
 
