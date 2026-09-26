@@ -186,7 +186,7 @@ def evidence_refs(values, field):
     normalized = []
     allowed_prefixes = (
         "https://", "artifact:", "github:", "verified_payment:",
-        "verified_margin:", "retention:", "delivery:", "qa:",
+        "verified_margin:", "retention:", "expansion:", "delivery:", "qa:",
     )
     for value in values:
         if not isinstance(value, str):
@@ -239,6 +239,12 @@ def reusable_ip_assets(payload):
         if REUSABLE_IP_MATURITY[maturity] >= REUSABLE_IP_MATURITY["repeatable_positive_margin"]:
             if not any(ref.startswith("verified_margin:") for ref in refs):
                 raise ValueError("reusable_ip_margin_evidence_required")
+        if REUSABLE_IP_MATURITY[maturity] >= REUSABLE_IP_MATURITY["scale_candidate"]:
+            if not any(ref.startswith("retention:") for ref in refs):
+                raise ValueError("reusable_ip_retention_evidence_required")
+        if REUSABLE_IP_MATURITY[maturity] >= REUSABLE_IP_MATURITY["productize_candidate"]:
+            if not any(ref.startswith("expansion:") for ref in refs):
+                raise ValueError("reusable_ip_expansion_evidence_required")
         normalized.append({
             "name": name,
             "type": asset_type,
@@ -852,6 +858,29 @@ def open_ledger(path):
         observed_at TEXT NOT NULL,
         payload_json TEXT NOT NULL,
         updated_at TEXT NOT NULL
+    )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS offer_phase_evidence (
+        evidence_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        phase TEXT NOT NULL,
+        reference TEXT NOT NULL,
+        evidence_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        UNIQUE(opportunity_id, phase, reference)
+    )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS reusable_ip_assets (
+        asset_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        asset_type TEXT NOT NULL,
+        maturity TEXT NOT NULL,
+        evidence_json TEXT NOT NULL,
+        evidence_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        UNIQUE(opportunity_id, asset_type, name)
     )""")
     connection.execute("""CREATE TABLE IF NOT EXISTS opportunity_receipts (
         receipt_id TEXT PRIMARY KEY,
@@ -2186,6 +2215,7 @@ def persist(result, path=DEFAULT_DB_PATH, *, now=None):
     now = (now or utc_now()).isoformat()
     connection = open_ledger(path)
     written, unchanged, receipt_writes = 0, 0, 0
+    offer_evidence_writes, reusable_ip_writes = 0, 0
     try:
         with connection:
             for index, item in enumerate(result["opportunities"]):
@@ -2209,6 +2239,42 @@ def persist(result, path=DEFAULT_DB_PATH, *, now=None):
                         item["observed_at"], serialized, now))
                 if cursor.rowcount:
                     written += 1
+                    for phase, references in item.get("offer_evidence", {}).items():
+                        for reference in references:
+                            evidence_hash = hashlib.sha256(reference.encode()).hexdigest()
+                            evidence_id = "offev_" + hashlib.sha256(
+                                f"{item['id']}|{phase}|{reference}".encode()
+                            ).hexdigest()[:24]
+                            offer_evidence_writes += connection.execute(
+                                """INSERT OR IGNORE INTO offer_phase_evidence
+                                   (evidence_id,opportunity_id,phase,reference,
+                                    evidence_hash,recorded_at)
+                                   VALUES (?,?,?,?,?,?)""",
+                                (evidence_id, item["id"], phase, reference,
+                                 evidence_hash, now),
+                            ).rowcount
+                    for asset in item.get("reusable_ip_assets", []):
+                        evidence_json = json.dumps(
+                            asset["evidence"], sort_keys=True, separators=(",", ":"))
+                        evidence_hash = hashlib.sha256(
+                            evidence_json.encode()).hexdigest()
+                        asset_id = "ip_" + hashlib.sha256(
+                            f"{item['id']}|{asset['type']}|{asset['name'].casefold()}".encode()
+                        ).hexdigest()[:24]
+                        reusable_ip_writes += connection.execute(
+                            """INSERT INTO reusable_ip_assets
+                               (asset_id,opportunity_id,name,asset_type,maturity,
+                                evidence_json,evidence_hash,recorded_at,updated_at)
+                               VALUES (?,?,?,?,?,?,?,?,?)
+                               ON CONFLICT(asset_id) DO UPDATE SET
+                                 maturity=excluded.maturity,
+                                 evidence_json=excluded.evidence_json,
+                                 evidence_hash=excluded.evidence_hash,
+                                 updated_at=excluded.updated_at""",
+                            (asset_id, item["id"], asset["name"], asset["type"],
+                             asset["maturity"], evidence_json, evidence_hash,
+                             now, now),
+                        ).rowcount
                 else:
                     unchanged += 1
                 digest = payload_hash(item)
