@@ -74,6 +74,33 @@ class OpportunityIntakeTests(unittest.TestCase):
         value.update(overrides)
         return value
 
+    def family_proposal(self, family_id, *, recurring_base_fee_cents=0,
+                        include_implementation=True, **overrides):
+        qa = opportunity_intake.OFFER_FAMILY_CATALOG[family_id]["qa_checklist"]
+        milestones = [{
+            "title": "Bounded diagnostic and pilot",
+            "deliverable": "Baseline, bounded pilot, and acceptance evidence.",
+            "amount_cents": 30000 if include_implementation else 100000,
+            "due_days": 3,
+            "stage_id": "diagnostic_pilot",
+            "acceptance_criteria": qa[:2],
+        }]
+        if include_implementation:
+            milestones.append({
+                "title": "Validated implementation",
+                "deliverable": "Tested implementation, runbook, and handoff evidence.",
+                "amount_cents": 70000,
+                "due_days": 7,
+                "stage_id": "implementation",
+                "acceptance_criteria": qa[:4],
+            })
+        value = {
+            "milestones": milestones,
+            "recurring_base_fee_cents": recurring_base_fee_cents,
+        }
+        value.update(overrides)
+        return self.proposal(**value)
+
     def advance_to_contract(self, path, contract_overrides=None):
         result = opportunity_intake.ingest([candidate()], now=NOW)
         opportunity_id = result["opportunities"][0]["id"]
@@ -2763,13 +2790,15 @@ class OpportunityIntakeTests(unittest.TestCase):
                 "github:ldavis2700/ai-revenue-agent#164",
                 "artifact:authorized-system-map",
             ],
+            offer_phases=["diagnostic", "implementation"],
         )], now=NOW)
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "opportunities.db")
             opportunity_intake.persist(result, path, now=NOW)
             opportunity_id = result["opportunities"][0]["id"]
             prepared = opportunity_intake.prepare_proposal(
-                path, opportunity_id, self.proposal(), now=NOW)
+                path, opportunity_id,
+                self.family_proposal(family_id), now=NOW)
             connection = sqlite3.connect(path)
             artifact = json.loads(connection.execute(
                 "SELECT artifact_json FROM proposal_artifacts WHERE proposal_id=?",
@@ -2811,7 +2840,9 @@ class OpportunityIntakeTests(unittest.TestCase):
             opportunity_intake.persist(result, path, now=NOW)
             opportunity_id = result["opportunities"][0]["id"]
             prepared = opportunity_intake.prepare_proposal(
-                path, opportunity_id, self.proposal(), now=NOW)
+                path, opportunity_id,
+                self.family_proposal(
+                    family_id, recurring_base_fee_cents=15000), now=NOW)
             connection = sqlite3.connect(path)
             artifact = json.loads(connection.execute(
                 "SELECT artifact_json FROM proposal_artifacts WHERE proposal_id=?",
@@ -2871,7 +2902,9 @@ class OpportunityIntakeTests(unittest.TestCase):
             opportunity_intake.persist(result, path, now=NOW)
             opportunity_id = result["opportunities"][0]["id"]
             prepared = opportunity_intake.prepare_proposal(
-                path, opportunity_id, self.proposal(), now=NOW)
+                path, opportunity_id,
+                self.family_proposal(
+                    family_id, recurring_base_fee_cents=15000), now=NOW)
             connection = sqlite3.connect(path)
             artifact = json.loads(connection.execute(
                 "SELECT artifact_json FROM proposal_artifacts WHERE proposal_id=?",
@@ -2904,6 +2937,108 @@ class OpportunityIntakeTests(unittest.TestCase):
                 (prepared["proposal_id"],)).fetchone()[0])
             connection.close()
         self.assertIsNone(artifact["offer_architecture"])
+
+
+    def test_issue_164_pricing_composition_separates_fixed_recurring_and_outcome(self):
+        family_id = "lead_intake_qualification_routing_booking"
+        qualification = {
+            key: True
+            for key in opportunity_intake.OFFER_FAMILY_CATALOG[
+                family_id]["qualification"]
+        }
+        result = opportunity_intake.ingest([candidate(
+            offer_family=family_id,
+            offer_family_fit_score=0.95,
+            offer_family_qualification=qualification,
+            offer_family_evidence=["github:ldavis2700/ai-revenue-agent#164"],
+            offer_phases=[
+                "diagnostic", "implementation", "managed_recurring",
+                "outcome_pricing"],
+            outcome_pricing=True,
+            outcome_success_definition="Qualified appointment attended.",
+            outcome_attribution_method="CRM event tied to approved lead ID.",
+            outcome_exclusions=["Duplicates, tests, refunds, and no-shows."],
+            outcome_fee_cap_cents=25000,
+            human_escalation_defined=True,
+            human_escalation_rule="Pause disputes for documented review.",
+        )], now=NOW)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            opportunity_id = result["opportunities"][0]["id"]
+            prepared = opportunity_intake.prepare_proposal(
+                path, opportunity_id, self.family_proposal(
+                    family_id, recurring_base_fee_cents=15000), now=NOW)
+            connection = sqlite3.connect(path)
+            artifact = json.loads(connection.execute(
+                "SELECT artifact_json FROM proposal_artifacts WHERE proposal_id=?",
+                (prepared["proposal_id"],)).fetchone()[0])
+            connection.close()
+        pricing = artifact["pricing_composition"]
+        self.assertEqual(pricing["fixed_one_time_total_cents"], 100000)
+        self.assertEqual(pricing["fixed_stage_totals_cents"], {
+            "diagnostic_pilot": 30000, "implementation": 70000})
+        self.assertEqual(pricing["recurring_base_fee_cents"], 15000)
+        self.assertEqual(pricing["outcome_fee_cap_cents"], 25000)
+        self.assertEqual(pricing["outcome_fee_in_fixed_total_cents"], 0)
+        self.assertEqual(
+            pricing["evidence_status"],
+            "proposed_not_contracted_not_collected")
+        self.assertEqual(len(pricing["composition_hash"]), 64)
+
+    def test_issue_164_pricing_requires_every_included_fixed_stage(self):
+        family_id = "crm_sales_ops_automation"
+        qualification = {
+            key: True
+            for key in opportunity_intake.OFFER_FAMILY_CATALOG[
+                family_id]["qualification"]
+        }
+        result = opportunity_intake.ingest([candidate(
+            offer_family=family_id,
+            offer_family_fit_score=0.85,
+            offer_family_qualification=qualification,
+            offer_family_evidence=["github:ldavis2700/ai-revenue-agent#164"],
+            offer_phases=["diagnostic", "implementation"],
+        )], now=NOW)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            opportunity_id = result["opportunities"][0]["id"]
+            with self.assertRaisesRegex(
+                    ValueError, "included_fixed_stage_milestone_required"):
+                opportunity_intake.prepare_proposal(
+                    path, opportunity_id, self.family_proposal(
+                        family_id, include_implementation=False), now=NOW)
+
+    def test_issue_164_pricing_rejects_unbound_acceptance_or_fixed_outcome_fee(self):
+        family_id = "support_resolution_routing"
+        qualification = {
+            key: True
+            for key in opportunity_intake.OFFER_FAMILY_CATALOG[
+                family_id]["qualification"]
+        }
+        result = opportunity_intake.ingest([candidate(
+            offer_family=family_id,
+            offer_family_fit_score=0.9,
+            offer_family_qualification=qualification,
+            offer_family_evidence=["github:ldavis2700/ai-revenue-agent#164"],
+            offer_phases=["diagnostic", "implementation"],
+        )], now=NOW)
+        bad = self.family_proposal(family_id)
+        bad["milestones"][0]["acceptance_criteria"] = ["Unverified ROI claim."]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            opportunity_id = result["opportunities"][0]["id"]
+            with self.assertRaisesRegex(
+                    ValueError, "milestone_acceptance_criteria_unbound"):
+                opportunity_intake.prepare_proposal(
+                    path, opportunity_id, bad, now=NOW)
+            with self.assertRaisesRegex(
+                    ValueError, "outcome_fee_must_remain_variable_and_capped"):
+                opportunity_intake.prepare_proposal(
+                    path, opportunity_id, self.family_proposal(
+                        family_id, outcome_fee_cents=1), now=NOW)
 
 
 if __name__ == "__main__":
