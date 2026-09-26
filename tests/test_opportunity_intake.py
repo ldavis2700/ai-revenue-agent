@@ -161,6 +161,105 @@ class OpportunityIntakeTests(unittest.TestCase):
         )["opportunities"][0]
         self.assertIsNone(item["location_eligible"])
 
+    def test_issue_164_projects_unit_economics_and_effective_leverage(self):
+        item = opportunity_intake.ingest([candidate(
+            contract_value_cents=500000,
+            economic_value_cents=2000000,
+            delivery_cost_cents=100000,
+            inference_cost_cents=20000,
+            cac_cents=30000,
+            human_operating_hours=5,
+            buyer_stage="buyer_reply",
+            payment_history_score=0.9,
+            measurable_outcome=True,
+            automation_potential=0.95,
+            delivery_risk=0.1,
+            compliance_risk=0.1,
+            reusable_ip_potential=0.9,
+            offer_phases=["diagnostic", "implementation", "managed_recurring"],
+        )], now=NOW)["opportunities"][0]
+        economics = item["unit_economics"]
+        self.assertEqual(economics["projected_contribution_cents"], 350000)
+        self.assertEqual(economics["projected_contribution_margin"], 0.7)
+        self.assertEqual(economics["projected_revenue_per_human_hour"], 1000.0)
+        self.assertEqual(economics["evidence_status"], "projected_not_collected")
+        self.assertGreater(item["score_components"]["active_buyer_stage"], 0)
+        self.assertGreater(item["score_components"]["effective_leverage"], 0)
+
+    def test_issue_164_buyer_intent_margin_and_reuse_change_ranking(self):
+        stronger = candidate(
+            external_id="stronger-outcome",
+            buyer_stage="interview",
+            contract_value_cents=300000,
+            economic_value_cents=1200000,
+            delivery_cost_cents=60000,
+            inference_cost_cents=10000,
+            cac_cents=10000,
+            human_operating_hours=4,
+            payment_history_score=0.9,
+            measurable_outcome=True,
+            automation_potential=0.9,
+            reusable_ip_potential=0.9,
+            recurring_value=0.9,
+            delivery_risk=0.1,
+            compliance_risk=0.1,
+        )
+        weaker = candidate(
+            external_id="weaker-outcome",
+            buyer_stage="prospect",
+            contract_value_cents=100000,
+            delivery_cost_cents=80000,
+            human_operating_hours=20,
+            payment_history_score=0.2,
+            automation_potential=0.1,
+            reusable_ip_potential=0.1,
+            recurring_value=0.1,
+            delivery_risk=0.8,
+            compliance_risk=0.8,
+        )
+        result = opportunity_intake.ingest([weaker, stronger], now=NOW)
+        self.assertEqual(
+            result["opportunities"][0]["external_id"], "stronger-outcome")
+        self.assertGreater(
+            result["opportunities"][0]["score"],
+            result["opportunities"][1]["score"])
+
+    def test_issue_164_outcome_pricing_requires_attribution_caps_and_escalation(self):
+        incomplete = candidate(
+            external_id="unsafe-outcome-pricing",
+            outcome_pricing=True,
+            offer_phases=["outcome_pricing"],
+        )
+        rejected = opportunity_intake.ingest([incomplete], now=NOW)
+        self.assertEqual(
+            rejected["rejections"][0]["reason"],
+            "outcome_success_definition_required")
+        complete = candidate(
+            external_id="safe-outcome-pricing",
+            outcome_pricing=True,
+            offer_phases=["diagnostic", "pilot", "outcome_pricing"],
+            outcome_success_definition="Qualified appointment attended.",
+            outcome_attribution_method="CRM event tied to the approved lead ID.",
+            outcome_fee_cap_cents=250000,
+            human_escalation_defined=True,
+        )
+        accepted = opportunity_intake.ingest([complete], now=NOW)
+        self.assertEqual(len(accepted["opportunities"]), 1)
+        self.assertEqual(
+            accepted["opportunities"][0]["outcome_fee_cap_cents"], 250000)
+
+    def test_issue_164_rejects_non_positive_projected_margin(self):
+        result = opportunity_intake.ingest([candidate(
+            external_id="negative-margin",
+            contract_value_cents=100000,
+            delivery_cost_cents=90000,
+            inference_cost_cents=10000,
+        )], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(
+            result["rejections"][0]["reason"],
+            "non_positive_projected_margin")
+
     def test_normalizes_and_scores_valid_candidate(self):
         result = opportunity_intake.ingest([candidate()], now=NOW)
         item = result["opportunities"][0]
