@@ -1999,6 +1999,86 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(len(receipt[6]), 64)
         self.assertEqual(evidence, "verified_payment:" + first["receipt_id"])
 
+    def test_issue_164_realized_economics_uses_settled_net_payment(self):
+        economics = {
+            "delivery_cost_cents": 20000,
+            "inference_cost_cents": 2000,
+            "cac_cents": 5000,
+            "human_operating_minutes": 120,
+            "delivery_cost_evidence_url": "https://example.com/costs/delivery",
+            "inference_cost_evidence_url": "https://example.com/costs/inference",
+            "cac_evidence_url": "https://example.com/costs/cac",
+            "human_time_evidence_url": "https://example.com/time/ledger",
+            "measured_at": (NOW + timedelta(minutes=5)).isoformat(),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, payment_id = self.advance_to_collected(path)
+            first = opportunity_intake.record_realized_unit_economics(
+                path, opportunity_id, payment_id, economics,
+                now=NOW + timedelta(minutes=5))
+            second = opportunity_intake.record_realized_unit_economics(
+                path, opportunity_id, payment_id, economics,
+                now=NOW + timedelta(minutes=5))
+            connection = sqlite3.connect(path)
+            row = connection.execute(
+                """SELECT net_collected_cents,contribution_cents,
+                          contribution_margin,revenue_per_human_hour,
+                          contribution_per_human_hour,currency,
+                          LENGTH(evidence_hash)
+                   FROM realized_unit_economics""").fetchone()
+            state = connection.execute(
+                "SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertTrue(first["changed"])
+        self.assertFalse(second["changed"])
+        self.assertEqual(first["evidence_status"], "realized_from_settled_payment")
+        self.assertEqual(first["net_collected_cents"], 97000)
+        self.assertEqual(first["contribution_cents"], 70000)
+        self.assertEqual(first["contribution_margin"], 0.721649)
+        self.assertEqual(first["revenue_per_human_hour"], 485.0)
+        self.assertEqual(first["contribution_per_human_hour"], 350.0)
+        self.assertEqual(row, (
+            97000, 70000, 0.721649, 485.0, 350.0, "USD", 64))
+        self.assertEqual(state, "collected")
+
+    def test_issue_164_realized_economics_fails_closed_without_settlement_link(self):
+        economics = {
+            "delivery_cost_cents": 0,
+            "inference_cost_cents": 0,
+            "cac_cents": 0,
+            "human_operating_minutes": 60,
+            "delivery_cost_evidence_url": "https://example.com/costs/delivery",
+            "inference_cost_evidence_url": "https://example.com/costs/inference",
+            "cac_evidence_url": "https://example.com/costs/cac",
+            "human_time_evidence_url": "https://example.com/time/ledger",
+            "measured_at": (NOW + timedelta(minutes=5)).isoformat(),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, payment_id = self.advance_to_collected(path)
+            with self.assertRaisesRegex(ValueError, "payment_receipt_not_found"):
+                opportunity_intake.record_realized_unit_economics(
+                    path, opportunity_id, "payr_missing", economics,
+                    now=NOW + timedelta(minutes=5))
+            early = dict(
+                economics,
+                measured_at=(NOW + timedelta(minutes=3)).isoformat())
+            with self.assertRaisesRegex(
+                    ValueError, "economics_measured_before_settlement"):
+                opportunity_intake.record_realized_unit_economics(
+                    path, opportunity_id, payment_id, early,
+                    now=NOW + timedelta(minutes=5))
+            opportunity_intake.record_realized_unit_economics(
+                path, opportunity_id, payment_id, economics,
+                now=NOW + timedelta(minutes=5))
+            changed = dict(economics, delivery_cost_cents=1)
+            with self.assertRaisesRegex(
+                    ValueError, "realized_economics_conflict"):
+                opportunity_intake.record_realized_unit_economics(
+                    path, opportunity_id, payment_id, changed,
+                    now=NOW + timedelta(minutes=5))
+
     def test_payment_rejects_bypass_mismatches_and_unsettled_evidence(self):
         valid = {"provider": "marketplace", "external_transaction_id": "payment-246",
                  "transaction_url": "https://example.com/payments/246",

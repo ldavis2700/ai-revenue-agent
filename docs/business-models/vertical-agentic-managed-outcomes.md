@@ -160,3 +160,19 @@ persisted in dedicated append-safe ledger tables with stable IDs and evidence
 hashes. Captured artifacts remain labeled `captured_not_revenue`; they never
 increase collected, withdrawable, or received balances.
 
+## Realized economics
+
+Projected economics never count as revenue. Realized economics may be recorded only
+against a settled payment receipt already in the collected state. Each record
+links delivery, inference/API, CAC, and human-time evidence to that payment and
+derives:
+
+- net collected revenue after provider fees;
+- realized contribution and contribution margin;
+- realized revenue per required human hour; and
+- realized contribution per required human hour.
+
+The record does not advance collected funds to withdrawable or received. A
+payment can have only one realized-economics record; conflicting replacement
+evidence fails closed and requires reconciliation rather than silent rewriting.
+
