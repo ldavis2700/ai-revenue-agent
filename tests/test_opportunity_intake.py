@@ -146,6 +146,21 @@ class OpportunityIntakeTests(unittest.TestCase):
             now=NOW + timedelta(minutes=4))
         return opportunity_id, payment["receipt_id"]
 
+    def test_explicit_location_ineligibility_is_terminal(self):
+        result = opportunity_intake.ingest(
+            [candidate(external_id="location-blocked", location_eligible=False)],
+            now=NOW,
+        )
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(result["rejections"][0]["reason"], "location_ineligible")
+
+    def test_missing_location_eligibility_remains_neutral(self):
+        item = opportunity_intake.ingest(
+            [candidate(external_id="location-unknown")],
+            now=NOW,
+        )["opportunities"][0]
+        self.assertIsNone(item["location_eligible"])
+
     def test_normalizes_and_scores_valid_candidate(self):
         result = opportunity_intake.ingest([candidate()], now=NOW)
         item = result["opportunities"][0]
