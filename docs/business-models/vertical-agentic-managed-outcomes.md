@@ -285,3 +285,24 @@ acceptance before outcome accrual.
 These records are labeled `prepared_not_contracted_not_revenue` and
 `projected_not_collected`. They do not create a buyer offer, contract,
 customer outcome, invoice, payment, case study, or earned mastery.
+
+
+## Machine-verifiable pricing composition
+
+For a selected offer family, every one-time milestone must bind to an included
+fixed-price architecture stage and carry acceptance criteria drawn from that
+stage's family-specific QA contract. Every included diagnostic/pilot or
+implementation stage must receive at least one priced milestone.
+
+The proposal artifact keeps three economic classes separate:
+
+- the one-time fixed milestone total;
+- the recurring managed-operations base fee; and
+- the optional variable outcome fee cap.
+
+A recurring base fee is required only when managed recurring operations are
+included, and it is never folded into the one-time milestone total. Outcome
+fees cannot be entered as fixed proposal amounts; the proposal records only the
+validated cap, while later invoicing still requires contract-bound attributed
+events. The composition receives its own immutable hash and remains labeled
+`proposed_not_contracted_not_collected`.
