@@ -132,3 +132,28 @@ Outcome pricing fails closed unless the opportunity defines the success event,
 attribution method, fee cap, and human-escalation rule. Non-positive projected
 contribution margin is screened out. The $1,000/hour value is a bounded
 effective-leverage scoring reference, not a promise or earnings claim.
+
+## Evidence capture and stage separation
+
+APEX records buyer progress as distinct evidence-backed states: submitted proposal,
+buyer reply, interview, offer, and contract. New marketplace receipts should name
+the exact stage; the older `response_received` state remains readable only for
+backward compatibility. A contract can follow an explicit offer, while legacy
+records retain their existing path.
+
+Offer evidence is keyed to a declared commercial phase so a diagnostic artifact
+cannot silently be presented as proof of managed recurring delivery. Reusable-IP
+assets record a name, type, maturity, and auditable evidence references. The
+maturity ladder is:
+
+1. `learned`
+2. `paid_validated`
+3. `repeatable_positive_margin`
+4. `scale_candidate`
+5. `productize_candidate`
+
+Promotion to paid validation requires verified-payment evidence. Promotion to
+repeatable positive margin also requires verified-margin evidence. Captured
+artifacts are labeled `captured_not_revenue`; they never increase collected,
+withdrawable, or received balances.
+

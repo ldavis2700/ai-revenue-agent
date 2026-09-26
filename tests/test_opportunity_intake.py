@@ -248,6 +248,106 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(
             accepted["opportunities"][0]["outcome_fee_cap_cents"], 250000)
 
+    def test_issue_164_captures_offer_and_reusable_ip_evidence(self):
+        item = opportunity_intake.ingest([candidate(
+            offer_phases=["diagnostic", "vertical_ip"],
+            offer_evidence={
+                "diagnostic": ["github:issue-164"],
+                "vertical_ip": ["artifact:lead-routing-eval"],
+            },
+            reusable_ip_assets=[{
+                "name": "Lead routing evaluator",
+                "type": "eval",
+                "maturity": "learned",
+                "evidence": ["github:issue-164"],
+            }],
+        )], now=NOW)["opportunities"][0]
+        self.assertEqual(
+            item["offer_evidence"]["diagnostic"], ["github:issue-164"])
+        self.assertEqual(item["reusable_ip_summary"], {
+            "asset_count": 1,
+            "paid_validated_count": 0,
+            "evidence_status": "captured_not_revenue",
+        })
+
+    def test_issue_164_reusable_ip_maturity_requires_payment_and_margin_evidence(self):
+        missing_payment = opportunity_intake.ingest([candidate(
+            reusable_ip_assets=[{
+                "name": "CRM connector",
+                "type": "connector",
+                "maturity": "paid_validated",
+                "evidence": ["artifact:crm-connector"],
+            }],
+        )], now=NOW)
+        self.assertEqual(
+            missing_payment["rejections"][0]["reason"],
+            "reusable_ip_paid_validation_evidence_required")
+
+        missing_margin = opportunity_intake.ingest([candidate(
+            reusable_ip_assets=[{
+                "name": "CRM connector",
+                "type": "connector",
+                "maturity": "repeatable_positive_margin",
+                "evidence": ["verified_payment:payment-1"],
+            }],
+        )], now=NOW)
+        self.assertEqual(
+            missing_margin["rejections"][0]["reason"],
+            "reusable_ip_margin_evidence_required")
+
+    def test_issue_164_offer_evidence_requires_declared_phase(self):
+        result = opportunity_intake.ingest([candidate(
+            offer_phases=["diagnostic"],
+            offer_evidence={"managed_recurring": ["artifact:runbook"]},
+        )], now=NOW)
+        self.assertEqual(
+            result["rejections"][0]["reason"],
+            "offer_evidence_phase_not_declared")
+
+    def test_issue_164_tracks_buyer_reply_interview_and_offer_separately(self):
+        result = opportunity_intake.ingest([candidate()], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            proposal = opportunity_intake.prepare_proposal(
+                path, opportunity_id, self.proposal(), now=NOW)
+            submitted = opportunity_intake.record_submission(
+                path, opportunity_id, proposal["proposal_id"], {
+                    "provider": "marketplace",
+                    "external_submission_id": "application-456",
+                    "submission_url": "https://example.com/applications/456",
+                    "submitted_at": NOW.isoformat(),
+                }, now=NOW)
+            latest = None
+            for stage, suffix in (
+                    ("buyer_reply", "reply"),
+                    ("interview", "interview"),
+                    ("offer", "offer")):
+                latest = opportunity_intake.record_response(
+                    path, opportunity_id, submitted["receipt_id"], {
+                        "provider": "marketplace",
+                        "external_message_id": "message-" + suffix,
+                        "message_url": "https://example.com/messages/" + suffix,
+                        "received_at": NOW.isoformat(),
+                        "stage": stage,
+                    }, now=NOW)
+                self.assertEqual(latest["state"], stage)
+            connection = sqlite3.connect(path)
+            states = [row[0] for row in connection.execute(
+                """SELECT to_state FROM opportunity_transitions
+                   WHERE to_state IN ('buyer_reply','interview','offer')
+                   ORDER BY rowid""").fetchall()]
+            evidence = [row[0] for row in connection.execute(
+                """SELECT evidence_id FROM opportunity_transitions
+                   WHERE to_state IN ('buyer_reply','interview','offer')
+                   ORDER BY rowid""").fetchall()]
+            connection.close()
+        self.assertEqual(states, ["buyer_reply", "interview", "offer"])
+        self.assertTrue(evidence[0].startswith("reply:"))
+        self.assertTrue(evidence[1].startswith("interview:"))
+        self.assertTrue(evidence[2].startswith("offer:"))
+
     def test_issue_164_rejects_non_positive_projected_margin(self):
         result = opportunity_intake.ingest([candidate(
             external_id="negative-margin",

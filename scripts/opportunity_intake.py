@@ -40,12 +40,30 @@ OFFER_PHASES = {
     "diagnostic", "pilot", "implementation", "managed_recurring",
     "outcome_pricing", "vertical_ip", "productized_agent_saas",
 }
+REUSABLE_IP_TYPES = {
+    "workflow", "connector", "eval", "playbook", "prompt",
+    "code_component", "dataset",
+}
+REUSABLE_IP_MATURITY = {
+    "learned": 0,
+    "paid_validated": 1,
+    "repeatable_positive_margin": 2,
+    "scale_candidate": 3,
+    "productize_candidate": 4,
+}
+BUYER_EVENT_STATES = {
+    "response_received",  # Legacy compatibility; new evidence should be explicit.
+    "buyer_reply", "interview", "offer",
+}
 PIPELINE_TRANSITIONS = {
     "payment_rail_blocked": {"qualified", "unqualified", "expired"},
     "qualified": {"proposal_ready", "unqualified", "expired"},
     "proposal_ready": {"submitted", "unqualified", "expired"},
-    "submitted": {"response_received", "unqualified", "expired"},
-    "response_received": {"contracted", "unqualified"},
+    "submitted": BUYER_EVENT_STATES | {"unqualified", "expired"},
+    "response_received": {"buyer_reply", "interview", "offer", "contracted", "unqualified"},
+    "buyer_reply": {"interview", "offer", "unqualified"},
+    "interview": {"offer", "unqualified"},
+    "offer": {"contracted", "unqualified"},
     "contracted": {"executing"},
     "executing": {"qa_passed"},
     "qa_passed": {"delivered"},
@@ -68,6 +86,9 @@ PIPELINE_EVIDENCE_PREFIXES = {
     "proposal_ready": ("proposal:",),
     "submitted": ("submission:",),
     "response_received": ("reply:",),
+    "buyer_reply": ("reply:",),
+    "interview": ("interview:",),
+    "offer": ("offer:",),
     "contracted": ("contract:",),
     "executing": ("contract:",),
     "qa_passed": ("qa:",),
@@ -153,6 +174,77 @@ def enum_list(payload, field, allowed):
             raise ValueError(f"{field}_invalid")
         if item not in normalized:
             normalized.append(item)
+    return normalized
+
+
+def evidence_refs(values, field):
+    """Normalize auditable evidence references without accepting free-form claims."""
+    if values is None:
+        return []
+    if not isinstance(values, list) or len(values) > 50:
+        raise ValueError(f"{field}_invalid")
+    normalized = []
+    allowed_prefixes = (
+        "https://", "artifact:", "github:", "verified_payment:",
+        "verified_margin:", "retention:", "delivery:", "qa:",
+    )
+    for value in values:
+        if not isinstance(value, str):
+            raise ValueError(f"{field}_invalid")
+        reference = value.strip()
+        if not reference or len(reference) > 1000 or not reference.startswith(allowed_prefixes):
+            raise ValueError(f"{field}_invalid")
+        if reference not in normalized:
+            normalized.append(reference)
+    return normalized
+
+
+def offer_evidence_map(payload, offer_phases):
+    value = payload.get("offer_evidence", {})
+    if not isinstance(value, dict):
+        raise ValueError("offer_evidence_invalid")
+    normalized = {}
+    for phase, refs in value.items():
+        normalized_phase = str(phase or "").strip().lower()
+        if normalized_phase not in OFFER_PHASES:
+            raise ValueError("offer_evidence_phase_invalid")
+        if normalized_phase not in offer_phases:
+            raise ValueError("offer_evidence_phase_not_declared")
+        normalized[normalized_phase] = evidence_refs(
+            refs, f"offer_evidence_{normalized_phase}")
+    return normalized
+
+
+def reusable_ip_assets(payload):
+    values = payload.get("reusable_ip_assets", [])
+    if not isinstance(values, list) or len(values) > 50:
+        raise ValueError("reusable_ip_assets_invalid")
+    normalized = []
+    for value in values:
+        if not isinstance(value, dict):
+            raise ValueError("reusable_ip_asset_invalid")
+        name = str(value.get("name") or "").strip()
+        asset_type = str(value.get("type") or "").strip().lower()
+        maturity = str(value.get("maturity") or "learned").strip().lower()
+        if not name or len(name) > 160:
+            raise ValueError("reusable_ip_asset_name_invalid")
+        if asset_type not in REUSABLE_IP_TYPES:
+            raise ValueError("reusable_ip_asset_type_invalid")
+        if maturity not in REUSABLE_IP_MATURITY:
+            raise ValueError("reusable_ip_asset_maturity_invalid")
+        refs = evidence_refs(value.get("evidence", []), "reusable_ip_asset_evidence")
+        if REUSABLE_IP_MATURITY[maturity] >= REUSABLE_IP_MATURITY["paid_validated"]:
+            if not any(ref.startswith("verified_payment:") for ref in refs):
+                raise ValueError("reusable_ip_paid_validation_evidence_required")
+        if REUSABLE_IP_MATURITY[maturity] >= REUSABLE_IP_MATURITY["repeatable_positive_margin"]:
+            if not any(ref.startswith("verified_margin:") for ref in refs):
+                raise ValueError("reusable_ip_margin_evidence_required")
+        normalized.append({
+            "name": name,
+            "type": asset_type,
+            "maturity": maturity,
+            "evidence": refs,
+        })
     return normalized
 
 
@@ -275,6 +367,8 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
     if buyer_stage not in BUYER_STAGE_SCORES:
         raise ValueError("buyer_stage_invalid")
     offer_phases = enum_list(payload, "offer_phases", OFFER_PHASES)
+    offer_evidence = offer_evidence_map(payload, offer_phases)
+    ip_assets = reusable_ip_assets(payload)
     outcome_pricing = boolean_flag(payload, "outcome_pricing")
     outcome_success_definition = str(
         payload.get("outcome_success_definition") or "").strip()
@@ -437,6 +531,17 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         "reusable_ip_potential": finite_number(
             payload, "reusable_ip_potential", maximum=1, required=False),
         "offer_phases": offer_phases,
+        "offer_evidence": offer_evidence,
+        "reusable_ip_assets": ip_assets,
+        "reusable_ip_summary": {
+            "asset_count": len(ip_assets),
+            "paid_validated_count": sum(
+                REUSABLE_IP_MATURITY[asset["maturity"]] >=
+                REUSABLE_IP_MATURITY["paid_validated"]
+                for asset in ip_assets
+            ),
+            "evidence_status": "captured_not_revenue",
+        },
         "outcome_pricing": outcome_pricing,
         "outcome_success_definition": (
             outcome_success_definition if outcome_pricing else None),
@@ -1154,6 +1259,10 @@ def record_response(path, opportunity_id, submission_receipt_id, response, *, no
     if urlsplit(message_url).scheme != "https":
         raise ValueError("message_url_https_required")
     received_at = parse_time(response.get("received_at"), "received_at")
+    target_state = str(
+        response.get("stage") or "response_received").strip().lower()
+    if target_state not in BUYER_EVENT_STATES:
+        raise ValueError("response_stage_invalid")
     recorded = now or utc_now()
     if received_at > recorded + MAX_FUTURE_SKEW:
         raise ValueError("received_at_future")
@@ -1161,11 +1270,18 @@ def record_response(path, opportunity_id, submission_receipt_id, response, *, no
     receipt = {"opportunity_id": opportunity_id,
                "submission_receipt_id": submission_receipt_id,
                "provider": provider, "external_message_id": external_id,
-               "message_url": message_url, "received_at": received_at.isoformat()}
+               "message_url": message_url, "received_at": received_at.isoformat(),
+               "stage": target_state}
     serialized = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
     receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
     receipt_id = "respr_" + receipt_hash[:24]
-    evidence_id = "reply:" + receipt_id
+    evidence_prefix = {
+        "response_received": "reply:",
+        "buyer_reply": "reply:",
+        "interview": "interview:",
+        "offer": "offer:",
+    }[target_state]
+    evidence_id = evidence_prefix + receipt_id
     recorded_at = recorded.isoformat()
     connection = open_ledger(path)
     try:
@@ -1188,11 +1304,12 @@ def record_response(path, opportunity_id, submission_receipt_id, response, *, no
                 raise ValueError("response_before_submission")
             existing = connection.execute(
                 "SELECT 1 FROM response_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
-            if row[0] == "response_received" and existing:
+            if row[0] == target_state and existing:
                 return {"receipt_id": receipt_id, "changed": False, "state": row[0]}
-            if row[0] != "submitted":
+            source_state = row[0]
+            if target_state not in PIPELINE_TRANSITIONS.get(source_state, set()):
                 raise ValueError("pipeline_state_conflict")
-            tid = transition_id(opportunity_id, "submitted", "response_received", evidence_id)
+            tid = transition_id(opportunity_id, source_state, target_state, evidence_id)
             connection.execute("""INSERT INTO response_receipts
                 (receipt_id,opportunity_id,submission_receipt_id,provider,external_message_id,
                  message_url,received_at,receipt_hash,recorded_at)
@@ -1200,17 +1317,19 @@ def record_response(path, opportunity_id, submission_receipt_id, response, *, no
                     receipt_id, opportunity_id, submission_receipt_id, provider, external_id,
                     message_url, received_at.isoformat(), receipt_hash, recorded_at))
             payload = json.loads(row[1])
-            payload["pipeline_state"] = "response_received"
+            payload["pipeline_state"] = target_state
+            payload["buyer_stage"] = (
+                "buyer_reply" if target_state == "response_received" else target_state)
             connection.execute(
                 "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
-                ("response_received", json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                (target_state, json.dumps(payload, sort_keys=True, separators=(",", ":")),
                  recorded_at, opportunity_id))
             connection.execute("""INSERT INTO opportunity_transitions
                 (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
                 VALUES (?,?,?,?,?,?,?)""", (
-                    tid, opportunity_id, "submitted", "response_received", evidence_id,
+                    tid, opportunity_id, source_state, target_state, evidence_id,
                     hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
-        return {"receipt_id": receipt_id, "changed": True, "state": "response_received"}
+        return {"receipt_id": receipt_id, "changed": True, "state": target_state}
     finally:
         connection.close()
 
@@ -1298,9 +1417,10 @@ def record_contract(path, opportunity_id, response_receipt_id, contract, *, now=
                 "SELECT 1 FROM contract_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
             if row[0] == "contracted" and existing:
                 return {"receipt_id": receipt_id, "changed": False, "state": row[0]}
-            if row[0] != "response_received":
+            source_state = row[0]
+            if source_state not in {"response_received", "offer"}:
                 raise ValueError("pipeline_state_conflict")
-            tid = transition_id(opportunity_id, "response_received", "contracted", evidence_id)
+            tid = transition_id(opportunity_id, source_state, "contracted", evidence_id)
             connection.execute("""INSERT INTO contract_receipts
                 (receipt_id,opportunity_id,response_receipt_id,proposal_id,provider,
                  external_contract_id,contract_url,amount_cents,currency,contracted_at,
@@ -1318,7 +1438,7 @@ def record_contract(path, opportunity_id, response_receipt_id, contract, *, now=
             connection.execute("""INSERT INTO opportunity_transitions
                 (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
                 VALUES (?,?,?,?,?,?,?)""", (
-                    tid, opportunity_id, "response_received", "contracted", evidence_id,
+                    tid, opportunity_id, source_state, "contracted", evidence_id,
                     hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
         return {"receipt_id": receipt_id, "changed": True, "state": "contracted"}
     finally:
