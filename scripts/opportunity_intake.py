@@ -1743,6 +1743,28 @@ def open_ledger(path):
         FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
         FOREIGN KEY(payment_receipt_id) REFERENCES payment_receipts(receipt_id)
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS recurring_realized_unit_economics (
+        economics_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        recurring_payment_receipt_id TEXT NOT NULL UNIQUE,
+        net_collected_cents INTEGER NOT NULL,
+        delivery_cost_cents INTEGER NOT NULL,
+        inference_cost_cents INTEGER NOT NULL,
+        cac_cents INTEGER NOT NULL,
+        human_operating_minutes INTEGER NOT NULL,
+        contribution_cents INTEGER NOT NULL,
+        contribution_margin REAL NOT NULL,
+        revenue_per_human_hour REAL NOT NULL,
+        contribution_per_human_hour REAL NOT NULL,
+        currency TEXT NOT NULL,
+        evidence_json TEXT NOT NULL,
+        evidence_hash TEXT NOT NULL,
+        measured_at TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(recurring_payment_receipt_id)
+          REFERENCES recurring_payment_receipts(receipt_id)
+    )""")
     connection.execute("""CREATE TABLE IF NOT EXISTS payout_availability_receipts (
         receipt_id TEXT PRIMARY KEY,
         opportunity_id TEXT NOT NULL,
@@ -3310,6 +3332,120 @@ def record_realized_unit_economics(
                  json.dumps(evidence, sort_keys=True, separators=(",", ":")),
                  evidence_hash, measured_at.isoformat(), recorded_at))
         return {"economics_id": economics_id, "changed": True, **normalized}
+    finally:
+        connection.close()
+
+
+def record_recurring_realized_unit_economics(
+        path, opportunity_id, recurring_payment_receipt_id, economics, *, now=None):
+    """Record realized economics from one settled recurring receipt."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if (not isinstance(recurring_payment_receipt_id, str)
+            or not recurring_payment_receipt_id.strip()):
+        raise ValueError("recurring_payment_receipt_id_required")
+    if not isinstance(economics, dict):
+        raise ValueError("realized_economics_object_required")
+    opportunity_id = opportunity_id.strip()
+    recurring_payment_receipt_id = recurring_payment_receipt_id.strip()
+
+    costs = {}
+    for field in ("delivery_cost_cents", "inference_cost_cents", "cac_cents"):
+        value = finite_number(economics, field, minimum=0)
+        if not value.is_integer():
+            raise ValueError(f"{field}_invalid")
+        costs[field] = int(value)
+    minutes = finite_number(
+        economics, "human_operating_minutes", minimum=1, maximum=600000)
+    if not minutes.is_integer():
+        raise ValueError("human_operating_minutes_invalid")
+    minutes = int(minutes)
+    evidence = {}
+    for field in (
+            "delivery_cost_evidence_url", "inference_cost_evidence_url",
+            "cac_evidence_url", "human_time_evidence_url"):
+        url = canonical_url(_proposal_text(economics.get(field), field, 2000))
+        if urlsplit(url).scheme != "https":
+            raise ValueError(f"{field}_https_required")
+        evidence[field] = url
+    measured_at = parse_time(economics.get("measured_at"), "measured_at")
+    recorded = now or utc_now()
+    if measured_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("measured_at_future")
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            if connection.execute(
+                    "SELECT 1 FROM opportunities WHERE id=?",
+                    (opportunity_id,)).fetchone() is None:
+                raise ValueError("opportunity_not_found")
+            payment = connection.execute(
+                """SELECT opportunity_id,net_amount_cents,currency,settled_at
+                   FROM recurring_payment_receipts WHERE receipt_id=?""",
+                (recurring_payment_receipt_id,)).fetchone()
+            if payment is None:
+                raise ValueError("recurring_payment_receipt_not_found")
+            if payment[0] != opportunity_id:
+                raise ValueError("realized_economics_opportunity_mismatch")
+            if measured_at < parse_time(payment[3], "payment_settled_at"):
+                raise ValueError("economics_measured_before_settlement")
+            net_collected = payment[1]
+            contribution = net_collected - sum(costs.values())
+            hours = minutes / 60
+            normalized = {
+                "opportunity_id": opportunity_id,
+                "recurring_payment_receipt_id": recurring_payment_receipt_id,
+                "net_collected_cents": net_collected,
+                **costs,
+                "human_operating_minutes": minutes,
+                "contribution_cents": contribution,
+                "contribution_margin": round(
+                    contribution / net_collected, 6),
+                "revenue_per_human_hour": round(
+                    net_collected / 100 / hours, 2),
+                "contribution_per_human_hour": round(
+                    contribution / 100 / hours, 2),
+                "currency": payment[2],
+                "evidence": evidence,
+                "measured_at": measured_at.isoformat(),
+                "evidence_status":
+                    "realized_from_settled_recurring_payment",
+            }
+            serialized = json.dumps(
+                normalized, sort_keys=True, separators=(",", ":"))
+            evidence_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            economics_id = "rruec_" + evidence_hash[:24]
+            existing = connection.execute(
+                """SELECT economics_id
+                   FROM recurring_realized_unit_economics
+                   WHERE recurring_payment_receipt_id=?""",
+                (recurring_payment_receipt_id,)).fetchone()
+            if existing:
+                if existing[0] != economics_id:
+                    raise ValueError("recurring_realized_economics_conflict")
+                return {
+                    "economics_id": economics_id, "changed": False,
+                    **normalized}
+            connection.execute(
+                """INSERT INTO recurring_realized_unit_economics
+                   (economics_id,opportunity_id,recurring_payment_receipt_id,
+                    net_collected_cents,delivery_cost_cents,inference_cost_cents,
+                    cac_cents,human_operating_minutes,contribution_cents,
+                    contribution_margin,revenue_per_human_hour,
+                    contribution_per_human_hour,currency,evidence_json,
+                    evidence_hash,measured_at,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (economics_id, opportunity_id, recurring_payment_receipt_id,
+                 net_collected, costs["delivery_cost_cents"],
+                 costs["inference_cost_cents"], costs["cac_cents"], minutes,
+                 contribution, normalized["contribution_margin"],
+                 normalized["revenue_per_human_hour"],
+                 normalized["contribution_per_human_hour"], payment[2],
+                 json.dumps(evidence, sort_keys=True, separators=(",", ":")),
+                 evidence_hash, measured_at.isoformat(), recorded.isoformat()))
+            return {
+                "economics_id": economics_id, "changed": True, **normalized}
     finally:
         connection.close()
 
