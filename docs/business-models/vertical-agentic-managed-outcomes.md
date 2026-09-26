@@ -228,3 +228,33 @@ non-HTTPS acceptance evidence fail closed before the contract advances. Every
 later attributed outcome verifies the binding still resolves to the same
 opportunity terms before any fee can accrue.
 
+
+
+## Machine-readable issue #164 offer families
+
+The operational catalog now defines six initial offer families:
+
+- lead intake, qualification, routing, follow-up, and booking;
+- missed-lead recovery and dormant-lead reactivation;
+- CRM and sales-operations automation;
+- support resolution and routing;
+- back-office document and data workflows; and
+- multi-system operational integration.
+
+Each asset records its ICP, required qualification facts, measurable-value
+definition, deterministic-first versus AI reasoning rule, delivery and QA
+checklists, unit-economics inputs, retention/upsell path, and reusable-IP target.
+The catalog is also published as
+`docs/business-models/issue-164-offer-families.json`.
+
+Selecting a family is optional, but a selection fails closed unless every
+family-specific qualification key is supplied as an explicit boolean and at
+least one auditable evidence reference is present. Unqualified selections do
+not enter the opportunity queue. Qualified selections add a bounded,
+evidence-backed fit component to scoring.
+
+Prepared proposals bind the selected family ID, catalog version, asset hash,
+fit score, qualification facts, evidence references, and maturity label into
+the immutable proposal artifact. All six families begin at `learned`; this
+selection does not create paid validation, a case study, a customer outcome,
+or revenue. Existing ledger-backed mastery promotion gates remain authoritative.

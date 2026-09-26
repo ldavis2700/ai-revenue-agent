@@ -40,6 +40,279 @@ OFFER_PHASES = {
     "diagnostic", "pilot", "implementation", "managed_recurring",
     "outcome_pricing", "vertical_ip", "productized_agent_saas",
 }
+OFFER_FAMILY_CATALOG_VERSION = "2026-09-26"
+OFFER_FAMILY_CATALOG = {
+    "lead_intake_qualification_routing_booking": {
+        "icp": "Service businesses with material inbound volume, measurable response-to-booking leakage, and authorized CRM/calendar access.",
+        "qualification": [
+            "inbound_volume_measured",
+            "baseline_conversion_known",
+            "crm_calendar_access_authorized",
+            "human_exception_owner_named"
+        ],
+        "measurable_value": "Incremental qualified bookings and response-time reduction against an agreed baseline.",
+        "decision_rule": {
+            "deterministic_default": "Validate, deduplicate, route, schedule, and enforce consent rules.",
+            "ai_when": "Unstructured inquiry intent or qualification judgment materially improves routing."
+        },
+        "delivery_playbook": [
+            "map intake sources and consent",
+            "establish baseline and acceptance tests",
+            "implement routing and booking",
+            "add retries audit trail and escalation",
+            "run QA and bounded pilot"
+        ],
+        "qa_checklist": [
+            "duplicate suppression",
+            "consent and opt-out enforcement",
+            "routing accuracy",
+            "calendar idempotency",
+            "human escalation",
+            "outcome attribution"
+        ],
+        "economics_inputs": [
+            "monthly_lead_volume",
+            "baseline_booking_rate",
+            "booking_value",
+            "implementation_hours",
+            "monthly_tool_cost",
+            "exception_hours"
+        ],
+        "retention_upsell": [
+            "managed monitoring",
+            "routing optimization",
+            "additional channels",
+            "reactivation"
+        ],
+        "reusable_ip_target": "Consent-aware intake router, qualification eval set, and booking connector bundle.",
+        "maturity": "learned"
+    },
+    "missed_lead_recovery_reactivation": {
+        "icp": "Businesses with consented missed or dormant leads, attributable revenue per recovered opportunity, and usable contact history.",
+        "qualification": [
+            "consented_lead_set_available",
+            "suppression_list_current",
+            "baseline_recovery_known",
+            "attribution_window_defined"
+        ],
+        "measurable_value": "Verified recovered appointments or revenue from eligible missed and dormant leads.",
+        "decision_rule": {
+            "deterministic_default": "Apply eligibility, suppression, cadence, stop, and attribution rules.",
+            "ai_when": "Personalized classification or response handling improves recovery without weakening consent."
+        },
+        "delivery_playbook": [
+            "validate consent and suppression",
+            "define dormant cohort and baseline",
+            "launch bounded recovery workflow",
+            "stop on reply or opt-out",
+            "reconcile attributed outcomes"
+        ],
+        "qa_checklist": [
+            "consent provenance",
+            "suppression enforcement",
+            "cadence caps",
+            "reply stop",
+            "duplicate attribution",
+            "refund exclusions"
+        ],
+        "economics_inputs": [
+            "eligible_lead_count",
+            "baseline_recovery_rate",
+            "recovered_value",
+            "message_cost",
+            "human_exception_hours",
+            "refund_rate"
+        ],
+        "retention_upsell": [
+            "continuous missed-lead capture",
+            "cohort optimization",
+            "channel expansion",
+            "managed attribution"
+        ],
+        "reusable_ip_target": "Suppression-safe recovery engine, cohort templates, and attribution receipts.",
+        "maturity": "learned"
+    },
+    "crm_sales_ops_automation": {
+        "icp": "Sales teams with repetitive CRM hygiene, routing, follow-up, and reporting work across documented stages.",
+        "qualification": [
+            "crm_access_authorized",
+            "pipeline_stages_documented",
+            "field_ownership_defined",
+            "baseline_admin_hours_known"
+        ],
+        "measurable_value": "Reduced CRM administration time, faster follow-up, and improved stage/data completeness.",
+        "decision_rule": {
+            "deterministic_default": "Synchronize fields, enforce stages, deduplicate, assign, and trigger approved tasks.",
+            "ai_when": "Notes, emails, or call summaries require structured extraction or judgment."
+        },
+        "delivery_playbook": [
+            "map schema and ownership",
+            "baseline errors and labor",
+            "build deterministic sync rules",
+            "add bounded AI extraction",
+            "reconcile and monitor"
+        ],
+        "qa_checklist": [
+            "schema validation",
+            "idempotent updates",
+            "deduplication",
+            "permission boundaries",
+            "rollback",
+            "exception queue"
+        ],
+        "economics_inputs": [
+            "records_per_month",
+            "admin_hours",
+            "error_rate",
+            "tool_cost",
+            "implementation_hours",
+            "exception_hours"
+        ],
+        "retention_upsell": [
+            "managed data quality",
+            "forecast reporting",
+            "new-system connectors",
+            "workflow optimization"
+        ],
+        "reusable_ip_target": "CRM mapping library, reconciliation checks, and sales-ops workflow pack.",
+        "maturity": "learned"
+    },
+    "support_resolution_routing": {
+        "icp": "Support teams with repeatable ticket categories, measurable resolution economics, and a defined human escalation path.",
+        "qualification": [
+            "ticket_volume_measured",
+            "taxonomy_defined",
+            "knowledge_sources_authorized",
+            "escalation_sla_defined"
+        ],
+        "measurable_value": "Reduced time to resolution and handling cost without degrading quality or escalation safety.",
+        "decision_rule": {
+            "deterministic_default": "Apply routing, entitlement, priority, and escalation policy.",
+            "ai_when": "Intent classification, retrieval, or draft resolution needs language reasoning."
+        },
+        "delivery_playbook": [
+            "baseline categories and resolution",
+            "connect approved knowledge",
+            "implement routing and drafts",
+            "add confidence gates and escalation",
+            "evaluate quality and cost"
+        ],
+        "qa_checklist": [
+            "routing precision",
+            "grounded answers",
+            "permission checks",
+            "confidence threshold",
+            "escalation SLA",
+            "resolution audit"
+        ],
+        "economics_inputs": [
+            "ticket_volume",
+            "handling_minutes",
+            "resolution_rate",
+            "model_cost",
+            "review_hours",
+            "reopen_rate"
+        ],
+        "retention_upsell": [
+            "managed knowledge refresh",
+            "quality monitoring",
+            "additional channels",
+            "resolution automation"
+        ],
+        "reusable_ip_target": "Support taxonomy, grounded-response evals, and escalation router.",
+        "maturity": "learned"
+    },
+    "back_office_document_data_workflows": {
+        "icp": "Operations teams processing recurring documents or records with explicit schemas, review rules, and measurable manual effort.",
+        "qualification": [
+            "document_volume_measured",
+            "target_schema_defined",
+            "source_authority_verified",
+            "review_threshold_defined"
+        ],
+        "measurable_value": "Reduced processing time and error/rework cost for accepted records.",
+        "decision_rule": {
+            "deterministic_default": "Validate formats, transform fields, reconcile totals, and route exceptions.",
+            "ai_when": "Documents require extraction or classification beyond deterministic parsing."
+        },
+        "delivery_playbook": [
+            "sample authorized documents",
+            "define schema and acceptance set",
+            "build extraction and validation",
+            "add review thresholds",
+            "reconcile outputs"
+        ],
+        "qa_checklist": [
+            "field accuracy",
+            "schema conformance",
+            "total reconciliation",
+            "PII handling",
+            "exception routing",
+            "audit retention"
+        ],
+        "economics_inputs": [
+            "documents_per_month",
+            "minutes_per_document",
+            "error_cost",
+            "model_cost",
+            "review_rate",
+            "implementation_hours"
+        ],
+        "retention_upsell": [
+            "managed exception handling",
+            "new document types",
+            "system posting",
+            "compliance reporting"
+        ],
+        "reusable_ip_target": "Document schemas, extraction evals, validators, and posting connectors.",
+        "maturity": "learned"
+    },
+    "multi_system_operational_integration": {
+        "icp": "Organizations with a high-value workflow crossing multiple APIs where failures, rekeying, or inconsistent state create measurable cost.",
+        "qualification": [
+            "systems_and_owners_identified",
+            "api_access_authorized",
+            "source_of_truth_defined",
+            "rollback_owner_named"
+        ],
+        "measurable_value": "Reduced rekeying, cycle time, and reconciliation failures across the integrated workflow.",
+        "decision_rule": {
+            "deterministic_default": "Orchestrate APIs, map schemas, enforce idempotency, retry, and reconcile.",
+            "ai_when": "Unstructured inputs or exception triage need bounded reasoning."
+        },
+        "delivery_playbook": [
+            "map systems and authority",
+            "define source of truth",
+            "implement idempotent orchestration",
+            "add observability and rollback",
+            "run failure-mode QA"
+        ],
+        "qa_checklist": [
+            "idempotency",
+            "retry safety",
+            "schema drift",
+            "partial failure recovery",
+            "least privilege",
+            "end-to-end reconciliation"
+        ],
+        "economics_inputs": [
+            "transactions_per_month",
+            "rekey_hours",
+            "failure_cost",
+            "integration_cost",
+            "monitoring_cost",
+            "exception_hours"
+        ],
+        "retention_upsell": [
+            "managed monitoring",
+            "additional systems",
+            "SLA reporting",
+            "workflow optimization"
+        ],
+        "reusable_ip_target": "Connector adapters, orchestration primitives, and reconciliation harness.",
+        "maturity": "learned"
+    }
+}
 REUSABLE_IP_TYPES = {
     "workflow", "connector", "eval", "playbook", "prompt",
     "code_component", "dataset",
@@ -77,7 +350,8 @@ TERMINAL_SCREEN_REASONS = {
     "preferred_qualifications_unmet", "marketplace_application_unavailable",
     "location_ineligible", "non_positive_projected_margin",
     "execution_capabilities_unmet", "personal_data_authority_unverified",
-    "credential_access_unsafe", "prohibited_category", "scam_signals_present",
+    "credential_access_unsafe", "offer_family_qualification_failed",
+    "prohibited_category", "scam_signals_present",
     "deception_required", "unsolicited_contact_disallowed",
     "suppressed_or_opted_out", "execution_confidence_too_low",
 }
@@ -213,6 +487,54 @@ def offer_evidence_map(payload, offer_phases):
         normalized[normalized_phase] = evidence_refs(
             refs, f"offer_evidence_{normalized_phase}")
     return normalized
+
+
+def offer_family_selection(payload):
+    """Validate an issue #164 offer-family fit without claiming earned mastery."""
+    family_id = str(payload.get("offer_family") or "").strip().lower()
+    if not family_id:
+        if any(field in payload for field in (
+                "offer_family_fit_score", "offer_family_qualification",
+                "offer_family_evidence")):
+            raise ValueError("offer_family_required")
+        return {
+            "id": None, "catalog_version": OFFER_FAMILY_CATALOG_VERSION,
+            "asset_hash": None, "fit_score": 0.0, "qualified": False,
+            "qualification": {}, "evidence": [], "maturity": None,
+        }
+    asset = OFFER_FAMILY_CATALOG.get(family_id)
+    if asset is None:
+        raise ValueError("offer_family_invalid")
+    fit_score = finite_number(
+        payload, "offer_family_fit_score", maximum=1, required=False)
+    if fit_score is None:
+        raise ValueError("offer_family_fit_score_required")
+    qualification = payload.get("offer_family_qualification")
+    if not isinstance(qualification, dict):
+        raise ValueError("offer_family_qualification_invalid")
+    required = asset["qualification"]
+    if set(qualification) != set(required):
+        raise ValueError("offer_family_qualification_keys_invalid")
+    normalized_qualification = {}
+    for key in required:
+        value = qualification[key]
+        if not isinstance(value, bool):
+            raise ValueError("offer_family_qualification_value_invalid")
+        normalized_qualification[key] = value
+    evidence = evidence_refs(
+        payload.get("offer_family_evidence"), "offer_family_evidence")
+    if not evidence:
+        raise ValueError("offer_family_evidence_required")
+    return {
+        "id": family_id,
+        "catalog_version": OFFER_FAMILY_CATALOG_VERSION,
+        "asset_hash": payload_hash(asset),
+        "fit_score": fit_score,
+        "qualified": all(normalized_qualification.values()),
+        "qualification": normalized_qualification,
+        "evidence": evidence,
+        "maturity": asset["maturity"],
+    }
 
 
 def reusable_ip_assets(payload):
@@ -369,6 +691,7 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
     ):
         if value is not None and not value.is_integer():
             raise ValueError(f"{field}_invalid")
+    family_selection = offer_family_selection(payload)
     buyer_stage = str(payload.get("buyer_stage") or "prospect").strip().lower()
     if buyer_stage not in BUYER_STAGE_SCORES:
         raise ValueError("buyer_stage_invalid")
@@ -535,6 +858,8 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         "time_to_cash_days": time_to_cash_days,
         "buyer_stage": buyer_stage,
         "buyer_stage_score": BUYER_STAGE_SCORES[buyer_stage],
+        "offer_family": family_selection["id"],
+        "offer_family_selection": family_selection,
         "payment_history_score": finite_number(
             payload, "payment_history_score", maximum=1, required=False),
         "contract_value_cents": int(contract_value_cents or payout_cents),
@@ -669,6 +994,9 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
 def screen(opportunity):
     if opportunity["expired"]:
         return False, "opportunity_expired"
+    if (opportunity["offer_family"] is not None
+            and not opportunity["offer_family_selection"]["qualified"]):
+        return False, "offer_family_qualification_failed"
     if opportunity["unit_economics"]["projected_contribution_cents"] <= 0:
         return False, "non_positive_projected_margin"
     if not opportunity["listing_open"]:
@@ -748,6 +1076,10 @@ def score(opportunity):
     components = {
         "buyer_intent": 10 * opportunity["buyer_intent"],
         "active_buyer_stage": 10 * opportunity["buyer_stage_score"],
+        "offer_family_fit": (
+            6 * opportunity["offer_family_selection"]["fit_score"]
+            if opportunity["offer_family"] is not None else 0
+        ),
         "expected_value": 8 * value_score,
         "contract_value": 7 * contract_value_score,
         "measurable_economic_value": (
@@ -1269,10 +1601,6 @@ def prepare_proposal(path, opportunity_id, proposal, *, now=None):
     artifact = {"opportunity_id": opportunity_id, "scope": scope,
                 "price_cents": int(price_cents), "milestones": normalized_milestones,
                 "claims": normalized_claims}
-    serialized = json.dumps(artifact, sort_keys=True, separators=(",", ":"))
-    artifact_hash = hashlib.sha256(serialized.encode()).hexdigest()
-    proposal_id = "prop_" + artifact_hash[:24]
-    evidence_id = "proposal:" + proposal_id
     created_at = (now or utc_now()).isoformat()
     connection = open_ledger(path)
     try:
@@ -1282,13 +1610,28 @@ def prepare_proposal(path, opportunity_id, proposal, *, now=None):
                 (opportunity_id,)).fetchone()
             if row is None:
                 raise ValueError("opportunity_not_found")
+            opportunity = json.loads(row[1])
+            selection = opportunity.get("offer_family_selection") or {}
+            artifact["offer_family"] = ({
+                "id": selection.get("id"),
+                "catalog_version": selection.get("catalog_version"),
+                "asset_hash": selection.get("asset_hash"),
+                "fit_score": selection.get("fit_score"),
+                "qualification": selection.get("qualification", {}),
+                "evidence": selection.get("evidence", []),
+                "maturity": selection.get("maturity"),
+            } if selection.get("id") else None)
+            serialized = json.dumps(artifact, sort_keys=True, separators=(",", ":"))
+            artifact_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            proposal_id = "prop_" + artifact_hash[:24]
+            evidence_id = "proposal:" + proposal_id
             existing = connection.execute(
-                "SELECT 1 FROM proposal_artifacts WHERE proposal_id=?", (proposal_id,)).fetchone()
+                "SELECT 1 FROM proposal_artifacts WHERE proposal_id=?",
+                (proposal_id,)).fetchone()
             if row[0] == "proposal_ready" and existing:
                 return {"proposal_id": proposal_id, "changed": False, "state": row[0]}
             if row[0] != "qualified":
                 raise ValueError("pipeline_state_conflict")
-            opportunity = json.loads(row[1])
             if artifact["price_cents"] > opportunity["payout_cents"]:
                 raise ValueError("price_exceeds_opportunity_payout")
             tid = transition_id(opportunity_id, "qualified", "proposal_ready", evidence_id)
