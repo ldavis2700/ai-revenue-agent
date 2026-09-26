@@ -1900,12 +1900,6 @@ def record_attributed_outcome(
                 raise ValueError("outcome_event_provider_mismatch")
             if occurred_at < parse_time(contract[2], "contracted_at"):
                 raise ValueError("outcome_event_before_contract")
-            existing_total = connection.execute(
-                """SELECT COALESCE(SUM(fee_cents),0)
-                   FROM attributed_outcome_events WHERE opportunity_id=?""",
-                (opportunity_id,)).fetchone()[0]
-            if existing_total + fee_cents > terms[1]:
-                raise ValueError("outcome_fee_cap_exceeded")
             normalized = {
                 "opportunity_id": opportunity_id,
                 "term_id": terms[0],
@@ -1931,6 +1925,12 @@ def record_attributed_outcome(
                 if existing[1] != event_hash:
                     raise ValueError("outcome_event_conflict")
                 return {"event_id": existing[0], "changed": False, **normalized}
+            existing_total = connection.execute(
+                """SELECT COALESCE(SUM(fee_cents),0)
+                   FROM attributed_outcome_events WHERE opportunity_id=?""",
+                (opportunity_id,)).fetchone()[0]
+            if existing_total + fee_cents > terms[1]:
+                raise ValueError("outcome_fee_cap_exceeded")
             connection.execute(
                 """INSERT INTO attributed_outcome_events
                    (event_id,opportunity_id,term_id,contract_receipt_id,provider,
