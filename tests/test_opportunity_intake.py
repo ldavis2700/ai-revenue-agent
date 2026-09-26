@@ -3122,6 +3122,41 @@ class OpportunityIntakeTests(unittest.TestCase):
                     dict(contract, recurring_terms_hash="0" * 64), now=NOW)
             accepted = opportunity_intake.record_contract(
                 path, opportunity_id, replied["receipt_id"], contract, now=NOW)
+            recurring_payment = {
+                "provider": "marketplace",
+                "external_invoice_id": "managed-invoice-1",
+                "invoice_url": "https://example.com/invoices/managed-1",
+                "external_transaction_id": "managed-payment-1",
+                "transaction_url": "https://example.com/payments/managed-1",
+                "gross_amount_cents": 15000,
+                "fee_amount_cents": 500,
+                "net_amount_cents": 14500,
+                "currency": "USD",
+                "service_period_start": NOW.isoformat(),
+                "service_period_end": (NOW + timedelta(days=30)).isoformat(),
+                "invoiced_at": NOW.isoformat(),
+                "paid_at": NOW.isoformat(),
+                "settled_at": NOW.isoformat(),
+            }
+            settled = opportunity_intake.record_settled_recurring_payment(
+                path, opportunity_id, accepted["receipt_id"],
+                recurring_payment, now=NOW)
+            duplicate = opportunity_intake.record_settled_recurring_payment(
+                path, opportunity_id, accepted["receipt_id"],
+                recurring_payment, now=NOW)
+            with self.assertRaisesRegex(
+                    ValueError, "recurring_service_period_overlap"):
+                opportunity_intake.record_settled_recurring_payment(
+                    path, opportunity_id, accepted["receipt_id"], dict(
+                        recurring_payment,
+                        external_invoice_id="managed-invoice-overlap",
+                        external_transaction_id="managed-payment-overlap",
+                        invoice_url="https://example.com/invoices/managed-overlap",
+                        transaction_url="https://example.com/payments/managed-overlap",
+                    ), now=NOW)
+            recurring_revenue = (
+                opportunity_intake.summarize_settled_recurring_revenue(
+                    path, opportunity_id))
             connection = sqlite3.connect(path)
             binding = connection.execute(
                 """SELECT term_id,accepted_terms_hash,
@@ -3139,6 +3174,17 @@ class OpportunityIntakeTests(unittest.TestCase):
             recurring[0], recurring[1], 15000,
             "https://example.com/contracts/recurring/managed-terms", 64))
         self.assertTrue(accepted["recurring_terms_bound"])
+        self.assertTrue(settled["changed"])
+        self.assertFalse(duplicate["changed"])
+        self.assertEqual(recurring_revenue, {
+            "settled_receipt_count": 1,
+            "recurring_collected_gross_cents": 15000,
+            "recurring_collected_fee_cents": 500,
+            "recurring_collected_net_cents": 14500,
+            "withdrawable_cents": 0,
+            "bank_received_cents": 0,
+            "status": "settled_receipts_only",
+        })
         self.assertEqual(state, "contracted")
 
     def test_issue_164_recurring_terms_fail_closed_without_managed_contract(self):
