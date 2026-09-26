@@ -108,3 +108,27 @@ This playbook does not bypass existing APEX gates. No automatic spending, contra
 
 ## Research basis (September 2026)
 APEX should periodically refresh this thesis against current market evidence. Current research points to rapid enterprise agent adoption, strong interest in customized agents, a gap between AI access and realized bottom-line value, and growing experimentation with usage/outcome pricing. The operational implication is to sell a narrow, measurable workflow outcome and retain the customer through managed operations rather than sell a generic chatbot.
+
+
+## APEX issue #164 scoring and economics contract
+
+Opportunity intake now supports explicit, evidence-supplied fields for:
+
+- active buyer stage: prospect, qualified, proposal, buyer reply, interview, offer, or contract;
+- payment-history confidence;
+- measurable economic value and expected contract value;
+- delivery, inference/API, and acquisition costs;
+- required human operating hours;
+- automation, recurring-revenue, and reusable-IP potential;
+- delivery and compliance risk;
+- offer phases across diagnostic, pilot, implementation, managed recurring service, outcome pricing, vertical IP, and productized agent/SaaS.
+
+The projected unit-economics output separates contract value, cost classes,
+contribution, contribution margin, and projected revenue per required human
+hour. It is explicitly labeled `projected_not_collected`; it cannot be counted
+as collected, withdrawable, or received revenue.
+
+Outcome pricing fails closed unless the opportunity defines the success event,
+attribution method, fee cap, and human-escalation rule. Non-positive projected
+contribution margin is screened out. The $1,000/hour value is a bounded
+effective-leverage scoring reference, not a promise or earnings claim.
