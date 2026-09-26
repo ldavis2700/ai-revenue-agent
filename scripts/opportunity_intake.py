@@ -1057,6 +1057,20 @@ def open_ledger(path):
         recorded_at TEXT NOT NULL,
         FOREIGN KEY(opportunity_id) REFERENCES opportunities(id)
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS contract_outcome_terms (
+        contract_receipt_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        term_id TEXT NOT NULL,
+        accepted_terms_hash TEXT NOT NULL,
+        accepted_fee_cap_cents INTEGER NOT NULL,
+        acceptance_evidence_url TEXT NOT NULL,
+        accepted_at TEXT NOT NULL,
+        binding_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(contract_receipt_id) REFERENCES contract_receipts(receipt_id),
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(term_id) REFERENCES outcome_pricing_terms(term_id)
+    )""")
     connection.execute("""CREATE TABLE IF NOT EXISTS attributed_outcome_events (
         event_id TEXT PRIMARY KEY,
         opportunity_id TEXT NOT NULL,
@@ -1526,7 +1540,8 @@ def record_contract(path, opportunity_id, response_receipt_id, contract, *, now=
                 raise ValueError("response_opportunity_mismatch")
             if response[1].casefold() != provider.casefold():
                 raise ValueError("contract_provider_mismatch")
-            if contracted_at < parse_time(response[3], "response_received_at"):
+            response_at = parse_time(response[3], "response_received_at")
+            if contracted_at < response_at:
                 raise ValueError("contract_before_response")
             proposal_id = response[2]
             proposal = json.loads(connection.execute(
@@ -1537,6 +1552,50 @@ def record_contract(path, opportunity_id, response_receipt_id, contract, *, now=
                 raise ValueError("contract_amount_exceeds_proposal")
             if currency != opportunity["currency"]:
                 raise ValueError("contract_currency_mismatch")
+
+            outcome_binding = None
+            outcome_fields = (
+                "outcome_terms_hash", "outcome_fee_cap_cents",
+                "outcome_terms_acceptance_url", "outcome_terms_accepted_at")
+            if opportunity.get("outcome_pricing"):
+                terms = connection.execute(
+                    """SELECT term_id,terms_hash,fee_cap_cents
+                       FROM outcome_pricing_terms WHERE opportunity_id=?""",
+                    (opportunity_id,)).fetchone()
+                if terms is None:
+                    raise ValueError("outcome_pricing_terms_not_found")
+                accepted_hash = _proposal_text(
+                    contract.get("outcome_terms_hash"), "outcome_terms_hash", 64).lower()
+                if not re.fullmatch(r"[0-9a-f]{64}", accepted_hash):
+                    raise ValueError("outcome_terms_hash_invalid")
+                accepted_cap = finite_number(
+                    contract, "outcome_fee_cap_cents", minimum=1)
+                if not accepted_cap.is_integer():
+                    raise ValueError("outcome_fee_cap_cents_invalid")
+                acceptance_url = canonical_url(_proposal_text(
+                    contract.get("outcome_terms_acceptance_url"),
+                    "outcome_terms_acceptance_url", 2000))
+                if urlsplit(acceptance_url).scheme != "https":
+                    raise ValueError("outcome_terms_acceptance_url_https_required")
+                accepted_at = parse_time(
+                    contract.get("outcome_terms_accepted_at"),
+                    "outcome_terms_accepted_at")
+                if accepted_at < response_at or accepted_at > contracted_at:
+                    raise ValueError("outcome_terms_acceptance_time_invalid")
+                if accepted_hash != terms[1]:
+                    raise ValueError("outcome_terms_hash_mismatch")
+                if int(accepted_cap) != terms[2]:
+                    raise ValueError("outcome_fee_cap_mismatch")
+                outcome_binding = {
+                    "term_id": terms[0],
+                    "accepted_terms_hash": accepted_hash,
+                    "accepted_fee_cap_cents": int(accepted_cap),
+                    "acceptance_evidence_url": acceptance_url,
+                    "accepted_at": accepted_at.isoformat(),
+                }
+            elif any(contract.get(field) is not None for field in outcome_fields):
+                raise ValueError("outcome_pricing_not_configured")
+
             receipt = {"opportunity_id": opportunity_id,
                        "response_receipt_id": response_receipt_id,
                        "proposal_id": proposal_id, "provider": provider,
@@ -1544,7 +1603,8 @@ def record_contract(path, opportunity_id, response_receipt_id, contract, *, now=
                        "amount_cents": int(amount_cents), "currency": currency,
                        "contracted_at": contracted_at.isoformat(),
                        "terms_authority": terms_authority,
-                       "authority_evidence_url": authority_url}
+                       "authority_evidence_url": authority_url,
+                       "outcome_terms_binding": outcome_binding}
             serialized = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
             receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
             receipt_id = "contr_" + receipt_hash[:24]
@@ -1567,6 +1627,26 @@ def record_contract(path, opportunity_id, response_receipt_id, contract, *, now=
                     external_id, contract_url, int(amount_cents), currency,
                     contracted_at.isoformat(), terms_authority, authority_url,
                     receipt_hash, recorded_at))
+            if outcome_binding:
+                binding = {
+                    "contract_receipt_id": receipt_id,
+                    "opportunity_id": opportunity_id,
+                    **outcome_binding,
+                }
+                binding_json = json.dumps(
+                    binding, sort_keys=True, separators=(",", ":"))
+                binding_hash = hashlib.sha256(binding_json.encode()).hexdigest()
+                connection.execute(
+                    """INSERT INTO contract_outcome_terms
+                       (contract_receipt_id,opportunity_id,term_id,
+                        accepted_terms_hash,accepted_fee_cap_cents,
+                        acceptance_evidence_url,accepted_at,binding_hash,recorded_at)
+                       VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (receipt_id, opportunity_id, outcome_binding["term_id"],
+                     outcome_binding["accepted_terms_hash"],
+                     outcome_binding["accepted_fee_cap_cents"],
+                     outcome_binding["acceptance_evidence_url"],
+                     outcome_binding["accepted_at"], binding_hash, recorded_at))
             opportunity["pipeline_state"] = "contracted"
             connection.execute(
                 "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
@@ -1577,7 +1657,8 @@ def record_contract(path, opportunity_id, response_receipt_id, contract, *, now=
                 VALUES (?,?,?,?,?,?,?)""", (
                     tid, opportunity_id, source_state, "contracted", evidence_id,
                     hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
-        return {"receipt_id": receipt_id, "changed": True, "state": "contracted"}
+        return {"receipt_id": receipt_id, "changed": True, "state": "contracted",
+                "outcome_terms_bound": bool(outcome_binding)}
     finally:
         connection.close()
 
@@ -1900,6 +1981,20 @@ def record_attributed_outcome(
                 raise ValueError("outcome_event_provider_mismatch")
             if occurred_at < parse_time(contract[2], "contracted_at"):
                 raise ValueError("outcome_event_before_contract")
+            binding = connection.execute(
+                """SELECT term_id,accepted_terms_hash,accepted_fee_cap_cents
+                   FROM contract_outcome_terms WHERE contract_receipt_id=?""",
+                (contract_receipt_id,)).fetchone()
+            if binding is None:
+                raise ValueError("outcome_contract_terms_not_accepted")
+            current_terms = connection.execute(
+                """SELECT terms_hash,fee_cap_cents FROM outcome_pricing_terms
+                   WHERE term_id=? AND opportunity_id=?""",
+                (binding[0], opportunity_id)).fetchone()
+            if (binding[0] != terms[0] or current_terms is None
+                    or binding[1] != current_terms[0]
+                    or binding[2] != current_terms[1]):
+                raise ValueError("outcome_contract_terms_mismatch")
             normalized = {
                 "opportunity_id": opportunity_id,
                 "term_id": terms[0],
