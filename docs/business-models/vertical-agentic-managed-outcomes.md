@@ -215,3 +215,16 @@ declared outcome fee must exactly equal the selected event total, and cumulative
 allocations remain cap-bound. This records an external invoice; it does not
 create a charge or alter production billing.
 
+## Contract-bound outcome terms
+
+Outcome events cannot accrue from opportunity configuration alone. An accepted
+contract must explicitly bind the exact immutable outcome-terms hash and fee cap,
+with an HTTPS acceptance record and an acceptance timestamp between the buyer
+response and contract execution.
+
+The binding is stored separately from the contract receipt with its own evidence
+hash. Missing bindings, changed terms, mismatched caps, invalid timing, or
+non-HTTPS acceptance evidence fail closed before the contract advances. Every
+later attributed outcome verifies the binding still resolves to the same
+opportunity terms before any fee can accrue.
+
