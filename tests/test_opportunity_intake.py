@@ -98,6 +98,23 @@ class OpportunityIntakeTests(unittest.TestCase):
             "milestones": milestones,
             "recurring_base_fee_cents": recurring_base_fee_cents,
         }
+        if recurring_base_fee_cents:
+            value["recurring_terms"] = {
+                "billing_cadence": "monthly",
+                "included_services": [
+                    "Monitoring and approved workflow maintenance.",
+                    "Monthly evidence-backed performance reporting.",
+                ],
+                "included_usage_definition": (
+                    "Usage within the documented bounded workflow and cap."),
+                "support_boundaries": (
+                    "Business-hours support; no emergency SLA is promised."),
+                "exception_boundaries": (
+                    "Material scope, credential, privacy, and policy changes escalate."),
+                "renewal_terms": "Renews monthly only under accepted contract terms.",
+                "termination_terms": (
+                    "Either party may terminate under the accepted notice terms."),
+            }
         value.update(overrides)
         return self.proposal(**value)
 
@@ -3039,6 +3056,114 @@ class OpportunityIntakeTests(unittest.TestCase):
                 opportunity_intake.prepare_proposal(
                     path, opportunity_id, self.family_proposal(
                         family_id, outcome_fee_cents=1), now=NOW)
+
+
+    def test_issue_164_recurring_terms_are_immutable_and_contract_bound(self):
+        family_id = "multi_system_operational_integration"
+        qualification = {
+            key: True
+            for key in opportunity_intake.OFFER_FAMILY_CATALOG[
+                family_id]["qualification"]
+        }
+        result = opportunity_intake.ingest([candidate(
+            offer_family=family_id,
+            offer_family_fit_score=0.95,
+            offer_family_qualification=qualification,
+            offer_family_evidence=["github:ldavis2700/ai-revenue-agent#164"],
+            offer_phases=[
+                "diagnostic", "implementation", "managed_recurring"],
+        )], now=NOW)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            opportunity_id = result["opportunities"][0]["id"]
+            prepared = opportunity_intake.prepare_proposal(
+                path, opportunity_id, self.family_proposal(
+                    family_id, recurring_base_fee_cents=15000), now=NOW)
+            submitted = opportunity_intake.record_submission(
+                path, opportunity_id, prepared["proposal_id"], {
+                    "provider": "marketplace",
+                    "external_submission_id": "recurring-application",
+                    "submission_url": "https://example.com/applications/recurring",
+                    "submitted_at": NOW.isoformat(),
+                }, now=NOW)
+            replied = opportunity_intake.record_response(
+                path, opportunity_id, submitted["receipt_id"], {
+                    "provider": "marketplace",
+                    "external_message_id": "recurring-reply",
+                    "message_url": "https://example.com/messages/recurring",
+                    "received_at": NOW.isoformat(),
+                }, now=NOW)
+            connection = sqlite3.connect(path)
+            recurring = connection.execute(
+                """SELECT term_id,terms_hash,base_fee_cents,billing_cadence
+                   FROM recurring_pricing_terms WHERE proposal_id=?""",
+                (prepared["proposal_id"],)).fetchone()
+            connection.close()
+            contract = {
+                "provider": "marketplace",
+                "external_contract_id": "recurring-contract",
+                "contract_url": "https://example.com/contracts/recurring",
+                "amount_cents": 100000,
+                "currency": "USD",
+                "contracted_at": NOW.isoformat(),
+                "terms_authority": "preapproved_standard_terms",
+                "authority_evidence_url": "https://example.com/terms/standard-v1",
+                "recurring_terms_hash": recurring[1],
+                "recurring_base_fee_cents": recurring[2],
+                "recurring_terms_acceptance_url":
+                    "https://example.com/contracts/recurring/managed-terms",
+                "recurring_terms_accepted_at": NOW.isoformat(),
+            }
+            with self.assertRaisesRegex(
+                    ValueError, "recurring_terms_hash_mismatch"):
+                opportunity_intake.record_contract(
+                    path, opportunity_id, replied["receipt_id"],
+                    dict(contract, recurring_terms_hash="0" * 64), now=NOW)
+            accepted = opportunity_intake.record_contract(
+                path, opportunity_id, replied["receipt_id"], contract, now=NOW)
+            connection = sqlite3.connect(path)
+            binding = connection.execute(
+                """SELECT term_id,accepted_terms_hash,
+                          accepted_base_fee_cents,acceptance_evidence_url,
+                          LENGTH(binding_hash)
+                   FROM contract_recurring_terms
+                   WHERE contract_receipt_id=?""",
+                (accepted["receipt_id"],)).fetchone()
+            state = connection.execute(
+                "SELECT pipeline_state FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()[0]
+            connection.close()
+        self.assertEqual(recurring[2:], (15000, "monthly"))
+        self.assertEqual(binding, (
+            recurring[0], recurring[1], 15000,
+            "https://example.com/contracts/recurring/managed-terms", 64))
+        self.assertTrue(accepted["recurring_terms_bound"])
+        self.assertEqual(state, "contracted")
+
+    def test_issue_164_recurring_terms_fail_closed_without_managed_contract(self):
+        family_id = "crm_sales_ops_automation"
+        qualification = {
+            key: True
+            for key in opportunity_intake.OFFER_FAMILY_CATALOG[
+                family_id]["qualification"]
+        }
+        result = opportunity_intake.ingest([candidate(
+            offer_family=family_id,
+            offer_family_fit_score=0.9,
+            offer_family_qualification=qualification,
+            offer_family_evidence=["github:ldavis2700/ai-revenue-agent#164"],
+            offer_phases=["diagnostic", "implementation"],
+        )], now=NOW)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            opportunity_id = result["opportunities"][0]["id"]
+            with self.assertRaisesRegex(
+                    ValueError, "recurring_base_fee_stage_not_included"):
+                opportunity_intake.prepare_proposal(
+                    path, opportunity_id, self.family_proposal(
+                        family_id, recurring_base_fee_cents=15000), now=NOW)
 
 
 if __name__ == "__main__":
