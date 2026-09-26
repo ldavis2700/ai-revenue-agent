@@ -81,6 +81,13 @@ Recurring withdrawable balance and money actually received require their own
 provider-balance and bank-transfer evidence, exact settled-net/currency
 reconciliation, ordered timestamps, and idempotent external IDs. These later
 stages are reported independently and never increase collected revenue again.
+Settled recurring work can advance reusable-IP maturity only through
+`record_recurring_growth_evidence`. The current receipt must have separately
+recorded positive realized contribution. Retention additionally requires an
+earlier same-opportunity settled receipt and a subsequent non-overlapping service
+period; a contract alone is never retention evidence. Expansion requires an
+HTTPS evidence receipt plus explicit, increasing scope and measurable value.
+Promotion still proceeds one maturity step at a time.
 
 ## Mission control
 
