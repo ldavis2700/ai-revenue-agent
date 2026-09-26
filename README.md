@@ -72,6 +72,11 @@ and idempotent provider invoice and transaction IDs. Only these settled receipts
 appear in `summarize_settled_recurring_revenue`; withdrawable and bank-received
 amounts remain separate and zero until independently verified. These functions
 never create an invoice, charge a customer, or initiate a payout.
+`record_recurring_realized_unit_economics` then calculates contribution
+margin and revenue/contribution per required human hour only from one settled
+recurring receipt plus separately evidenced delivery, inference/API, CAC, and
+human-time costs. Mission Control consolidates one-time and recurring settled
+receipts exactly once and exposes recurring totals separately.
 
 ## Mission control
 
