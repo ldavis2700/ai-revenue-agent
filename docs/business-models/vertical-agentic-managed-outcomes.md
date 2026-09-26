@@ -306,3 +306,23 @@ fees cannot be entered as fixed proposal amounts; the proposal records only the
 validated cap, while later invoicing still requires contract-bound attributed
 events. The composition receives its own immutable hash and remains labeled
 `proposed_not_contracted_not_collected`.
+
+
+## Contract-bound managed recurring terms
+
+A managed-recurring proposal now requires an immutable terms record containing
+the separate base fee, billing cadence, included services and usage definition,
+support and exception boundaries, and renewal and termination terms. The record
+is linked to the proposal and labeled `proposed_not_accepted_not_revenue`.
+
+An externally accepted contract may bind managed recurring service only by
+supplying the exact terms hash and base fee, HTTPS acceptance evidence, and an
+acceptance timestamp between the buyer response and contract execution.
+Missing records, changed terms, mismatched fees, invalid timing, or recurring
+fields on a non-recurring proposal fail closed. The accepted binding is stored
+separately with its own immutable hash.
+
+This records external acceptance evidence; it does not accept a contract,
+activate billing, initiate a charge, or count recurring revenue. Recurring
+revenue remains zero until separately invoiced and settled recurring payment
+evidence is implemented and recorded.
