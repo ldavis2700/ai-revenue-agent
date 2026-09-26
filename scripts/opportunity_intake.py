@@ -27,6 +27,19 @@ PROHIBITED_CATEGORIES = {
     "adult", "credential_theft", "deceptive_reviews", "fraud", "malware",
     "regulated_financial_advice", "spam", "surveillance",
 }
+BUYER_STAGE_SCORES = {
+    "prospect": 0.0,
+    "qualified": 0.15,
+    "proposal": 0.30,
+    "buyer_reply": 0.55,
+    "interview": 0.70,
+    "offer": 0.90,
+    "contract": 1.0,
+}
+OFFER_PHASES = {
+    "diagnostic", "pilot", "implementation", "managed_recurring",
+    "outcome_pricing", "vertical_ip", "productized_agent_saas",
+}
 PIPELINE_TRANSITIONS = {
     "payment_rail_blocked": {"qualified", "unqualified", "expired"},
     "qualified": {"proposal_ready", "unqualified", "expired"},
@@ -44,7 +57,7 @@ PIPELINE_TRANSITIONS = {
 TERMINAL_SCREEN_REASONS = {
     "opportunity_expired", "listing_closed", "listing_filled",
     "preferred_qualifications_unmet", "marketplace_application_unavailable",
-    "location_ineligible",
+    "location_ineligible", "non_positive_projected_margin",
     "execution_capabilities_unmet", "personal_data_authority_unverified",
     "credential_access_unsafe", "prohibited_category", "scam_signals_present",
     "deception_required", "unsolicited_contact_disallowed",
@@ -128,6 +141,46 @@ def capability_set(payload, field):
     return sorted(normalized)
 
 
+def enum_list(payload, field, allowed):
+    """Normalize a unique ordered list of supported doctrine values."""
+    values = payload.get(field, [])
+    if not isinstance(values, list):
+        raise ValueError(f"{field}_invalid")
+    normalized = []
+    for value in values:
+        item = str(value or "").strip().lower()
+        if not item or item not in allowed:
+            raise ValueError(f"{field}_invalid")
+        if item not in normalized:
+            normalized.append(item)
+    return normalized
+
+
+def projected_unit_economics(opportunity):
+    """Return explicit projected economics; these are not collected revenue."""
+    contract_value = opportunity["contract_value_cents"]
+    total_cost = (
+        opportunity["delivery_cost_cents"]
+        + opportunity["inference_cost_cents"]
+        + opportunity["cac_cents"]
+    )
+    contribution = contract_value - total_cost
+    margin = contribution / contract_value if contract_value else 0
+    return {
+        "contract_value_cents": contract_value,
+        "delivery_cost_cents": opportunity["delivery_cost_cents"],
+        "inference_cost_cents": opportunity["inference_cost_cents"],
+        "cac_cents": opportunity["cac_cents"],
+        "projected_contribution_cents": contribution,
+        "projected_contribution_margin": round(margin, 6),
+        "human_operating_hours": opportunity["human_operating_hours"],
+        "projected_revenue_per_human_hour": round(
+            contract_value / 100 / opportunity["human_operating_hours"], 2
+        ),
+        "evidence_status": "projected_not_collected",
+    }
+
+
 def canonical_url(value):
     if not value:
         return ""
@@ -197,6 +250,53 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         raise ValueError("payout_cents_invalid")
     effort_hours = finite_number(payload, "effort_hours", minimum=0.25, maximum=10000)
     time_to_cash_days = finite_number(payload, "time_to_cash_days", minimum=0, maximum=3650)
+    contract_value_cents = finite_number(
+        payload, "contract_value_cents", minimum=1, required=False)
+    economic_value_cents = finite_number(
+        payload, "economic_value_cents", minimum=0, required=False)
+    delivery_cost_cents = finite_number(
+        payload, "delivery_cost_cents", minimum=0, required=False)
+    inference_cost_cents = finite_number(
+        payload, "inference_cost_cents", minimum=0, required=False)
+    cac_cents = finite_number(payload, "cac_cents", minimum=0, required=False)
+    human_operating_hours = finite_number(
+        payload, "human_operating_hours", minimum=0.01, maximum=10000,
+        required=False)
+    for field, value in (
+        ("contract_value_cents", contract_value_cents),
+        ("economic_value_cents", economic_value_cents),
+        ("delivery_cost_cents", delivery_cost_cents),
+        ("inference_cost_cents", inference_cost_cents),
+        ("cac_cents", cac_cents),
+    ):
+        if value is not None and not value.is_integer():
+            raise ValueError(f"{field}_invalid")
+    buyer_stage = str(payload.get("buyer_stage") or "prospect").strip().lower()
+    if buyer_stage not in BUYER_STAGE_SCORES:
+        raise ValueError("buyer_stage_invalid")
+    offer_phases = enum_list(payload, "offer_phases", OFFER_PHASES)
+    outcome_pricing = boolean_flag(payload, "outcome_pricing")
+    outcome_success_definition = str(
+        payload.get("outcome_success_definition") or "").strip()
+    outcome_attribution_method = str(
+        payload.get("outcome_attribution_method") or "").strip()
+    outcome_fee_cap_cents = finite_number(
+        payload, "outcome_fee_cap_cents", minimum=1, required=False)
+    human_escalation_defined = boolean_flag(
+        payload, "human_escalation_defined")
+    if outcome_fee_cap_cents is not None and not outcome_fee_cap_cents.is_integer():
+        raise ValueError("outcome_fee_cap_cents_invalid")
+    if outcome_pricing:
+        if "outcome_pricing" not in offer_phases:
+            raise ValueError("outcome_pricing_phase_required")
+        if not outcome_success_definition:
+            raise ValueError("outcome_success_definition_required")
+        if not outcome_attribution_method:
+            raise ValueError("outcome_attribution_method_required")
+        if outcome_fee_cap_cents is None:
+            raise ValueError("outcome_fee_cap_cents_required")
+        if not human_escalation_defined:
+            raise ValueError("outcome_human_escalation_required")
     required_capabilities = capability_set(payload, "required_execution_capabilities")
     available_capabilities = capability_set(payload, "available_execution_capabilities")
     application_cost_units = finite_number(
@@ -317,6 +417,34 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         "currency": str(payload.get("currency") or "USD").strip().upper(),
         "effort_hours": effort_hours,
         "time_to_cash_days": time_to_cash_days,
+        "buyer_stage": buyer_stage,
+        "buyer_stage_score": BUYER_STAGE_SCORES[buyer_stage],
+        "payment_history_score": finite_number(
+            payload, "payment_history_score", maximum=1, required=False),
+        "contract_value_cents": int(contract_value_cents or payout_cents),
+        "economic_value_cents": int(economic_value_cents or payout_cents),
+        "delivery_cost_cents": int(delivery_cost_cents or 0),
+        "inference_cost_cents": int(inference_cost_cents or 0),
+        "cac_cents": int(cac_cents or 0),
+        "human_operating_hours": human_operating_hours or effort_hours,
+        "measurable_outcome": boolean_flag(payload, "measurable_outcome"),
+        "automation_potential": finite_number(
+            payload, "automation_potential", maximum=1, required=False),
+        "delivery_risk": finite_number(
+            payload, "delivery_risk", maximum=1, required=False),
+        "compliance_risk": finite_number(
+            payload, "compliance_risk", maximum=1, required=False),
+        "reusable_ip_potential": finite_number(
+            payload, "reusable_ip_potential", maximum=1, required=False),
+        "offer_phases": offer_phases,
+        "outcome_pricing": outcome_pricing,
+        "outcome_success_definition": (
+            outcome_success_definition if outcome_pricing else None),
+        "outcome_attribution_method": (
+            outcome_attribution_method if outcome_pricing else None),
+        "outcome_fee_cap_cents": (
+            int(outcome_fee_cap_cents) if outcome_fee_cap_cents is not None else None),
+        "human_escalation_defined": human_escalation_defined,
         "buyer_intent": finite_number(payload, "buyer_intent", maximum=1),
         "win_probability": finite_number(payload, "win_probability", maximum=1),
         "execution_confidence": finite_number(payload, "execution_confidence", maximum=1),
@@ -394,12 +522,25 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
     if normalized["credential_access_method"] not in {
             "none", "provider_managed", "tokenized", "raw", "unclear"}:
         raise ValueError("credential_access_method_invalid")
+    if normalized["payment_history_score"] is None:
+        normalized["payment_history_score"] = 0.5
+    if normalized["automation_potential"] is None:
+        normalized["automation_potential"] = 0.5
+    if normalized["delivery_risk"] is None:
+        normalized["delivery_risk"] = 0.5
+    if normalized["compliance_risk"] is None:
+        normalized["compliance_risk"] = 0.5
+    if normalized["reusable_ip_potential"] is None:
+        normalized["reusable_ip_potential"] = normalized["reuse_value"]
+    normalized["unit_economics"] = projected_unit_economics(normalized)
     return normalized
 
 
 def screen(opportunity):
     if opportunity["expired"]:
         return False, "opportunity_expired"
+    if opportunity["unit_economics"]["projected_contribution_cents"] <= 0:
+        return False, "non_positive_projected_margin"
     if not opportunity["listing_open"]:
         return False, "listing_closed"
     if opportunity["marketplace_application_allowed"] is False:
@@ -446,11 +587,24 @@ def screen(opportunity):
 
 
 def score(opportunity):
-    """Return a bounded 0-100 expected-value score with explicit components."""
+    """Return a bounded doctrine-aligned 0-100 score with explicit components."""
     expected_value = opportunity["payout_cents"] * opportunity["win_probability"]
     dollars_per_hour = expected_value / 100 / opportunity["effort_hours"]
     value_score = min(dollars_per_hour / 100, 1)
     speed_score = max(0, 1 - opportunity["time_to_cash_days"] / 60)
+    contract_value_score = min(opportunity["contract_value_cents"] / 500000, 1)
+    value_to_fee = (
+        opportunity["economic_value_cents"]
+        / max(opportunity["contract_value_cents"] * 3, 1)
+    )
+    economic_value_score = min(value_to_fee, 1)
+    leverage_score = min(
+        opportunity["unit_economics"]["projected_revenue_per_human_hour"] / 1000,
+        1,
+    )
+    margin_score = max(
+        0, min(opportunity["unit_economics"]["projected_contribution_margin"], 1)
+    )
     remaining_positions = None
     if (opportunity["positions_to_hire"] is not None
             and opportunity["hires_for_listing"] is not None):
@@ -462,35 +616,45 @@ def score(opportunity):
         else (opportunity["proposal_count_max"] or 0)
     )
     components = {
-        "buyer_intent": 15 * opportunity["buyer_intent"],
-        "expected_value": 15 * value_score,
-        "win_probability": 15 * opportunity["win_probability"],
-        "execution_confidence": 20 * opportunity["execution_confidence"],
-        "time_to_cash": 15 * speed_score,
-        "payment_safety": 10 * (1 - opportunity["payment_risk"]),
-        "reuse_and_recurring": 5 * opportunity["reuse_value"] + 5 * opportunity["recurring_value"],
+        "buyer_intent": 10 * opportunity["buyer_intent"],
+        "active_buyer_stage": 10 * opportunity["buyer_stage_score"],
+        "expected_value": 8 * value_score,
+        "contract_value": 7 * contract_value_score,
+        "measurable_economic_value": (
+            5 * economic_value_score if opportunity["measurable_outcome"] else 0
+        ),
+        "win_probability": 8 * opportunity["win_probability"],
+        "execution_confidence": 10 * opportunity["execution_confidence"],
+        "time_to_cash": 8 * speed_score,
+        "payment_safety": 6 * (1 - opportunity["payment_risk"]),
+        "payment_history": 5 * opportunity["payment_history_score"],
+        "reuse_and_recurring": (
+            3 * opportunity["reusable_ip_potential"]
+            + 3 * opportunity["recurring_value"]
+        ),
+        "automation_and_margin": (
+            5 * opportunity["automation_potential"] + 5 * margin_score
+        ),
+        "effective_leverage": 7 * leverage_score,
+        "delivery_risk": -7.5 * opportunity["delivery_risk"],
+        "compliance_risk": -7.5 * opportunity["compliance_risk"],
         "application_cost": -10 * min(
             opportunity["application_cost_units"] /
             max(opportunity["application_units_balance"] or 1, 1), 1),
-        # Keep temporarily blocked opportunities prepared, but rank reachable
-        # channels first so a CAPTCHA/outage cannot monopolize pursuit.
         "submission_access": {
             "available": 0,
             "unclear": -5,
             "temporarily_unavailable": -25,
         }[opportunity["submission_channel_status"]],
-        # Normalize verified competition by verified remaining openings. This
-        # avoids treating a multi-hire listing like a single-seat listing while
-        # preserving the conservative raw count when seat evidence is absent.
         "competition": -10 * min(competition_per_opening / 50, 1),
-        # Penalize age only when the source supplies verified publication
-        # evidence. Missing evidence stays neutral instead of being guessed.
         "listing_freshness": -5 * min(
             (opportunity["listing_age_days"] or 0) / 30, 1)
             if opportunity["listing_age_days"] is not None else 0,
     }
-    return round(sum(components.values()), 2), {key: round(value, 2) for key, value in components.items()}
-
+    total = max(0, min(sum(components.values()), 100))
+    return round(total, 2), {
+        key: round(value, 2) for key, value in components.items()
+    }
 
 def action_mode(opportunity):
     if (opportunity["platform_allows_automation"] and opportunity["authenticated_channel"]
