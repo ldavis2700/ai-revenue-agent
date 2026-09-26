@@ -3157,6 +3157,40 @@ class OpportunityIntakeTests(unittest.TestCase):
             recurring_revenue = (
                 opportunity_intake.summarize_settled_recurring_revenue(
                     path, opportunity_id))
+            realized = (
+                opportunity_intake.record_recurring_realized_unit_economics(
+                    path, opportunity_id, settled["receipt_id"], {
+                        "delivery_cost_cents": 1000,
+                        "inference_cost_cents": 500,
+                        "cac_cents": 250,
+                        "human_operating_minutes": 30,
+                        "delivery_cost_evidence_url":
+                            "https://example.com/evidence/delivery-cost",
+                        "inference_cost_evidence_url":
+                            "https://example.com/evidence/inference-cost",
+                        "cac_evidence_url":
+                            "https://example.com/evidence/cac",
+                        "human_time_evidence_url":
+                            "https://example.com/evidence/human-time",
+                        "measured_at": NOW.isoformat(),
+                    }, now=NOW))
+            realized_duplicate = (
+                opportunity_intake.record_recurring_realized_unit_economics(
+                    path, opportunity_id, settled["receipt_id"], {
+                        "delivery_cost_cents": 1000,
+                        "inference_cost_cents": 500,
+                        "cac_cents": 250,
+                        "human_operating_minutes": 30,
+                        "delivery_cost_evidence_url":
+                            "https://example.com/evidence/delivery-cost",
+                        "inference_cost_evidence_url":
+                            "https://example.com/evidence/inference-cost",
+                        "cac_evidence_url":
+                            "https://example.com/evidence/cac",
+                        "human_time_evidence_url":
+                            "https://example.com/evidence/human-time",
+                        "measured_at": NOW.isoformat(),
+                    }, now=NOW))
             connection = sqlite3.connect(path)
             binding = connection.execute(
                 """SELECT term_id,accepted_terms_hash,
@@ -3185,6 +3219,16 @@ class OpportunityIntakeTests(unittest.TestCase):
             "bank_received_cents": 0,
             "status": "settled_receipts_only",
         })
+        self.assertTrue(realized["changed"])
+        self.assertFalse(realized_duplicate["changed"])
+        self.assertEqual(realized["net_collected_cents"], 14500)
+        self.assertEqual(realized["contribution_cents"], 12750)
+        self.assertEqual(realized["contribution_margin"], 0.87931)
+        self.assertEqual(realized["revenue_per_human_hour"], 290.0)
+        self.assertEqual(realized["contribution_per_human_hour"], 255.0)
+        self.assertEqual(
+            realized["evidence_status"],
+            "realized_from_settled_recurring_payment")
         self.assertEqual(state, "contracted")
 
     def test_issue_164_recurring_terms_fail_closed_without_managed_contract(self):
