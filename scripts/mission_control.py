@@ -63,18 +63,39 @@ def snapshot(conn):
     event_gross = scalar(conn, "SELECT COALESCE(SUM(value),0) FROM events WHERE event_type='sale'")
     refunds = scalar(conn, "SELECT COALESCE(SUM(value),0) FROM events WHERE event_type='refund'")
     collected_payments = scalar(conn, "SELECT COUNT(*) FROM payment_receipts")
-    opportunity_gross = scalar(
+    recurring_payments = scalar(
+        conn, "SELECT COUNT(*) FROM recurring_payment_receipts")
+    one_time_gross = scalar(
         conn, "SELECT COALESCE(SUM(gross_amount_cents),0) / 100.0 FROM payment_receipts")
-    opportunity_fees = scalar(
+    one_time_fees = scalar(
         conn, "SELECT COALESCE(SUM(fee_amount_cents),0) / 100.0 FROM payment_receipts")
-    opportunity_net = scalar(
+    one_time_net = scalar(
         conn, "SELECT COALESCE(SUM(net_amount_cents),0) / 100.0 FROM payment_receipts")
+    recurring_gross = scalar(
+        conn, """SELECT COALESCE(SUM(gross_amount_cents),0) / 100.0
+                 FROM recurring_payment_receipts""")
+    recurring_fees = scalar(
+        conn, """SELECT COALESCE(SUM(fee_amount_cents),0) / 100.0
+                 FROM recurring_payment_receipts""")
+    recurring_net = scalar(
+        conn, """SELECT COALESCE(SUM(net_amount_cents),0) / 100.0
+                 FROM recurring_payment_receipts""")
+    opportunity_gross = one_time_gross + recurring_gross
+    opportunity_fees = one_time_fees + recurring_fees
+    opportunity_net = one_time_net + recurring_net
     eligible = scalar(conn, "SELECT COUNT(*) FROM leads WHERE contact_allowed=1 AND score >= ?",
                       (int(os.getenv('MIN_LEAD_SCORE', '55')),))
     return {
         'eligible_leads': eligible, 'sent': sent, 'replies': replies,
-        'interested': interested, 'sales': event_sales + collected_payments,
-        'verified_collected_payments': collected_payments,
+        'interested': interested,
+        'sales': event_sales + collected_payments + recurring_payments,
+        'verified_collected_payments':
+            collected_payments + recurring_payments,
+        'verified_one_time_payment_receipts': collected_payments,
+        'verified_recurring_payment_receipts': recurring_payments,
+        'verified_recurring_gross_revenue': recurring_gross,
+        'verified_recurring_fees': recurring_fees,
+        'verified_recurring_net_revenue': recurring_net,
         'verified_opportunity_gross_revenue': opportunity_gross,
         'verified_opportunity_fees': opportunity_fees,
         'verified_opportunity_net_revenue': opportunity_net,
