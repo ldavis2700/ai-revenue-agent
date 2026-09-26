@@ -295,6 +295,89 @@ class OpportunityIntakeTests(unittest.TestCase):
             missing_margin["rejections"][0]["reason"],
             "reusable_ip_margin_evidence_required")
 
+    def test_issue_164_scale_and_productize_require_retention_and_expansion(self):
+        base = [
+            "verified_payment:payment-1",
+            "verified_margin:margin-1",
+        ]
+        scale_missing_retention = opportunity_intake.ingest([candidate(
+            reusable_ip_assets=[{
+                "name": "Lead recovery workflow",
+                "type": "workflow",
+                "maturity": "scale_candidate",
+                "evidence": base,
+            }],
+        )], now=NOW)
+        self.assertEqual(
+            scale_missing_retention["rejections"][0]["reason"],
+            "reusable_ip_retention_evidence_required")
+
+        product_missing_expansion = opportunity_intake.ingest([candidate(
+            reusable_ip_assets=[{
+                "name": "Lead recovery workflow",
+                "type": "workflow",
+                "maturity": "productize_candidate",
+                "evidence": base + ["retention:renewal-1"],
+            }],
+        )], now=NOW)
+        self.assertEqual(
+            product_missing_expansion["rejections"][0]["reason"],
+            "reusable_ip_expansion_evidence_required")
+
+        accepted = opportunity_intake.ingest([candidate(
+            reusable_ip_assets=[{
+                "name": "Lead recovery workflow",
+                "type": "workflow",
+                "maturity": "productize_candidate",
+                "evidence": base + [
+                    "retention:renewal-1",
+                    "expansion:upsell-1",
+                ],
+            }],
+        )], now=NOW)
+        self.assertEqual(
+            accepted["opportunities"][0]["reusable_ip_summary"]["paid_validated_count"], 1)
+
+    def test_issue_164_persists_offer_and_ip_evidence_idempotently(self):
+        result = opportunity_intake.ingest([candidate(
+            offer_phases=["diagnostic", "vertical_ip"],
+            offer_evidence={
+                "diagnostic": ["github:issue-164"],
+                "vertical_ip": ["artifact:lead-routing-eval"],
+            },
+            reusable_ip_assets=[{
+                "name": "Lead routing evaluator",
+                "type": "eval",
+                "maturity": "learned",
+                "evidence": ["github:issue-164"],
+            }],
+        )], now=NOW)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            first = opportunity_intake.persist(result, path, now=NOW)
+            second = opportunity_intake.persist(result, path, now=NOW)
+            connection = sqlite3.connect(path)
+            offer_rows = connection.execute(
+                """SELECT phase,reference,LENGTH(evidence_hash)
+                   FROM offer_phase_evidence ORDER BY phase""").fetchall()
+            ip_row = connection.execute(
+                """SELECT name,asset_type,maturity,evidence_json,
+                          LENGTH(evidence_hash)
+                   FROM reusable_ip_assets""").fetchone()
+            connection.close()
+        self.assertEqual(first["offer_evidence_written"], 2)
+        self.assertEqual(first["reusable_ip_assets_written"], 1)
+        self.assertEqual(second["offer_evidence_written"], 0)
+        self.assertEqual(second["reusable_ip_assets_written"], 0)
+        self.assertEqual(offer_rows, [
+            ("diagnostic", "github:issue-164", 64),
+            ("vertical_ip", "artifact:lead-routing-eval", 64),
+        ])
+        self.assertEqual(ip_row[:3], (
+            "Lead routing evaluator", "eval", "learned"))
+        self.assertEqual(json.loads(ip_row[3]), ["github:issue-164"])
+        self.assertEqual(ip_row[4], 64)
+
     def test_issue_164_offer_evidence_requires_declared_phase(self):
         result = opportunity_intake.ingest([candidate(
             offer_phases=["diagnostic"],
