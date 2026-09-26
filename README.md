@@ -64,6 +64,15 @@ Mission Control includes those settled receipts in verified gross, fee, and net
 revenue metrics alongside legacy verified product-sale events, without counting
 the same refund twice in its objective score.
 
+Managed-recurring revenue is recorded through a separate evidence ledger.
+`record_settled_recurring_payment` requires the accepted recurring-terms
+binding, exact base fee and currency, HTTPS invoice and transaction evidence,
+ordered invoice/payment/settlement timestamps, non-overlapping service periods,
+and idempotent provider invoice and transaction IDs. Only these settled receipts
+appear in `summarize_settled_recurring_revenue`; withdrawable and bank-received
+amounts remain separate and zero until independently verified. These functions
+never create an invoice, charge a customer, or initiate a payout.
+
 ## Mission control
 
 `scripts/mission_control.py` gives the agent a measurable operating mission instead of a vague instruction to "make money." It audits the live funnel, rewards only verified net revenue and conversion quality, chooses the current bottleneck, and records every plan in SQLite.
