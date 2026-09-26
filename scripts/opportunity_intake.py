@@ -662,6 +662,72 @@ def derive_offer_architecture(opportunity, proposal_price_cents, milestones):
     return architecture
 
 
+def validate_offer_pricing(architecture, milestones, fixed_price_cents,
+                           recurring_base_fee_cents):
+    """Bind fixed, recurring, and outcome pricing without conflating them."""
+    bound = any(
+        milestone.get("stage_id") or milestone.get("acceptance_criteria")
+        for milestone in milestones)
+    if architecture is None:
+        if bound or recurring_base_fee_cents:
+            raise ValueError("offer_pricing_architecture_required")
+        return None
+
+    stages = {stage["id"]: stage for stage in architecture["stages"]}
+    included_fixed = {
+        stage_id for stage_id in ("diagnostic_pilot", "implementation")
+        if stages[stage_id]["status"] == "included"
+    }
+    if not included_fixed:
+        raise ValueError("offer_fixed_stage_required")
+    stage_totals = {stage_id: 0 for stage_id in included_fixed}
+    for milestone in milestones:
+        stage_id = milestone.get("stage_id")
+        if stage_id not in included_fixed:
+            raise ValueError("milestone_offer_stage_invalid")
+        criteria = milestone.get("acceptance_criteria") or []
+        if not criteria:
+            raise ValueError("milestone_acceptance_criteria_required")
+        allowed = set(stages[stage_id]["acceptance_tests"])
+        if any(criterion not in allowed for criterion in criteria):
+            raise ValueError("milestone_acceptance_criteria_unbound")
+        stage_totals[stage_id] += milestone["amount_cents"]
+    if any(not stage_totals[stage_id] for stage_id in included_fixed):
+        raise ValueError("included_fixed_stage_milestone_required")
+
+    recurring_included = stages["managed_recurring"]["status"] == "included"
+    if recurring_included and recurring_base_fee_cents <= 0:
+        raise ValueError("recurring_base_fee_required")
+    if not recurring_included and recurring_base_fee_cents:
+        raise ValueError("recurring_base_fee_stage_not_included")
+
+    outcome_stage = stages["outcome_component"]
+    outcome_cap = None
+    if outcome_stage["status"] == "included":
+        outcome_cap = outcome_stage["terms"]["fee_cap_cents"]
+        if not isinstance(outcome_cap, int) or outcome_cap <= 0:
+            raise ValueError("outcome_fee_cap_invalid")
+
+    composition = {
+        "fixed_one_time_total_cents": int(fixed_price_cents),
+        "fixed_stage_totals_cents": {
+            key: stage_totals[key] for key in sorted(stage_totals)},
+        "recurring_base_fee_cents": int(recurring_base_fee_cents),
+        "outcome_fee_cap_cents": outcome_cap,
+        "outcome_fee_in_fixed_total_cents": 0,
+        "currency_timing": {
+            "fixed": "one_time_milestones",
+            "recurring": ("separate_recurring_period"
+                          if recurring_included else "not_included"),
+            "outcome": ("separate_verified_events_capped"
+                        if outcome_cap is not None else "not_configured"),
+        },
+        "evidence_status": "proposed_not_contracted_not_collected",
+    }
+    composition["composition_hash"] = payload_hash(composition)
+    return composition
+
+
 def projected_unit_economics(opportunity):
     """Return explicit projected economics; these are not collected revenue."""
     contract_value = opportunity["contract_value_cents"]
@@ -1660,10 +1726,35 @@ def prepare_proposal(path, opportunity_id, proposal, *, now=None):
         if not amount.is_integer() or not days.is_integer():
             raise ValueError("milestone_number_invalid")
         milestone_total += int(amount)
-        normalized_milestones.append({"title": title, "deliverable": deliverable,
-                                      "amount_cents": int(amount), "due_days": int(days)})
+        stage_id = str(milestone.get("stage_id") or "").strip().lower() or None
+        if stage_id is not None and stage_id not in {
+                "diagnostic_pilot", "implementation"}:
+            raise ValueError("milestone_offer_stage_invalid")
+        raw_criteria = milestone.get("acceptance_criteria", [])
+        if not isinstance(raw_criteria, list) or len(raw_criteria) > 20:
+            raise ValueError("milestone_acceptance_criteria_invalid")
+        criteria = []
+        for criterion in raw_criteria:
+            if not isinstance(criterion, str) or not criterion.strip():
+                raise ValueError("milestone_acceptance_criterion_invalid")
+            normalized_criterion = criterion.strip()
+            if len(normalized_criterion) > 500:
+                raise ValueError("milestone_acceptance_criterion_too_long")
+            if normalized_criterion not in criteria:
+                criteria.append(normalized_criterion)
+        normalized_milestones.append({
+            "title": title, "deliverable": deliverable,
+            "amount_cents": int(amount), "due_days": int(days),
+            "stage_id": stage_id, "acceptance_criteria": criteria})
     if milestone_total != int(price_cents):
         raise ValueError("milestone_total_mismatch")
+    recurring_base_fee_cents = finite_number(
+        proposal, "recurring_base_fee_cents", minimum=0, required=False)
+    recurring_base_fee_cents = recurring_base_fee_cents or 0
+    if not recurring_base_fee_cents.is_integer():
+        raise ValueError("recurring_base_fee_cents_invalid")
+    if proposal.get("outcome_fee_cents") is not None:
+        raise ValueError("outcome_fee_must_remain_variable_and_capped")
 
     claims = proposal.get("claims", [])
     if not isinstance(claims, list) or len(claims) > 20:
@@ -1686,6 +1777,7 @@ def prepare_proposal(path, opportunity_id, proposal, *, now=None):
 
     artifact = {"opportunity_id": opportunity_id, "scope": scope,
                 "price_cents": int(price_cents), "milestones": normalized_milestones,
+                "recurring_base_fee_cents": int(recurring_base_fee_cents),
                 "claims": normalized_claims}
     created_at = (now or utc_now()).isoformat()
     connection = open_ledger(path)
@@ -1709,6 +1801,9 @@ def prepare_proposal(path, opportunity_id, proposal, *, now=None):
             } if selection.get("id") else None)
             artifact["offer_architecture"] = derive_offer_architecture(
                 opportunity, int(price_cents), normalized_milestones)
+            artifact["pricing_composition"] = validate_offer_pricing(
+                artifact["offer_architecture"], normalized_milestones,
+                int(price_cents), int(recurring_base_fee_cents))
             serialized = json.dumps(artifact, sort_keys=True, separators=(",", ":"))
             artifact_hash = hashlib.sha256(serialized.encode()).hexdigest()
             proposal_id = "prop_" + artifact_hash[:24]
