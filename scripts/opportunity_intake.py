@@ -384,6 +384,20 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         payload, "outcome_fee_cap_cents", minimum=1, required=False)
     human_escalation_defined = boolean_flag(
         payload, "human_escalation_defined")
+    human_escalation_rule = str(
+        payload.get("human_escalation_rule") or "").strip()
+    raw_exclusions = payload.get("outcome_exclusions", [])
+    if not isinstance(raw_exclusions, list) or len(raw_exclusions) > 20:
+        raise ValueError("outcome_exclusions_invalid")
+    outcome_exclusions = []
+    for exclusion in raw_exclusions:
+        if not isinstance(exclusion, str) or not exclusion.strip():
+            raise ValueError("outcome_exclusion_invalid")
+        exclusion = exclusion.strip()
+        if len(exclusion) > 500:
+            raise ValueError("outcome_exclusion_too_long")
+        if exclusion not in outcome_exclusions:
+            outcome_exclusions.append(exclusion)
     if outcome_fee_cap_cents is not None and not outcome_fee_cap_cents.is_integer():
         raise ValueError("outcome_fee_cap_cents_invalid")
     if outcome_pricing:
@@ -393,9 +407,11 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
             raise ValueError("outcome_success_definition_required")
         if not outcome_attribution_method:
             raise ValueError("outcome_attribution_method_required")
+        if not outcome_exclusions:
+            raise ValueError("outcome_exclusions_required")
         if outcome_fee_cap_cents is None:
             raise ValueError("outcome_fee_cap_cents_required")
-        if not human_escalation_defined:
+        if not human_escalation_defined or not human_escalation_rule:
             raise ValueError("outcome_human_escalation_required")
     required_capabilities = capability_set(payload, "required_execution_capabilities")
     available_capabilities = capability_set(payload, "available_execution_capabilities")
@@ -555,7 +571,10 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
             outcome_attribution_method if outcome_pricing else None),
         "outcome_fee_cap_cents": (
             int(outcome_fee_cap_cents) if outcome_fee_cap_cents is not None else None),
+        "outcome_exclusions": outcome_exclusions if outcome_pricing else [],
         "human_escalation_defined": human_escalation_defined,
+        "human_escalation_rule": (
+            human_escalation_rule if outcome_pricing else None),
         "buyer_intent": finite_number(payload, "buyer_intent", maximum=1),
         "win_probability": finite_number(payload, "win_probability", maximum=1),
         "execution_confidence": finite_number(payload, "execution_confidence", maximum=1),
@@ -1025,6 +1044,46 @@ def open_ledger(path):
         FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
         FOREIGN KEY(qa_report_id) REFERENCES qa_reports(report_id),
         UNIQUE(provider, external_delivery_id)
+    )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS outcome_pricing_terms (
+        term_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL UNIQUE,
+        success_definition TEXT NOT NULL,
+        attribution_method TEXT NOT NULL,
+        exclusions_json TEXT NOT NULL,
+        fee_cap_cents INTEGER NOT NULL,
+        human_escalation_rule TEXT NOT NULL,
+        terms_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id)
+    )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS attributed_outcome_events (
+        event_id TEXT PRIMARY KEY,
+        opportunity_id TEXT NOT NULL,
+        term_id TEXT NOT NULL,
+        contract_receipt_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        external_event_id TEXT NOT NULL,
+        evidence_url TEXT NOT NULL,
+        attribution_reference TEXT NOT NULL,
+        units INTEGER NOT NULL,
+        unit_fee_cents INTEGER NOT NULL,
+        fee_cents INTEGER NOT NULL,
+        occurred_at TEXT NOT NULL,
+        event_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(term_id) REFERENCES outcome_pricing_terms(term_id),
+        FOREIGN KEY(contract_receipt_id) REFERENCES contract_receipts(receipt_id),
+        UNIQUE(provider, external_event_id)
+    )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS invoice_outcome_events (
+        invoice_receipt_id TEXT NOT NULL,
+        event_id TEXT NOT NULL UNIQUE,
+        outcome_fee_cents INTEGER NOT NULL,
+        PRIMARY KEY(invoice_receipt_id,event_id),
+        FOREIGN KEY(invoice_receipt_id) REFERENCES invoice_receipts(receipt_id),
+        FOREIGN KEY(event_id) REFERENCES attributed_outcome_events(event_id)
     )""")
     connection.execute("""CREATE TABLE IF NOT EXISTS invoice_receipts (
         receipt_id TEXT PRIMARY KEY,
@@ -1790,8 +1849,105 @@ def record_delivery(path, opportunity_id, qa_report_id, delivery, *, now=None):
         connection.close()
 
 
+def record_attributed_outcome(
+        path, opportunity_id, contract_receipt_id, event, *, now=None):
+    """Record one immutable, contract-linked outcome; never invoice or charge."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(contract_receipt_id, str) or not contract_receipt_id.strip():
+        raise ValueError("contract_receipt_id_required")
+    if not isinstance(event, dict):
+        raise ValueError("outcome_event_object_required")
+    opportunity_id = opportunity_id.strip()
+    contract_receipt_id = contract_receipt_id.strip()
+    provider = _proposal_text(event.get("provider"), "outcome_provider", 160)
+    external_id = _proposal_text(
+        event.get("external_event_id"), "outcome_external_event_id", 500)
+    evidence_url = canonical_url(
+        _proposal_text(event.get("evidence_url"), "outcome_evidence_url", 2000))
+    if urlsplit(evidence_url).scheme != "https":
+        raise ValueError("outcome_evidence_url_https_required")
+    attribution_reference = _proposal_text(
+        event.get("attribution_reference"), "attribution_reference", 1000)
+    units = finite_number(event, "units", minimum=1, maximum=1000000)
+    unit_fee = finite_number(event, "unit_fee_cents", minimum=1)
+    if not units.is_integer() or not unit_fee.is_integer():
+        raise ValueError("outcome_event_amount_invalid")
+    units, unit_fee = int(units), int(unit_fee)
+    fee_cents = units * unit_fee
+    occurred_at = parse_time(event.get("occurred_at"), "outcome_occurred_at")
+    recorded = now or utc_now()
+    if occurred_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("outcome_occurred_at_future")
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            terms = connection.execute(
+                """SELECT term_id,fee_cap_cents FROM outcome_pricing_terms
+                   WHERE opportunity_id=?""", (opportunity_id,)).fetchone()
+            if terms is None:
+                raise ValueError("outcome_pricing_terms_not_found")
+            contract = connection.execute(
+                """SELECT opportunity_id,provider,contracted_at
+                   FROM contract_receipts WHERE receipt_id=?""",
+                (contract_receipt_id,)).fetchone()
+            if contract is None:
+                raise ValueError("contract_receipt_not_found")
+            if contract[0] != opportunity_id:
+                raise ValueError("outcome_event_opportunity_mismatch")
+            if contract[1].casefold() != provider.casefold():
+                raise ValueError("outcome_event_provider_mismatch")
+            if occurred_at < parse_time(contract[2], "contracted_at"):
+                raise ValueError("outcome_event_before_contract")
+            existing_total = connection.execute(
+                """SELECT COALESCE(SUM(fee_cents),0)
+                   FROM attributed_outcome_events WHERE opportunity_id=?""",
+                (opportunity_id,)).fetchone()[0]
+            if existing_total + fee_cents > terms[1]:
+                raise ValueError("outcome_fee_cap_exceeded")
+            normalized = {
+                "opportunity_id": opportunity_id,
+                "term_id": terms[0],
+                "contract_receipt_id": contract_receipt_id,
+                "provider": provider,
+                "external_event_id": external_id,
+                "evidence_url": evidence_url,
+                "attribution_reference": attribution_reference,
+                "units": units,
+                "unit_fee_cents": unit_fee,
+                "fee_cents": fee_cents,
+                "occurred_at": occurred_at.isoformat(),
+            }
+            serialized = json.dumps(
+                normalized, sort_keys=True, separators=(",", ":"))
+            event_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            event_id = "oute_" + event_hash[:24]
+            existing = connection.execute(
+                """SELECT event_id,event_hash FROM attributed_outcome_events
+                   WHERE provider=? AND external_event_id=?""",
+                (provider, external_id)).fetchone()
+            if existing:
+                if existing[1] != event_hash:
+                    raise ValueError("outcome_event_conflict")
+                return {"event_id": existing[0], "changed": False, **normalized}
+            connection.execute(
+                """INSERT INTO attributed_outcome_events
+                   (event_id,opportunity_id,term_id,contract_receipt_id,provider,
+                    external_event_id,evidence_url,attribution_reference,units,
+                    unit_fee_cents,fee_cents,occurred_at,event_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (event_id, opportunity_id, terms[0], contract_receipt_id,
+                 provider, external_id, evidence_url, attribution_reference,
+                 units, unit_fee, fee_cents, occurred_at.isoformat(),
+                 event_hash, recorded.isoformat()))
+            return {"event_id": event_id, "changed": True, **normalized}
+    finally:
+        connection.close()
+
+
 def record_invoice(path, opportunity_id, delivery_receipt_id, invoice, *, now=None):
-    """Record an external invoice tied to verified delivery; never create a charge."""
+    """Record a delivery-linked invoice; outcome fees require attributed events."""
     if not isinstance(opportunity_id, str) or not opportunity_id.strip():
         raise ValueError("opportunity_id_required")
     if not isinstance(delivery_receipt_id, str) or not delivery_receipt_id.strip():
@@ -1808,8 +1964,22 @@ def record_invoice(path, opportunity_id, delivery_receipt_id, invoice, *, now=No
     if urlsplit(invoice_url).scheme != "https":
         raise ValueError("invoice_url_https_required")
     amount_cents = finite_number(invoice, "amount_cents", minimum=1)
-    if not amount_cents.is_integer():
+    outcome_fee = finite_number(
+        invoice, "outcome_fee_cents", minimum=0, required=False)
+    if not amount_cents.is_integer() or (
+            outcome_fee is not None and not outcome_fee.is_integer()):
         raise ValueError("amount_cents_invalid")
+    amount_cents = int(amount_cents)
+    outcome_fee_cents = int(outcome_fee or 0)
+    event_ids = invoice.get("outcome_event_ids", [])
+    if not isinstance(event_ids, list) or len(event_ids) > 100 or any(
+            not isinstance(value, str) or not value.strip() for value in event_ids):
+        raise ValueError("outcome_event_ids_invalid")
+    event_ids = [value.strip() for value in event_ids]
+    if len(set(event_ids)) != len(event_ids):
+        raise ValueError("outcome_event_ids_duplicate")
+    if bool(outcome_fee_cents) != bool(event_ids):
+        raise ValueError("outcome_fee_event_mismatch")
     currency = _proposal_text(invoice.get("currency"), "invoice_currency", 3).upper()
     if not re.fullmatch(r"[A-Z]{3}", currency):
         raise ValueError("invoice_currency_invalid")
@@ -1844,14 +2014,46 @@ def record_invoice(path, opportunity_id, delivery_receipt_id, invoice, *, now=No
                 raise ValueError("invoice_provider_mismatch")
             if issued_at < parse_time(delivery[2], "delivered_at"):
                 raise ValueError("invoice_before_delivery")
-            if int(amount_cents) > delivery[3]:
+            if amount_cents > delivery[3]:
                 raise ValueError("invoice_amount_exceeds_contract")
             if currency != delivery[4]:
                 raise ValueError("invoice_currency_mismatch")
+
+            outcome_rows = []
+            if event_ids:
+                placeholders = ",".join("?" for _ in event_ids)
+                outcome_rows = connection.execute(
+                    f"""SELECT event_id,fee_cents FROM attributed_outcome_events
+                        WHERE opportunity_id=? AND event_id IN ({placeholders})""",
+                    (opportunity_id, *event_ids)).fetchall()
+                if len(outcome_rows) != len(event_ids):
+                    raise ValueError("attributed_outcome_event_not_found")
+                if sum(value[1] for value in outcome_rows) != outcome_fee_cents:
+                    raise ValueError("outcome_fee_event_mismatch")
+                already_invoiced = connection.execute(
+                    f"""SELECT 1 FROM invoice_outcome_events
+                        WHERE event_id IN ({placeholders}) LIMIT 1""",
+                    tuple(event_ids)).fetchone()
+                if already_invoiced:
+                    raise ValueError("outcome_event_already_invoiced")
+                terms = connection.execute(
+                    """SELECT fee_cap_cents FROM outcome_pricing_terms
+                       WHERE opportunity_id=?""", (opportunity_id,)).fetchone()
+                prior = connection.execute(
+                    """SELECT COALESCE(SUM(ioe.outcome_fee_cents),0)
+                       FROM invoice_outcome_events ioe
+                       JOIN invoice_receipts ir
+                         ON ir.receipt_id=ioe.invoice_receipt_id
+                       WHERE ir.opportunity_id=?""", (opportunity_id,)).fetchone()[0]
+                if terms is None or prior + outcome_fee_cents > terms[0]:
+                    raise ValueError("outcome_fee_cap_exceeded")
+
             receipt = {"opportunity_id": opportunity_id,
                        "delivery_receipt_id": delivery_receipt_id,
                        "provider": provider, "external_invoice_id": external_id,
-                       "invoice_url": invoice_url, "amount_cents": int(amount_cents),
+                       "invoice_url": invoice_url, "amount_cents": amount_cents,
+                       "outcome_fee_cents": outcome_fee_cents,
+                       "outcome_event_ids": sorted(event_ids),
                        "currency": currency, "issued_at": issued_at.isoformat(),
                        "due_at": due_at.isoformat()}
             serialized = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
@@ -1871,8 +2073,13 @@ def record_invoice(path, opportunity_id, delivery_receipt_id, invoice, *, now=No
                  invoice_url,amount_cents,currency,issued_at,due_at,receipt_hash,recorded_at)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", (
                     receipt_id, opportunity_id, delivery_receipt_id, provider, external_id,
-                    invoice_url, int(amount_cents), currency, issued_at.isoformat(),
+                    invoice_url, amount_cents, currency, issued_at.isoformat(),
                     due_at.isoformat(), receipt_hash, recorded_at))
+            for event_id, fee in outcome_rows:
+                connection.execute(
+                    """INSERT INTO invoice_outcome_events
+                       (invoice_receipt_id,event_id,outcome_fee_cents)
+                       VALUES (?,?,?)""", (receipt_id, event_id, fee))
             payload = json.loads(row[1])
             payload["pipeline_state"] = "invoiced"
             connection.execute(
@@ -1884,7 +2091,8 @@ def record_invoice(path, opportunity_id, delivery_receipt_id, invoice, *, now=No
                 VALUES (?,?,?,?,?,?,?)""", (
                     tid, opportunity_id, "delivered", "invoiced", evidence_id,
                     hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
-        return {"receipt_id": receipt_id, "changed": True, "state": "invoiced"}
+        return {"receipt_id": receipt_id, "changed": True, "state": "invoiced",
+                "outcome_fee_cents": outcome_fee_cents}
     finally:
         connection.close()
 
@@ -2636,6 +2844,35 @@ def persist(result, path=DEFAULT_DB_PATH, *, now=None):
                              asset["maturity"], evidence_json, evidence_hash,
                              now, now),
                         ).rowcount
+                    if item.get("outcome_pricing"):
+                        terms = {
+                            "opportunity_id": item["id"],
+                            "success_definition": item["outcome_success_definition"],
+                            "attribution_method": item["outcome_attribution_method"],
+                            "exclusions": item["outcome_exclusions"],
+                            "fee_cap_cents": item["outcome_fee_cap_cents"],
+                            "human_escalation_rule": item["human_escalation_rule"],
+                        }
+                        terms_json = json.dumps(
+                            terms, sort_keys=True, separators=(",", ":"))
+                        terms_hash = hashlib.sha256(terms_json.encode()).hexdigest()
+                        term_id = "outt_" + terms_hash[:24]
+                        existing_terms = connection.execute(
+                            """SELECT terms_hash FROM outcome_pricing_terms
+                               WHERE opportunity_id=?""", (item["id"],)).fetchone()
+                        if existing_terms and existing_terms[0] != terms_hash:
+                            raise ValueError("outcome_pricing_terms_conflict")
+                        connection.execute(
+                            """INSERT OR IGNORE INTO outcome_pricing_terms
+                               (term_id,opportunity_id,success_definition,
+                                attribution_method,exclusions_json,fee_cap_cents,
+                                human_escalation_rule,terms_hash,recorded_at)
+                               VALUES (?,?,?,?,?,?,?,?,?)""",
+                            (term_id, item["id"], item["outcome_success_definition"],
+                             item["outcome_attribution_method"],
+                             json.dumps(item["outcome_exclusions"], sort_keys=True),
+                             item["outcome_fee_cap_cents"],
+                             item["human_escalation_rule"], terms_hash, now))
                 else:
                     unchanged += 1
                 digest = payload_hash(item)
