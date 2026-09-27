@@ -1725,6 +1725,7 @@ def open_ledger(path):
         provider TEXT NOT NULL,
         external_event_id TEXT NOT NULL,
         evidence_url TEXT NOT NULL,
+        artifact_sha256 TEXT NOT NULL,
         attribution_reference TEXT NOT NULL,
         eligibility_review_json TEXT NOT NULL,
         units INTEGER NOT NULL,
@@ -1746,6 +1747,10 @@ def open_ledger(path):
         connection.execute(
             "ALTER TABLE attributed_outcome_events "
             "ADD COLUMN eligibility_review_json TEXT")
+    if "artifact_sha256" not in outcome_event_columns:
+        connection.execute(
+            "ALTER TABLE attributed_outcome_events "
+            "ADD COLUMN artifact_sha256 TEXT")
     connection.execute("""CREATE TABLE IF NOT EXISTS invoice_outcome_events (
         invoice_receipt_id TEXT NOT NULL,
         event_id TEXT NOT NULL UNIQUE,
@@ -2793,6 +2798,10 @@ def record_attributed_outcome(
         _proposal_text(event.get("evidence_url"), "outcome_evidence_url", 2000))
     if urlsplit(evidence_url).scheme != "https":
         raise ValueError("outcome_evidence_url_https_required")
+    artifact_sha256 = _proposal_text(
+        event.get("artifact_sha256"), "outcome_artifact_sha256", 64).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", artifact_sha256):
+        raise ValueError("outcome_artifact_sha256_invalid")
     attribution_reference = _proposal_text(
         event.get("attribution_reference"), "attribution_reference", 1000)
     units = finite_number(event, "units", minimum=1, maximum=1000000)
@@ -2943,6 +2952,7 @@ def record_attributed_outcome(
                 "provider": provider,
                 "external_event_id": external_id,
                 "evidence_url": evidence_url,
+                "artifact_sha256": artifact_sha256,
                 "attribution_reference": attribution_reference,
                 "eligibility_review": normalized_review,
                 "units": units,
@@ -2971,12 +2981,13 @@ def record_attributed_outcome(
             connection.execute(
                 """INSERT INTO attributed_outcome_events
                    (event_id,opportunity_id,term_id,contract_receipt_id,provider,
-                    external_event_id,evidence_url,attribution_reference,
-                    eligibility_review_json,units,unit_fee_cents,fee_cents,
-                    occurred_at,event_hash,recorded_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    external_event_id,evidence_url,artifact_sha256,
+                    attribution_reference,eligibility_review_json,units,
+                    unit_fee_cents,fee_cents,occurred_at,event_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (event_id, opportunity_id, terms[0], contract_receipt_id,
-                 provider, external_id, evidence_url, attribution_reference,
+                 provider, external_id, evidence_url, artifact_sha256,
+                 attribution_reference,
                  json.dumps(normalized_review, sort_keys=True, separators=(",", ":")),
                  units, unit_fee, fee_cents, occurred_at.isoformat(),
                  event_hash, recorded.isoformat()))
