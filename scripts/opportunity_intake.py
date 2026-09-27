@@ -4106,14 +4106,11 @@ def record_growth_evidence(
                     "SELECT 1 FROM opportunities WHERE id=?",
                     (opportunity_id,)).fetchone() is None:
                 raise ValueError("opportunity_not_found")
-            payment = connection.execute(
-                """SELECT opportunity_id,settled_at FROM payment_receipts
-                   WHERE receipt_id=?""", (payment_receipt_id,)).fetchone()
-            if payment is None:
-                raise ValueError("payment_receipt_not_found")
+            payment = _verified_payment_receipt(
+                connection, payment_receipt_id)
             if payment[0] != opportunity_id:
                 raise ValueError("growth_evidence_opportunity_mismatch")
-            if occurred_at < parse_time(payment[1], "payment_settled_at"):
+            if occurred_at < parse_time(payment[10], "payment_settled_at"):
                 raise ValueError("growth_evidence_before_settlement")
             existing = connection.execute(
                 """SELECT receipt_id,receipt_hash FROM growth_evidence_receipts
