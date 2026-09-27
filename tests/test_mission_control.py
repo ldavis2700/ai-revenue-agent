@@ -190,8 +190,7 @@ class MissionControlTests(unittest.TestCase):
         payload = json.dumps({
             'offer_family': 'multi_system_operational_integration'})
         conn.execute(
-            "INSERT INTO opportunities VALUES (?,?,?)".replace(
-                "(?,?,?)", "(?,?)"), ('opp_1', payload))
+            "INSERT INTO opportunities VALUES (?,?)", ('opp_1', payload))
         conn.execute(
             "INSERT INTO recurring_payment_receipts VALUES (?,?,?)",
             ('recur_2', 'opp_1', 14500))
