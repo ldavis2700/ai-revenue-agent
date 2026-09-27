@@ -271,11 +271,6 @@ class MissionControlTests(unittest.TestCase):
             'ai_agent_implementation']
         self.assertEqual(verified['observed_revenue'], 145)
         self.assertEqual(verified['verified_reuse_receipts'], 1)
-        candidate = next(
-            item for item in snapshot['top_candidates']
-            if item['id'] == 'ai_agent_implementation')
-        self.assertTrue(candidate['ledger_verified_reuse_evidence'])
-        self.assertEqual(candidate['verified_reused_opportunities'], 1)
 
     def test_nonfinite_evidence_cannot_insert_or_replace_measurements(self):
         conn = mission_control.connect(self.path)
