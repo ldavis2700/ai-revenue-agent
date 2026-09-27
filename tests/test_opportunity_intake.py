@@ -2361,6 +2361,52 @@ class OpportunityIntakeTests(unittest.TestCase):
             ("received", "bank_receipt:" + bank["receipt_id"]),
         ])
 
+    def test_received_revenue_rejects_mutated_payout_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, payment_id = self.advance_to_collected(path)
+            payout = opportunity_intake.record_withdrawable_balance(
+                path, opportunity_id, payment_id, {
+                    "provider": "Marketplace",
+                    "external_balance_id": "balance-before-mutation",
+                    "evidence_url":
+                        "https://example.com/balances/before-mutation",
+                    "amount_cents": 97000,
+                    "currency": "USD",
+                    "available_at":
+                        (NOW + timedelta(minutes=5)).isoformat(),
+                }, now=NOW + timedelta(minutes=5))
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE payout_availability_receipts
+                   SET evidence_url=? WHERE receipt_id=?""",
+                ("https://example.com/balances/substituted",
+                 payout["receipt_id"]))
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                    ValueError, "payout_receipt_unverified"):
+                opportunity_intake.record_bank_receipt(
+                    path, opportunity_id, payout["receipt_id"], {
+                        "financial_institution": "Owner Bank",
+                        "external_transfer_id":
+                            "transfer-tampered-payout",
+                        "evidence_url":
+                            "https://example.com/bank/tampered-payout",
+                        "amount_cents": 97000,
+                        "currency": "USD",
+                        "received_at":
+                            (NOW + timedelta(minutes=6)).isoformat(),
+                    }, now=NOW + timedelta(minutes=6))
+            connection = sqlite3.connect(path)
+            bank_count = connection.execute(
+                "SELECT COUNT(*) FROM bank_receipts").fetchone()[0]
+            state = connection.execute(
+                "SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(bank_count, 0)
+        self.assertEqual(state, "withdrawable")
+
     def test_payout_lifecycle_rejects_bypass_and_mismatched_evidence(self):
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "opportunities.db")
