@@ -3164,6 +3164,10 @@ def record_invoice(path, opportunity_id, delivery_receipt_id, invoice, *, now=No
                        "invoice_url": invoice_url, "amount_cents": amount_cents,
                        "outcome_fee_cents": outcome_fee_cents,
                        "outcome_event_ids": sorted(event_ids),
+                       "outcome_event_hashes": sorted([
+                           {"event_id": value[0], "event_hash": value[13]}
+                           for value in outcome_rows
+                       ], key=lambda value: value["event_id"]),
                        "currency": currency, "issued_at": issued_at.isoformat(),
                        "due_at": due_at.isoformat()}
             serialized = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
@@ -3256,9 +3260,11 @@ def record_collected_payment(path, opportunity_id, invoice_receipt_id, payment, 
                 (opportunity_id,)).fetchone()
             if row is None:
                 raise ValueError("opportunity_not_found")
-            invoice = connection.execute("""SELECT opportunity_id,provider,amount_cents,
-                    currency,issued_at
-                FROM invoice_receipts WHERE receipt_id=?""",
+            invoice = connection.execute(
+                """SELECT opportunity_id,provider,amount_cents,currency,issued_at,
+                          delivery_receipt_id,external_invoice_id,invoice_url,
+                          due_at,receipt_hash
+                   FROM invoice_receipts WHERE receipt_id=?""",
                 (invoice_receipt_id,)).fetchone()
             if invoice is None:
                 raise ValueError("invoice_receipt_not_found")
@@ -3272,6 +3278,43 @@ def record_collected_payment(path, opportunity_id, invoice_receipt_id, payment, 
                 raise ValueError("payment_currency_mismatch")
             if paid_at < parse_time(invoice[4], "invoice_issued_at"):
                 raise ValueError("payment_before_invoice")
+
+            allocation_rows = connection.execute(
+                """SELECT ioe.event_id,ioe.outcome_fee_cents,
+                          aoe.fee_cents,aoe.event_hash
+                   FROM invoice_outcome_events ioe
+                   JOIN attributed_outcome_events aoe
+                     ON aoe.event_id=ioe.event_id
+                   WHERE ioe.invoice_receipt_id=?
+                   ORDER BY ioe.event_id""",
+                (invoice_receipt_id,)).fetchall()
+            if any(row[1] != row[2] for row in allocation_rows):
+                raise ValueError("invoice_receipt_unverified")
+            invoice_snapshot = {
+                "opportunity_id": invoice[0],
+                "delivery_receipt_id": invoice[5],
+                "provider": invoice[1],
+                "external_invoice_id": invoice[6],
+                "invoice_url": invoice[7],
+                "amount_cents": invoice[2],
+                "outcome_fee_cents": sum(row[1] for row in allocation_rows),
+                "outcome_event_ids": [row[0] for row in allocation_rows],
+                "outcome_event_hashes": [
+                    {"event_id": row[0], "event_hash": row[3]}
+                    for row in allocation_rows
+                ],
+                "currency": invoice[3],
+                "issued_at": invoice[4],
+                "due_at": invoice[8],
+            }
+            invoice_serialized = json.dumps(
+                invoice_snapshot, sort_keys=True, separators=(",", ":"))
+            expected_invoice_hash = hashlib.sha256(
+                invoice_serialized.encode()).hexdigest()
+            if invoice[9] != expected_invoice_hash or invoice_receipt_id != (
+                    "invr_" + expected_invoice_hash[:24]):
+                raise ValueError("invoice_receipt_unverified")
+
             receipt = {"opportunity_id": opportunity_id,
                        "invoice_receipt_id": invoice_receipt_id,
                        "provider": provider, "external_transaction_id": external_id,
