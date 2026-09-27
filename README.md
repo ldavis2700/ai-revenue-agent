@@ -147,6 +147,10 @@ echo '{"email":"owner@example.com","company":"Example Co","contact_consent":true
 
 An approved deployment should map its form checkbox to `contact_consent`, link the current privacy notice, keep the optional `website_confirm` field hidden from people, and pass a version identifier in `consent_version`. This adapter prepares and audits the lead; it does not send outreach.
 
+## Issue #164 evidence-gated productization
+
+Reusable IP reaches `productize_candidate` only after sequential paid validation, positive-margin repeatability, retention, expansion, and an explicit reuse receipt from a second opportunity. The second opportunity must contain the same named asset type and its own independently settled positive-contribution economics record. Duplicate assets, catalog membership, projections, and a single customer's repeated billing cannot establish cross-customer demand.
+
 ## Run manually
 
 ```bash
