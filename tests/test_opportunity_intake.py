@@ -3006,6 +3006,18 @@ class OpportunityIntakeTests(unittest.TestCase):
             connection = sqlite3.connect(path)
             connection.execute(
                 """UPDATE attributed_outcome_events SET artifact_sha256=?
+                   WHERE event_id=?""", ("4" * 64, event["event_id"]))
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                    ValueError, "outcome_event_evidence_unverified"):
+                opportunity_intake.record_invoice(
+                    path, opportunity_id, delivery_id,
+                    dict(invoice_base, outcome_event_ids=invoice_event_ids),
+                    now=NOW + timedelta(minutes=2))
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE attributed_outcome_events SET artifact_sha256=?
                    WHERE event_id=?""", ("2" * 64, event["event_id"]))
             escalation_json = json.loads(connection.execute(
                 """SELECT eligibility_review_json
