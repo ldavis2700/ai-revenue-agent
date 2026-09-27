@@ -2077,6 +2077,42 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(len(receipt[6]), 64)
         self.assertEqual(evidence, "verified_payment:" + first["receipt_id"])
 
+    def test_settled_payment_rejects_mutated_invoice_receipt(self):
+        payment = {
+            "provider": "Marketplace",
+            "external_transaction_id": "payment-tampered-invoice",
+            "transaction_url":
+                "https://example.com/payments/tampered-invoice",
+            "gross_amount_cents": 100000,
+            "fee_amount_cents": 3000,
+            "net_amount_cents": 97000,
+            "currency": "USD",
+            "paid_at": (NOW + timedelta(minutes=3)).isoformat(),
+            "settled_at": (NOW + timedelta(minutes=4)).isoformat(),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, invoice_id = self.advance_to_invoice(path)
+            connection = sqlite3.connect(path)
+            connection.execute(
+                "UPDATE invoice_receipts SET invoice_url=? WHERE receipt_id=?",
+                ("https://example.com/invoices/substituted", invoice_id))
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                    ValueError, "invoice_receipt_unverified"):
+                opportunity_intake.record_collected_payment(
+                    path, opportunity_id, invoice_id, payment,
+                    now=NOW + timedelta(minutes=4))
+            connection = sqlite3.connect(path)
+            payment_count = connection.execute(
+                "SELECT COUNT(*) FROM payment_receipts").fetchone()[0]
+            state = connection.execute(
+                "SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual(payment_count, 0)
+        self.assertEqual(state, "invoiced")
+
     def test_issue_164_realized_economics_uses_settled_net_payment(self):
         economics = {
             "delivery_cost_cents": 20000,
