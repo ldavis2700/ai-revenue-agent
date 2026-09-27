@@ -2656,6 +2656,37 @@ class OpportunityIntakeTests(unittest.TestCase):
             economics = opportunity_intake.record_realized_unit_economics(
                 path, opportunity_id, payment_id, economics_evidence,
                 now=NOW + timedelta(minutes=5))
+            connection = sqlite3.connect(path)
+            original_transaction_url = connection.execute(
+                """SELECT transaction_url FROM payment_receipts
+                   WHERE receipt_id=?""", (payment_id,)).fetchone()[0]
+            connection.execute(
+                """UPDATE payment_receipts SET transaction_url=?
+                   WHERE receipt_id=?""",
+                ("https://example.com/payments/substituted", payment_id))
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                    ValueError, "payment_receipt_unverified"):
+                opportunity_intake.record_growth_evidence(
+                    path, opportunity_id, payment_id, "retention", {
+                        "provider": "marketplace",
+                        "external_event_id": "renewal-tampered",
+                        "evidence_url":
+                            "https://example.com/contracts/renewal-tampered",
+                        "occurred_at":
+                            (NOW + timedelta(minutes=6)).isoformat(),
+                    }, now=NOW + timedelta(minutes=6))
+            connection = sqlite3.connect(path)
+            growth_count = connection.execute(
+                "SELECT COUNT(*) FROM growth_evidence_receipts").fetchone()[0]
+            connection.execute(
+                """UPDATE payment_receipts SET transaction_url=?
+                   WHERE receipt_id=?""",
+                (original_transaction_url, payment_id))
+            connection.commit()
+            connection.close()
+            self.assertEqual(growth_count, 0)
             retention = opportunity_intake.record_growth_evidence(
                 path, opportunity_id, payment_id, "retention", {
                     "provider": "marketplace",
