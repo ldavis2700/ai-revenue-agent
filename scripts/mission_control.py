@@ -40,7 +40,8 @@ LEDGER_EVIDENCE_KEYS = {
     'verified_expansion_receipts', 'retained_recurring_value_cents',
     'expanded_value_delta_cents', 'realized_recurring_net_cents',
     'realized_recurring_contribution_cents', 'realized_recurring_cost_cents',
-    'mastery', 'receipt_lineage',
+    'mastery', 'receipt_lineage', 'verified_reuse_receipts',
+    'verified_reused_opportunities', 'reuse_receipt_lineage',
 }
 
 
@@ -215,7 +216,11 @@ def ledger_business_model_evidence(conn):
             'realized_recurring_cost_cents': 0,
             'mastery': 'learned',
             'receipt_lineage': [],
+            'verified_reuse_receipts': 0,
+            'verified_reused_opportunities': 0,
+            'reuse_receipt_lineage': [],
             '_counted_payments': set(),
+            '_reused_opportunities': set(),
         })
         payment_id = row['recurring_payment_receipt_id']
         if payment_id not in item['_counted_payments']:
@@ -245,9 +250,94 @@ def ledger_business_model_evidence(conn):
             'occurred_at': row['occurred_at'],
         })
 
+    try:
+        reuse_rows = conn.execute('''
+            SELECT r.receipt_id AS reuse_receipt_id,
+                   r.source_opportunity_id, r.reused_opportunity_id,
+                   r.economics_kind, r.economics_id, r.occurred_at,
+                   source_o.payload_json, source_a.maturity,
+                   CASE r.economics_kind
+                     WHEN 'one_time' THEN one_e.contribution_cents
+                     WHEN 'recurring' THEN recurring_e.contribution_cents
+                   END AS contribution_cents
+            FROM reusable_ip_reuse_receipts r
+            JOIN reusable_ip_assets source_a
+              ON source_a.asset_id=r.source_asset_id
+             AND source_a.opportunity_id=r.source_opportunity_id
+            JOIN reusable_ip_assets reused_a
+              ON reused_a.asset_id=r.reused_asset_id
+             AND reused_a.opportunity_id=r.reused_opportunity_id
+             AND lower(reused_a.name)=lower(source_a.name)
+             AND reused_a.asset_type=source_a.asset_type
+            JOIN opportunities source_o
+              ON source_o.id=r.source_opportunity_id
+            LEFT JOIN realized_unit_economics one_e
+              ON r.economics_kind='one_time'
+             AND one_e.economics_id=r.economics_id
+             AND one_e.opportunity_id=r.reused_opportunity_id
+            LEFT JOIN recurring_realized_unit_economics recurring_e
+              ON r.economics_kind='recurring'
+             AND recurring_e.economics_id=r.economics_id
+             AND recurring_e.opportunity_id=r.reused_opportunity_id
+            WHERE r.source_opportunity_id<>r.reused_opportunity_id
+              AND ((r.economics_kind='one_time'
+                    AND one_e.contribution_cents>0)
+                OR (r.economics_kind='recurring'
+                    AND recurring_e.contribution_cents>0))
+            ORDER BY r.occurred_at, r.receipt_id
+        ''').fetchall()
+    except sqlite3.OperationalError:
+        reuse_rows = []
+
+    for row in reuse_rows:
+        try:
+            payload = json.loads(row['payload_json'])
+        except (TypeError, ValueError):
+            continue
+        model_id = OFFER_FAMILY_MODEL_MAP.get(payload.get('offer_family'))
+        if not model_id:
+            continue
+        item = aggregated.setdefault(model_id, {
+            '_ledger_verified': True,
+            'verified_retention_receipts': 0,
+            'verified_expansion_receipts': 0,
+            'retained_recurring_value_cents': 0,
+            'expanded_value_delta_cents': 0,
+            'realized_recurring_net_cents': 0,
+            'realized_recurring_contribution_cents': 0,
+            'realized_recurring_cost_cents': 0,
+            'mastery': 'learned',
+            'receipt_lineage': [],
+            'verified_reuse_receipts': 0,
+            'verified_reused_opportunities': 0,
+            'reuse_receipt_lineage': [],
+            '_counted_payments': set(),
+            '_reused_opportunities': set(),
+        })
+        item['verified_reuse_receipts'] += 1
+        item['_reused_opportunities'].add(row['reused_opportunity_id'])
+        maturity = row['maturity'] or 'learned'
+        if MASTERY_ORDER.get(maturity, 0) > MASTERY_ORDER[item['mastery']]:
+            item['mastery'] = maturity
+        item['reuse_receipt_lineage'].append({
+            'reuse_receipt_id': row['reuse_receipt_id'],
+            'source_opportunity_id': row['source_opportunity_id'],
+            'reused_opportunity_id': row['reused_opportunity_id'],
+            'economics_kind': row['economics_kind'],
+            'economics_id': row['economics_id'],
+            'occurred_at': row['occurred_at'],
+        })
+
     for item in aggregated.values():
-        sample_size = len(item.pop('_counted_payments'))
+        payment_sample = len(item.pop('_counted_payments'))
+        reused_opportunities = len(item.pop('_reused_opportunities'))
+        item['verified_reused_opportunities'] = reused_opportunities
+        sample_size = max(payment_sample, reused_opportunities)
         retained = item['verified_retention_receipts']
+        timestamps = [
+            line['occurred_at'] for line in item['receipt_lineage']]
+        timestamps.extend(
+            line['occurred_at'] for line in item['reuse_receipt_lineage'])
         item.update({
             'observed_revenue':
                 item['realized_recurring_net_cents'] / 100.0,
@@ -256,8 +346,7 @@ def ledger_business_model_evidence(conn):
             'conversion_rate': min(1.0, retained / max(sample_size, 1)),
             'evidence_quality': 1.0,
             'sample_size': sample_size,
-            'observed_at': max(
-                line['occurred_at'] for line in item['receipt_lineage']),
+            'observed_at': max(timestamps),
         })
     return aggregated
 

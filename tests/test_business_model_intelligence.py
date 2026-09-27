@@ -82,6 +82,8 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
             "sample_size": 20,
             "verified_retention_receipts": 2,
             "verified_expansion_receipts": 1,
+            "verified_reuse_receipts": 2,
+            "verified_reused_opportunities": 2,
             "retained_recurring_value_cents": 29000,
             "expanded_value_delta_cents": 25000,
             "mastery": "productize_candidate",
@@ -101,12 +103,18 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
             unverified_model["ledger_verified_recurring_evidence"])
         self.assertEqual(unverified_model["mastery"], "learned")
         self.assertEqual(unverified_model["verified_retention_receipts"], 0)
+        self.assertEqual(unverified_model["verified_reuse_receipts"], 0)
+        self.assertEqual(unverified_model["verified_reused_opportunities"], 0)
+        self.assertFalse(unverified_model["ledger_verified_reuse_evidence"])
         self.assertTrue(
             verified_model["ledger_verified_recurring_evidence"])
+        self.assertTrue(verified_model["ledger_verified_reuse_evidence"])
         self.assertEqual(
             verified_model["mastery"], "productize_candidate")
         self.assertEqual(verified_model["verified_retention_receipts"], 2)
         self.assertEqual(verified_model["verified_expansion_receipts"], 1)
+        self.assertEqual(verified_model["verified_reuse_receipts"], 2)
+        self.assertEqual(verified_model["verified_reused_opportunities"], 2)
         self.assertGreater(
             verified_model["pursuit_score"],
             unverified_model["pursuit_score"])
