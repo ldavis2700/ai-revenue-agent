@@ -3079,11 +3079,45 @@ def record_invoice(path, opportunity_id, delivery_receipt_id, invoice, *, now=No
             if event_ids:
                 placeholders = ",".join("?" for _ in event_ids)
                 outcome_rows = connection.execute(
-                    f"""SELECT event_id,fee_cents FROM attributed_outcome_events
+                    f"""SELECT event_id,fee_cents,artifact_sha256,
+                               eligibility_review_json
+                        FROM attributed_outcome_events
                         WHERE opportunity_id=? AND event_id IN ({placeholders})""",
                     (opportunity_id, *event_ids)).fetchall()
                 if len(outcome_rows) != len(event_ids):
                     raise ValueError("attributed_outcome_event_not_found")
+                terms = connection.execute(
+                    """SELECT fee_cap_cents,terms_hash,exclusions_json
+                       FROM outcome_pricing_terms WHERE opportunity_id=?""",
+                    (opportunity_id,)).fetchone()
+                if terms is None:
+                    raise ValueError("outcome_pricing_terms_not_found")
+                expected_exclusions_hash = payload_hash(json.loads(terms[2]))
+                for outcome_row in outcome_rows:
+                    artifact_sha256, review_json = outcome_row[2], outcome_row[3]
+                    if not isinstance(artifact_sha256, str) or not re.fullmatch(
+                            r"[0-9a-f]{64}", artifact_sha256):
+                        raise ValueError("outcome_event_evidence_unverified")
+                    try:
+                        review = json.loads(review_json)
+                    except (TypeError, json.JSONDecodeError):
+                        raise ValueError("outcome_event_evidence_unverified")
+                    if not isinstance(review, dict) or not re.fullmatch(
+                            r"[0-9a-f]{64}",
+                            str(review.get("artifact_sha256") or "")):
+                        raise ValueError("outcome_event_evidence_unverified")
+                    if review.get("reviewed_terms_hash") != terms[1] or (
+                            review.get("reviewed_exclusions_hash")
+                            != expected_exclusions_hash):
+                        raise ValueError("outcome_event_evidence_unverified")
+                    if review.get("requires_human_escalation"):
+                        decision = review.get("human_escalation_decision")
+                        if not isinstance(decision, dict) or (
+                                decision.get("decision") != "approved") or (
+                                not re.fullmatch(
+                                    r"[0-9a-f]{64}",
+                                    str(decision.get("artifact_sha256") or ""))):
+                            raise ValueError("outcome_event_evidence_unverified")
                 if sum(value[1] for value in outcome_rows) != outcome_fee_cents:
                     raise ValueError("outcome_fee_event_mismatch")
                 already_invoiced = connection.execute(
@@ -3092,9 +3126,6 @@ def record_invoice(path, opportunity_id, delivery_receipt_id, invoice, *, now=No
                     tuple(event_ids)).fetchone()
                 if already_invoiced:
                     raise ValueError("outcome_event_already_invoiced")
-                terms = connection.execute(
-                    """SELECT fee_cap_cents FROM outcome_pricing_terms
-                       WHERE opportunity_id=?""", (opportunity_id,)).fetchone()
                 prior = connection.execute(
                     """SELECT COALESCE(SUM(ioe.outcome_fee_cents),0)
                        FROM invoice_outcome_events ioe
@@ -3131,7 +3162,7 @@ def record_invoice(path, opportunity_id, delivery_receipt_id, invoice, *, now=No
                     receipt_id, opportunity_id, delivery_receipt_id, provider, external_id,
                     invoice_url, amount_cents, currency, issued_at.isoformat(),
                     due_at.isoformat(), receipt_hash, recorded_at))
-            for event_id, fee in outcome_rows:
+            for event_id, fee, _artifact_sha256, _review_json in outcome_rows:
                 connection.execute(
                     """INSERT INTO invoice_outcome_events
                        (invoice_receipt_id,event_id,outcome_fee_cents)
