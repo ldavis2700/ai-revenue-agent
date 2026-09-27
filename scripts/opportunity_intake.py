@@ -4699,6 +4699,34 @@ def record_withdrawable_balance(path, opportunity_id, payment_receipt_id, eviden
         connection.close()
 
 
+def _verified_payout_receipt(connection, payout_receipt_id):
+    """Return withdrawable evidence only when its immutable snapshot matches."""
+    payout = connection.execute(
+        """SELECT opportunity_id,payment_receipt_id,provider,
+                  external_balance_id,evidence_url,amount_cents,currency,
+                  available_at,receipt_hash
+           FROM payout_availability_receipts WHERE receipt_id=?""",
+        (payout_receipt_id,)).fetchone()
+    if payout is None:
+        raise ValueError("payout_receipt_not_found")
+    snapshot = {
+        "opportunity_id": payout[0],
+        "payment_receipt_id": payout[1],
+        "provider": payout[2],
+        "external_balance_id": payout[3],
+        "evidence_url": payout[4],
+        "amount_cents": payout[5],
+        "currency": payout[6],
+        "available_at": payout[7],
+    }
+    serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    if payout[8] != expected_hash or payout_receipt_id != (
+            "pavr_" + expected_hash[:24]):
+        raise ValueError("payout_receipt_unverified")
+    return payout
+
+
 def record_bank_receipt(path, opportunity_id, payout_receipt_id, evidence, *, now=None):
     """Record proof that one withdrawable payout reached the owner's bank account."""
     if not isinstance(opportunity_id, str) or not opportunity_id.strip():
@@ -4737,18 +4765,15 @@ def record_bank_receipt(path, opportunity_id, payout_receipt_id, evidence, *, no
                 (opportunity_id,)).fetchone()
             if row is None:
                 raise ValueError("opportunity_not_found")
-            payout = connection.execute("""SELECT opportunity_id,amount_cents,currency,
-                    available_at FROM payout_availability_receipts WHERE receipt_id=?""",
-                (payout_receipt_id,)).fetchone()
-            if payout is None:
-                raise ValueError("payout_receipt_not_found")
+            payout = _verified_payout_receipt(
+                connection, payout_receipt_id)
             if payout[0] != opportunity_id:
                 raise ValueError("bank_receipt_opportunity_mismatch")
-            if payout[1] != amount_cents:
+            if payout[5] != amount_cents:
                 raise ValueError("bank_receipt_amount_mismatch")
-            if payout[2] != currency:
+            if payout[6] != currency:
                 raise ValueError("bank_receipt_currency_mismatch")
-            if received_at < parse_time(payout[3], "payout_available_at"):
+            if received_at < parse_time(payout[7], "payout_available_at"):
                 raise ValueError("bank_receipt_before_withdrawable")
             receipt = {"opportunity_id": opportunity_id,
                        "payout_availability_receipt_id": payout_receipt_id,
