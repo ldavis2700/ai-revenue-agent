@@ -3080,7 +3080,10 @@ def record_invoice(path, opportunity_id, delivery_receipt_id, invoice, *, now=No
                 placeholders = ",".join("?" for _ in event_ids)
                 outcome_rows = connection.execute(
                     f"""SELECT event_id,fee_cents,artifact_sha256,
-                               eligibility_review_json
+                               eligibility_review_json,term_id,
+                               contract_receipt_id,provider,external_event_id,
+                               evidence_url,attribution_reference,units,
+                               unit_fee_cents,occurred_at,event_hash
                         FROM attributed_outcome_events
                         WHERE opportunity_id=? AND event_id IN ({placeholders})""",
                     (opportunity_id, *event_ids)).fetchall()
@@ -3118,6 +3121,26 @@ def record_invoice(path, opportunity_id, delivery_receipt_id, invoice, *, now=No
                                     r"[0-9a-f]{64}",
                                     str(decision.get("artifact_sha256") or ""))):
                             raise ValueError("outcome_event_evidence_unverified")
+                    normalized_event = {
+                        "opportunity_id": opportunity_id,
+                        "term_id": outcome_row[4],
+                        "contract_receipt_id": outcome_row[5],
+                        "provider": outcome_row[6],
+                        "external_event_id": outcome_row[7],
+                        "evidence_url": outcome_row[8],
+                        "artifact_sha256": artifact_sha256,
+                        "attribution_reference": outcome_row[9],
+                        "eligibility_review": review,
+                        "units": outcome_row[10],
+                        "unit_fee_cents": outcome_row[11],
+                        "fee_cents": outcome_row[1],
+                        "occurred_at": outcome_row[12],
+                    }
+                    normalized_json = json.dumps(
+                        normalized_event, sort_keys=True, separators=(",", ":"))
+                    if hashlib.sha256(
+                            normalized_json.encode()).hexdigest() != outcome_row[13]:
+                        raise ValueError("outcome_event_evidence_unverified")
                 if sum(value[1] for value in outcome_rows) != outcome_fee_cents:
                     raise ValueError("outcome_fee_event_mismatch")
                 already_invoiced = connection.execute(
@@ -3162,7 +3185,8 @@ def record_invoice(path, opportunity_id, delivery_receipt_id, invoice, *, now=No
                     receipt_id, opportunity_id, delivery_receipt_id, provider, external_id,
                     invoice_url, amount_cents, currency, issued_at.isoformat(),
                     due_at.isoformat(), receipt_hash, recorded_at))
-            for event_id, fee, _artifact_sha256, _review_json in outcome_rows:
+            for outcome_row in outcome_rows:
+                event_id, fee = outcome_row[0], outcome_row[1]
                 connection.execute(
                     """INSERT INTO invoice_outcome_events
                        (invoice_receipt_id,event_id,outcome_fee_cents)
