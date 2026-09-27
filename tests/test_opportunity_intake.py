@@ -2786,6 +2786,22 @@ class OpportunityIntakeTests(unittest.TestCase):
                 "requires_human_escalation": False,
             }
             with self.assertRaisesRegex(
+                    ValueError, "outcome_artifact_sha256_invalid"):
+                opportunity_intake.record_attributed_outcome(
+                    path, opportunity_id, contract_id, {
+                        "provider": "marketplace",
+                        "external_event_id": "appointment-unpinned-event",
+                        "evidence_url":
+                            "https://example.com/crm/appointments/unpinned-event",
+                        "attribution_reference": "approved-lead-unpinned-event",
+                        "artifact_sha256": "not-a-sha256",
+                        "eligibility_review": eligibility_review,
+                        "units": 1,
+                        "unit_fee_cents": 10000,
+                        "occurred_at":
+                            (NOW + timedelta(seconds=4)).isoformat(),
+                    }, now=NOW + timedelta(minutes=1))
+            with self.assertRaisesRegex(
                     ValueError, "eligibility_review_artifact_sha256_invalid"):
                 opportunity_intake.record_attributed_outcome(
                     path, opportunity_id, contract_id, {
@@ -2794,6 +2810,7 @@ class OpportunityIntakeTests(unittest.TestCase):
                         "evidence_url":
                             "https://example.com/crm/appointments/unpinned-review",
                         "attribution_reference": "approved-lead-unpinned-review",
+                        "artifact_sha256": "2" * 64,
                         "eligibility_review": dict(
                             eligibility_review,
                             artifact_sha256="not-a-sha256"),
@@ -2811,6 +2828,7 @@ class OpportunityIntakeTests(unittest.TestCase):
                         "evidence_url":
                             "https://example.com/crm/appointments/wrong-terms",
                         "attribution_reference": "approved-lead-wrong-terms",
+                        "artifact_sha256": "2" * 64,
                         "eligibility_review": dict(
                             eligibility_review,
                             reviewed_terms_hash="0" * 64),
@@ -2827,6 +2845,7 @@ class OpportunityIntakeTests(unittest.TestCase):
                         "evidence_url":
                             "https://example.com/crm/appointments/excluded",
                         "attribution_reference": "duplicate-lead",
+                        "artifact_sha256": "2" * 64,
                         "eligibility_review": dict(
                             eligibility_review,
                             matched_exclusions=[
@@ -2845,6 +2864,7 @@ class OpportunityIntakeTests(unittest.TestCase):
                         "evidence_url":
                             "https://example.com/crm/appointments/disputed",
                         "attribution_reference": "disputed-lead",
+                        "artifact_sha256": "2" * 64,
                         "eligibility_review": dict(
                             eligibility_review,
                             requires_human_escalation=True),
@@ -2863,6 +2883,7 @@ class OpportunityIntakeTests(unittest.TestCase):
                         "evidence_url":
                             "https://example.com/crm/appointments/wrong-rate",
                         "attribution_reference": "approved-lead-wrong-rate",
+                        "artifact_sha256": "2" * 64,
                         "eligibility_review": eligibility_review,
                         "units": 1,
                         "unit_fee_cents": 5000,
@@ -2875,6 +2896,7 @@ class OpportunityIntakeTests(unittest.TestCase):
                     "external_event_id": "appointment-1",
                     "evidence_url": "https://example.com/crm/appointments/1",
                     "attribution_reference": "approved-lead-1",
+                    "artifact_sha256": "2" * 64,
                     "eligibility_review": eligibility_review,
                     "units": 2,
                     "unit_fee_cents": 10000,
@@ -2886,6 +2908,7 @@ class OpportunityIntakeTests(unittest.TestCase):
                     "external_event_id": "appointment-1",
                     "evidence_url": "https://example.com/crm/appointments/1",
                     "attribution_reference": "approved-lead-1",
+                    "artifact_sha256": "2" * 64,
                     "eligibility_review": eligibility_review,
                     "units": 2,
                     "unit_fee_cents": 10000,
@@ -2898,6 +2921,7 @@ class OpportunityIntakeTests(unittest.TestCase):
                         "external_event_id": "appointment-2",
                         "evidence_url": "https://example.com/crm/appointments/2",
                         "attribution_reference": "approved-lead-2",
+                        "artifact_sha256": "2" * 64,
                         "eligibility_review": eligibility_review,
                         "units": 1,
                         "unit_fee_cents": 10000,
@@ -2928,10 +2952,11 @@ class OpportunityIntakeTests(unittest.TestCase):
             allocations = connection.execute(
                 """SELECT event_id,outcome_fee_cents
                    FROM invoice_outcome_events""").fetchall()
-            stored_review = json.loads(connection.execute(
-                """SELECT eligibility_review_json
+            stored_event = connection.execute(
+                """SELECT artifact_sha256,eligibility_review_json
                    FROM attributed_outcome_events WHERE event_id=?""",
-                (event["event_id"],)).fetchone()[0])
+                (event["event_id"],)).fetchone()
+            stored_review = json.loads(stored_event[1])
             connection.close()
 
         self.assertEqual(terms[:2], (
@@ -2947,6 +2972,7 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertFalse(duplicate["changed"])
         self.assertEqual(invoice["outcome_fee_cents"], 20000)
         self.assertEqual(allocations, [(event["event_id"], 20000)])
+        self.assertEqual(stored_event[0], "2" * 64)
         self.assertEqual(
             stored_review["reviewed_terms_hash"], accepted_terms_hash)
         self.assertEqual(stored_review["artifact_sha256"], "1" * 64)
