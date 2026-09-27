@@ -2539,24 +2539,6 @@ class OpportunityIntakeTests(unittest.TestCase):
                     {"growth_receipt_id": retention["receipt_id"]},
                     now=NOW + timedelta(minutes=8))
 
-            paid = opportunity_intake.promote_reusable_ip_asset(
-                path, opportunity_id, asset_id, "paid_validated",
-                {"payment_receipt_id": payment_id},
-                now=NOW + timedelta(minutes=8))
-            repeatable = opportunity_intake.promote_reusable_ip_asset(
-                path, opportunity_id, asset_id, "repeatable_positive_margin",
-                {"economics_id": economics["economics_id"]},
-                now=NOW + timedelta(minutes=8))
-            scale = opportunity_intake.promote_reusable_ip_asset(
-                path, opportunity_id, asset_id, "scale_candidate",
-                {"growth_receipt_id": retention["receipt_id"]},
-                now=NOW + timedelta(minutes=8))
-            with self.assertRaisesRegex(
-                    ValueError, "reuse_receipt_id_required"):
-                opportunity_intake.promote_reusable_ip_asset(
-                    path, opportunity_id, asset_id, "productize_candidate",
-                    {"growth_receipt_id": expansion["receipt_id"]},
-                    now=NOW + timedelta(minutes=8))
             reused_opportunity_id, reused_payment_id = (
                 self.advance_to_collected(
                     path, suffix="-reuse", candidate_overrides={
@@ -2579,6 +2561,70 @@ class OpportunityIntakeTests(unittest.TestCase):
                    WHERE opportunity_id=?""",
                 (reused_opportunity_id,)).fetchone()[0]
             connection.close()
+
+            paid = opportunity_intake.promote_reusable_ip_asset(
+                path, opportunity_id, asset_id, "paid_validated",
+                {"payment_receipt_id": payment_id},
+                now=NOW + timedelta(minutes=8))
+            with self.assertRaisesRegex(
+                    ValueError,
+                    "one_time_repeatability_requires_multiple_receipts"):
+                opportunity_intake.promote_reusable_ip_asset(
+                    path, opportunity_id, asset_id,
+                    "repeatable_positive_margin", {
+                        "economics_ids": [economics["economics_id"]],
+                    }, now=NOW + timedelta(minutes=8))
+            with self.assertRaisesRegex(
+                    ValueError,
+                    "one_time_economics_receipts_must_be_distinct"):
+                opportunity_intake.promote_reusable_ip_asset(
+                    path, opportunity_id, asset_id,
+                    "repeatable_positive_margin", {
+                        "economics_ids": [
+                            economics["economics_id"],
+                            economics["economics_id"],
+                        ],
+                    }, now=NOW + timedelta(minutes=8))
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE reusable_ip_assets SET name='Different workflow'
+                   WHERE asset_id=?""", (reused_asset_id,))
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                    ValueError, "repeatability_asset_identity_mismatch"):
+                opportunity_intake.promote_reusable_ip_asset(
+                    path, opportunity_id, asset_id,
+                    "repeatable_positive_margin", {
+                        "economics_ids": [
+                            economics["economics_id"],
+                            reused_economics["economics_id"],
+                        ],
+                    }, now=NOW + timedelta(minutes=8))
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE reusable_ip_assets SET name='Lead recovery workflow'
+                   WHERE asset_id=?""", (reused_asset_id,))
+            connection.commit()
+            connection.close()
+            repeatable = opportunity_intake.promote_reusable_ip_asset(
+                path, opportunity_id, asset_id,
+                "repeatable_positive_margin", {
+                    "economics_ids": [
+                        economics["economics_id"],
+                        reused_economics["economics_id"],
+                    ],
+                }, now=NOW + timedelta(minutes=8))
+            scale = opportunity_intake.promote_reusable_ip_asset(
+                path, opportunity_id, asset_id, "scale_candidate",
+                {"growth_receipt_id": retention["receipt_id"]},
+                now=NOW + timedelta(minutes=8))
+            with self.assertRaisesRegex(
+                    ValueError, "reuse_receipt_id_required"):
+                opportunity_intake.promote_reusable_ip_asset(
+                    path, opportunity_id, asset_id, "productize_candidate",
+                    {"growth_receipt_id": expansion["receipt_id"]},
+                    now=NOW + timedelta(minutes=8))
             reuse = opportunity_intake.record_reusable_ip_reuse_evidence(
                 path, asset_id, reused_asset_id,
                 reused_economics["economics_id"], {
@@ -2615,6 +2661,10 @@ class OpportunityIntakeTests(unittest.TestCase):
 
         self.assertTrue(paid["changed"])
         self.assertTrue(repeatable["changed"])
+        self.assertEqual(
+            repeatable["evidence"]["repeatability_receipt_count"], 2)
+        self.assertEqual(
+            len(repeatable["evidence"]["one_time_economics_receipts"]), 2)
         self.assertTrue(scale["changed"])
         self.assertTrue(productized["changed"])
         self.assertFalse(duplicate["changed"])

@@ -4081,8 +4081,9 @@ def promote_reusable_ip_asset(
     try:
         with connection:
             asset = connection.execute(
-                """SELECT opportunity_id,maturity FROM reusable_ip_assets
-                   WHERE asset_id=?""", (asset_id,)).fetchone()
+                """SELECT opportunity_id,maturity,name,asset_type
+                   FROM reusable_ip_assets WHERE asset_id=?""",
+                (asset_id,)).fetchone()
             if asset is None:
                 raise ValueError("reusable_ip_asset_not_found")
             if asset[0] != opportunity_id:
@@ -4133,14 +4134,18 @@ def promote_reusable_ip_asset(
                     raise ValueError("promotion_evidence_opportunity_mismatch")
                 resolved = {resolved_key: reference}
             elif target_maturity == "repeatable_positive_margin":
-                economics_reference = evidence.get("economics_id")
+                if evidence.get("economics_id"):
+                    raise ValueError(
+                        "one_time_repeatability_requires_multiple_receipts")
                 if evidence.get("recurring_economics_id"):
                     raise ValueError(
                         "recurring_repeatability_requires_multiple_receipts")
+                one_time_references = evidence.get("economics_ids")
                 recurring_references = evidence.get(
                     "recurring_economics_ids")
-                if bool(economics_reference) == bool(recurring_references):
-                    raise ValueError("exactly_one_realized_economics_path_required")
+                if bool(one_time_references) == bool(recurring_references):
+                    raise ValueError(
+                        "exactly_one_realized_economics_path_required")
                 if recurring_references:
                     if (not isinstance(recurring_references, list)
                             or len(recurring_references) < 2
@@ -4186,20 +4191,61 @@ def promote_reusable_ip_asset(
                             len(normalized_references),
                     }
                 else:
-                    reference = _proposal_text(
-                        economics_reference, "economics_id", 160)
-                    row = connection.execute(
-                        """SELECT opportunity_id,contribution_cents
-                           FROM realized_unit_economics WHERE economics_id=?""",
-                        (reference,)).fetchone()
-                    if row is None:
-                        raise ValueError("realized_economics_not_found")
-                    if row[0] != opportunity_id:
+                    if (not isinstance(one_time_references, list)
+                            or len(one_time_references) < 2
+                            or len(one_time_references) > 24):
                         raise ValueError(
-                            "promotion_evidence_opportunity_mismatch")
-                    if row[1] <= 0:
-                        raise ValueError("positive_contribution_required")
-                    resolved = {"economics_id": reference}
+                            "one_time_repeatability_requires_multiple_receipts")
+                    normalized_references = []
+                    seen_economics = set()
+                    seen_payments = set()
+                    seen_opportunities = set()
+                    for raw_reference in one_time_references:
+                        reference = _proposal_text(
+                            raw_reference, "economics_id", 160)
+                        if reference in seen_economics:
+                            raise ValueError(
+                                "one_time_economics_receipts_must_be_distinct")
+                        row = connection.execute(
+                            """SELECT opportunity_id,contribution_cents,
+                                      payment_receipt_id
+                               FROM realized_unit_economics
+                               WHERE economics_id=?""",
+                            (reference,)).fetchone()
+                        if row is None:
+                            raise ValueError("realized_economics_not_found")
+                        if row[1] <= 0:
+                            raise ValueError("positive_contribution_required")
+                        if row[2] in seen_payments:
+                            raise ValueError(
+                                "one_time_payment_receipts_must_be_distinct")
+                        if row[0] != opportunity_id:
+                            linked_asset = connection.execute(
+                                """SELECT 1 FROM reusable_ip_assets
+                                   WHERE opportunity_id=?
+                                     AND lower(name)=lower(?)
+                                     AND asset_type=?""",
+                                (row[0], asset[2], asset[3])).fetchone()
+                            if linked_asset is None:
+                                raise ValueError(
+                                    "repeatability_asset_identity_mismatch")
+                        seen_economics.add(reference)
+                        seen_payments.add(row[2])
+                        seen_opportunities.add(row[0])
+                        normalized_references.append({
+                            "economics_id": reference,
+                            "payment_receipt_id": row[2],
+                            "opportunity_id": row[0],
+                        })
+                    if opportunity_id not in seen_opportunities:
+                        raise ValueError(
+                            "source_opportunity_economics_required")
+                    resolved = {
+                        "one_time_economics_receipts":
+                            normalized_references,
+                        "repeatability_receipt_count":
+                            len(normalized_references),
+                    }
             else:
                 expected_kind = (
                     "retention" if target_maturity == "scale_candidate"
