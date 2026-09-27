@@ -88,6 +88,12 @@ earlier same-opportunity settled receipt and a subsequent non-overlapping servic
 period; a contract alone is never retention evidence. Expansion requires an
 HTTPS evidence receipt plus explicit, increasing scope and measurable value.
 Promotion still proceeds one maturity step at a time.
+Mission Control maps those verified recurring receipts back to the relevant
+business-model archetype and exposes receipt lineage, realized recurring net and
+contribution, retained value, expansion-value delta, and earned mastery. Only
+ledger-derived fields receive recurring-growth ranking credit; environment or
+manually persisted evidence cannot self-assert retention, expansion, or maturity.
+Collected, withdrawable, and received balances remain separate.
 
 ## Mission control
 
