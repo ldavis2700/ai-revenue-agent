@@ -2770,9 +2770,12 @@ class OpportunityIntakeTests(unittest.TestCase):
                 """SELECT accepted_fee_cap_cents,acceptance_evidence_url,
                           LENGTH(accepted_terms_hash),LENGTH(binding_hash)
                    FROM contract_outcome_terms""").fetchone()
+            accepted_terms_hash = connection.execute(
+                "SELECT terms_hash FROM outcome_pricing_terms").fetchone()[0]
             connection.close()
 
             eligibility_review = {
+                "reviewed_terms_hash": accepted_terms_hash,
                 "reviewed_exclusions_hash": opportunity_intake.payload_hash([
                     "Duplicates, test records, and refunds."]),
                 "matched_exclusions": [],
@@ -2781,6 +2784,23 @@ class OpportunityIntakeTests(unittest.TestCase):
                 "reviewed_at": (NOW + timedelta(minutes=1)).isoformat(),
                 "requires_human_escalation": False,
             }
+            with self.assertRaisesRegex(
+                    ValueError, "outcome_terms_review_mismatch"):
+                opportunity_intake.record_attributed_outcome(
+                    path, opportunity_id, contract_id, {
+                        "provider": "marketplace",
+                        "external_event_id": "appointment-wrong-terms",
+                        "evidence_url":
+                            "https://example.com/crm/appointments/wrong-terms",
+                        "attribution_reference": "approved-lead-wrong-terms",
+                        "eligibility_review": dict(
+                            eligibility_review,
+                            reviewed_terms_hash="0" * 64),
+                        "units": 1,
+                        "unit_fee_cents": 10000,
+                        "occurred_at":
+                            (NOW + timedelta(seconds=10)).isoformat(),
+                    }, now=NOW + timedelta(minutes=1))
             with self.assertRaisesRegex(ValueError, "outcome_event_excluded"):
                 opportunity_intake.record_attributed_outcome(
                     path, opportunity_id, contract_id, {
@@ -2909,6 +2929,8 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertFalse(duplicate["changed"])
         self.assertEqual(invoice["outcome_fee_cents"], 20000)
         self.assertEqual(allocations, [(event["event_id"], 20000)])
+        self.assertEqual(
+            stored_review["reviewed_terms_hash"], accepted_terms_hash)
         self.assertEqual(stored_review["matched_exclusions"], [])
         self.assertFalse(stored_review["requires_human_escalation"])
         self.assertIsNone(stored_review["human_escalation_decision"])

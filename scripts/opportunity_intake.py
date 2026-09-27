@@ -2809,6 +2809,11 @@ def record_attributed_outcome(
     review = event.get("eligibility_review")
     if not isinstance(review, dict):
         raise ValueError("outcome_eligibility_review_required")
+    reviewed_terms_hash = _proposal_text(
+        review.get("reviewed_terms_hash"),
+        "reviewed_terms_hash", 64).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", reviewed_terms_hash):
+        raise ValueError("reviewed_terms_hash_invalid")
     reviewed_exclusions_hash = _proposal_text(
         review.get("reviewed_exclusions_hash"),
         "reviewed_exclusions_hash", 64).lower()
@@ -2907,6 +2912,8 @@ def record_attributed_outcome(
             if unit_fee != configured_unit_fee:
                 raise ValueError("outcome_unit_fee_mismatch")
             accepted_exclusions = json.loads(terms[2])
+            if reviewed_terms_hash != current_terms[0]:
+                raise ValueError("outcome_terms_review_mismatch")
             if reviewed_exclusions_hash != payload_hash(accepted_exclusions):
                 raise ValueError("outcome_exclusions_review_mismatch")
             if any(value not in accepted_exclusions
@@ -2915,6 +2922,7 @@ def record_attributed_outcome(
             if normalized_matches:
                 raise ValueError("outcome_event_excluded")
             normalized_review = {
+                "reviewed_terms_hash": reviewed_terms_hash,
                 "reviewed_exclusions_hash": reviewed_exclusions_hash,
                 "matched_exclusions": normalized_matches,
                 "evidence_url": review_evidence_url,
