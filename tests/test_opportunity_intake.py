@@ -3660,6 +3660,34 @@ class OpportunityIntakeTests(unittest.TestCase):
                         invoice_url="https://example.com/invoices/managed-overlap",
                         transaction_url="https://example.com/payments/managed-overlap",
                     ), now=NOW)
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE recurring_payment_receipts
+                   SET transaction_url=? WHERE receipt_id=?""",
+                ("https://example.com/payments/substituted",
+                 settled["receipt_id"]))
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                    ValueError, "recurring_payment_receipt_unverified"):
+                opportunity_intake.record_recurring_withdrawable_balance(
+                    path, opportunity_id, settled["receipt_id"], {
+                        "provider": "marketplace",
+                        "external_balance_id": "managed-balance-tampered",
+                        "evidence_url":
+                            "https://example.com/balances/tampered",
+                        "amount_cents": 14500,
+                        "currency": "USD",
+                        "available_at": NOW.isoformat(),
+                    }, now=NOW)
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE recurring_payment_receipts
+                   SET transaction_url=? WHERE receipt_id=?""",
+                (recurring_payment["transaction_url"],
+                 settled["receipt_id"]))
+            connection.commit()
+            connection.close()
             withdrawable = (
                 opportunity_intake.record_recurring_withdrawable_balance(
                     path, opportunity_id, settled["receipt_id"], {
@@ -3682,6 +3710,34 @@ class OpportunityIntakeTests(unittest.TestCase):
                         "currency": "USD",
                         "available_at": NOW.isoformat(),
                     }, now=NOW))
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE recurring_payout_availability_receipts
+                   SET evidence_url=? WHERE receipt_id=?""",
+                ("https://example.com/balances/substituted",
+                 withdrawable["receipt_id"]))
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                    ValueError, "recurring_payout_receipt_unverified"):
+                opportunity_intake.record_recurring_bank_receipt(
+                    path, opportunity_id, withdrawable["receipt_id"], {
+                        "financial_institution": "Owner Bank",
+                        "external_transfer_id": "managed-transfer-tampered",
+                        "evidence_url":
+                            "https://example.com/bank/tampered",
+                        "amount_cents": 14500,
+                        "currency": "USD",
+                        "received_at": NOW.isoformat(),
+                    }, now=NOW)
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE recurring_payout_availability_receipts
+                   SET evidence_url=? WHERE receipt_id=?""",
+                ("https://example.com/balances/managed-1",
+                 withdrawable["receipt_id"]))
+            connection.commit()
+            connection.close()
             bank = opportunity_intake.record_recurring_bank_receipt(
                 path, opportunity_id, withdrawable["receipt_id"], {
                     "financial_institution": "Owner Bank",
