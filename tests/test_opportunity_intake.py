@@ -2772,6 +2772,50 @@ class OpportunityIntakeTests(unittest.TestCase):
                    FROM contract_outcome_terms""").fetchone()
             connection.close()
 
+            eligibility_review = {
+                "reviewed_exclusions_hash": opportunity_intake.payload_hash([
+                    "Duplicates, test records, and refunds."]),
+                "matched_exclusions": [],
+                "evidence_url":
+                    "https://example.com/crm/appointments/eligibility-review",
+                "reviewed_at": (NOW + timedelta(minutes=1)).isoformat(),
+                "requires_human_escalation": False,
+            }
+            with self.assertRaisesRegex(ValueError, "outcome_event_excluded"):
+                opportunity_intake.record_attributed_outcome(
+                    path, opportunity_id, contract_id, {
+                        "provider": "marketplace",
+                        "external_event_id": "appointment-excluded",
+                        "evidence_url":
+                            "https://example.com/crm/appointments/excluded",
+                        "attribution_reference": "duplicate-lead",
+                        "eligibility_review": dict(
+                            eligibility_review,
+                            matched_exclusions=[
+                                "Duplicates, test records, and refunds."]),
+                        "units": 1,
+                        "unit_fee_cents": 10000,
+                        "occurred_at":
+                            (NOW + timedelta(seconds=10)).isoformat(),
+                    }, now=NOW + timedelta(minutes=1))
+            with self.assertRaisesRegex(
+                    ValueError, "human_escalation_decision_required"):
+                opportunity_intake.record_attributed_outcome(
+                    path, opportunity_id, contract_id, {
+                        "provider": "marketplace",
+                        "external_event_id": "appointment-disputed",
+                        "evidence_url":
+                            "https://example.com/crm/appointments/disputed",
+                        "attribution_reference": "disputed-lead",
+                        "eligibility_review": dict(
+                            eligibility_review,
+                            requires_human_escalation=True),
+                        "units": 1,
+                        "unit_fee_cents": 10000,
+                        "occurred_at":
+                            (NOW + timedelta(seconds=10)).isoformat(),
+                    }, now=NOW + timedelta(minutes=1))
+
             with self.assertRaisesRegex(
                     ValueError, "outcome_unit_fee_mismatch"):
                 opportunity_intake.record_attributed_outcome(
@@ -2781,6 +2825,7 @@ class OpportunityIntakeTests(unittest.TestCase):
                         "evidence_url":
                             "https://example.com/crm/appointments/wrong-rate",
                         "attribution_reference": "approved-lead-wrong-rate",
+                        "eligibility_review": eligibility_review,
                         "units": 1,
                         "unit_fee_cents": 5000,
                         "occurred_at":
@@ -2792,6 +2837,7 @@ class OpportunityIntakeTests(unittest.TestCase):
                     "external_event_id": "appointment-1",
                     "evidence_url": "https://example.com/crm/appointments/1",
                     "attribution_reference": "approved-lead-1",
+                    "eligibility_review": eligibility_review,
                     "units": 2,
                     "unit_fee_cents": 10000,
                     "occurred_at": (NOW + timedelta(seconds=30)).isoformat(),
@@ -2802,6 +2848,7 @@ class OpportunityIntakeTests(unittest.TestCase):
                     "external_event_id": "appointment-1",
                     "evidence_url": "https://example.com/crm/appointments/1",
                     "attribution_reference": "approved-lead-1",
+                    "eligibility_review": eligibility_review,
                     "units": 2,
                     "unit_fee_cents": 10000,
                     "occurred_at": (NOW + timedelta(seconds=30)).isoformat(),
@@ -2813,6 +2860,7 @@ class OpportunityIntakeTests(unittest.TestCase):
                         "external_event_id": "appointment-2",
                         "evidence_url": "https://example.com/crm/appointments/2",
                         "attribution_reference": "approved-lead-2",
+                        "eligibility_review": eligibility_review,
                         "units": 1,
                         "unit_fee_cents": 10000,
                         "occurred_at": (NOW + timedelta(seconds=40)).isoformat(),
@@ -2842,6 +2890,10 @@ class OpportunityIntakeTests(unittest.TestCase):
             allocations = connection.execute(
                 """SELECT event_id,outcome_fee_cents
                    FROM invoice_outcome_events""").fetchall()
+            stored_review = json.loads(connection.execute(
+                """SELECT eligibility_review_json
+                   FROM attributed_outcome_events WHERE event_id=?""",
+                (event["event_id"],)).fetchone()[0])
             connection.close()
 
         self.assertEqual(terms[:2], (
@@ -2857,6 +2909,9 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertFalse(duplicate["changed"])
         self.assertEqual(invoice["outcome_fee_cents"], 20000)
         self.assertEqual(allocations, [(event["event_id"], 20000)])
+        self.assertEqual(stored_review["matched_exclusions"], [])
+        self.assertFalse(stored_review["requires_human_escalation"])
+        self.assertIsNone(stored_review["human_escalation_decision"])
 
 
     def test_issue_164_offer_family_catalog_is_machine_readable_and_in_sync(self):

@@ -1726,6 +1726,7 @@ def open_ledger(path):
         external_event_id TEXT NOT NULL,
         evidence_url TEXT NOT NULL,
         attribution_reference TEXT NOT NULL,
+        eligibility_review_json TEXT NOT NULL,
         units INTEGER NOT NULL,
         unit_fee_cents INTEGER NOT NULL,
         fee_cents INTEGER NOT NULL,
@@ -1737,6 +1738,14 @@ def open_ledger(path):
         FOREIGN KEY(contract_receipt_id) REFERENCES contract_receipts(receipt_id),
         UNIQUE(provider, external_event_id)
     )""")
+    outcome_event_columns = {
+        row[1] for row in connection.execute(
+            "PRAGMA table_info(attributed_outcome_events)").fetchall()
+    }
+    if "eligibility_review_json" not in outcome_event_columns:
+        connection.execute(
+            "ALTER TABLE attributed_outcome_events "
+            "ADD COLUMN eligibility_review_json TEXT")
     connection.execute("""CREATE TABLE IF NOT EXISTS invoice_outcome_events (
         invoice_receipt_id TEXT NOT NULL,
         event_id TEXT NOT NULL UNIQUE,
@@ -2797,12 +2806,68 @@ def record_attributed_outcome(
     if occurred_at > recorded + MAX_FUTURE_SKEW:
         raise ValueError("outcome_occurred_at_future")
 
+    review = event.get("eligibility_review")
+    if not isinstance(review, dict):
+        raise ValueError("outcome_eligibility_review_required")
+    reviewed_exclusions_hash = _proposal_text(
+        review.get("reviewed_exclusions_hash"),
+        "reviewed_exclusions_hash", 64).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", reviewed_exclusions_hash):
+        raise ValueError("reviewed_exclusions_hash_invalid")
+    matched_exclusions = review.get("matched_exclusions")
+    if not isinstance(matched_exclusions, list) or len(matched_exclusions) > 20:
+        raise ValueError("matched_exclusions_invalid")
+    normalized_matches = []
+    for exclusion in matched_exclusions:
+        exclusion = _proposal_text(
+            exclusion, "matched_exclusion", 500)
+        if exclusion not in normalized_matches:
+            normalized_matches.append(exclusion)
+    review_evidence_url = canonical_url(_proposal_text(
+        review.get("evidence_url"), "eligibility_review_evidence_url", 2000))
+    if urlsplit(review_evidence_url).scheme != "https":
+        raise ValueError("eligibility_review_evidence_url_https_required")
+    reviewed_at = parse_time(
+        review.get("reviewed_at"), "eligibility_reviewed_at")
+    if reviewed_at < occurred_at or reviewed_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("eligibility_review_time_invalid")
+    requires_escalation = boolean_flag(
+        review, "requires_human_escalation")
+    escalation = review.get("human_escalation_decision")
+    normalized_escalation = None
+    if requires_escalation:
+        if not isinstance(escalation, dict):
+            raise ValueError("human_escalation_decision_required")
+        decision = str(escalation.get("decision") or "").strip().lower()
+        if decision not in {"approved", "rejected"}:
+            raise ValueError("human_escalation_decision_invalid")
+        decision_url = canonical_url(_proposal_text(
+            escalation.get("evidence_url"),
+            "human_escalation_evidence_url", 2000))
+        if urlsplit(decision_url).scheme != "https":
+            raise ValueError("human_escalation_evidence_url_https_required")
+        decided_at = parse_time(
+            escalation.get("decided_at"), "human_escalation_decided_at")
+        if decided_at < reviewed_at or decided_at > recorded + MAX_FUTURE_SKEW:
+            raise ValueError("human_escalation_time_invalid")
+        normalized_escalation = {
+            "decision": decision,
+            "evidence_url": decision_url,
+            "decided_at": decided_at.isoformat(),
+        }
+        if decision != "approved":
+            raise ValueError("human_escalation_not_approved")
+    elif escalation is not None:
+        raise ValueError("unexpected_human_escalation_decision")
+
     connection = open_ledger(path)
     try:
         with connection:
             terms = connection.execute(
-                """SELECT term_id,fee_cap_cents FROM outcome_pricing_terms
-                   WHERE opportunity_id=?""", (opportunity_id,)).fetchone()
+                """SELECT term_id,fee_cap_cents,exclusions_json,
+                          human_escalation_rule
+                   FROM outcome_pricing_terms WHERE opportunity_id=?""",
+                (opportunity_id,)).fetchone()
             if terms is None:
                 raise ValueError("outcome_pricing_terms_not_found")
             contract = connection.execute(
@@ -2841,6 +2906,22 @@ def record_attributed_outcome(
                 raise ValueError("outcome_unit_fee_terms_not_found")
             if unit_fee != configured_unit_fee:
                 raise ValueError("outcome_unit_fee_mismatch")
+            accepted_exclusions = json.loads(terms[2])
+            if reviewed_exclusions_hash != payload_hash(accepted_exclusions):
+                raise ValueError("outcome_exclusions_review_mismatch")
+            if any(value not in accepted_exclusions
+                   for value in normalized_matches):
+                raise ValueError("matched_exclusion_not_in_terms")
+            if normalized_matches:
+                raise ValueError("outcome_event_excluded")
+            normalized_review = {
+                "reviewed_exclusions_hash": reviewed_exclusions_hash,
+                "matched_exclusions": normalized_matches,
+                "evidence_url": review_evidence_url,
+                "reviewed_at": reviewed_at.isoformat(),
+                "requires_human_escalation": requires_escalation,
+                "human_escalation_decision": normalized_escalation,
+            }
             normalized = {
                 "opportunity_id": opportunity_id,
                 "term_id": terms[0],
@@ -2849,6 +2930,7 @@ def record_attributed_outcome(
                 "external_event_id": external_id,
                 "evidence_url": evidence_url,
                 "attribution_reference": attribution_reference,
+                "eligibility_review": normalized_review,
                 "units": units,
                 "unit_fee_cents": unit_fee,
                 "fee_cents": fee_cents,
@@ -2875,11 +2957,13 @@ def record_attributed_outcome(
             connection.execute(
                 """INSERT INTO attributed_outcome_events
                    (event_id,opportunity_id,term_id,contract_receipt_id,provider,
-                    external_event_id,evidence_url,attribution_reference,units,
-                    unit_fee_cents,fee_cents,occurred_at,event_hash,recorded_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    external_event_id,evidence_url,attribution_reference,
+                    eligibility_review_json,units,unit_fee_cents,fee_cents,
+                    occurred_at,event_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (event_id, opportunity_id, terms[0], contract_receipt_id,
                  provider, external_id, evidence_url, attribution_reference,
+                 json.dumps(normalized_review, sort_keys=True, separators=(",", ":")),
                  units, unit_fee, fee_cents, occurred_at.isoformat(),
                  event_hash, recorded.isoformat()))
             return {"event_id": event_id, "changed": True, **normalized}
