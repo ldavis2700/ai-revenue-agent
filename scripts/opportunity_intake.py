@@ -2832,6 +2832,11 @@ def record_attributed_outcome(
         review.get("evidence_url"), "eligibility_review_evidence_url", 2000))
     if urlsplit(review_evidence_url).scheme != "https":
         raise ValueError("eligibility_review_evidence_url_https_required")
+    review_artifact_sha256 = _proposal_text(
+        review.get("artifact_sha256"),
+        "eligibility_review_artifact_sha256", 64).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", review_artifact_sha256):
+        raise ValueError("eligibility_review_artifact_sha256_invalid")
     reviewed_at = parse_time(
         review.get("reviewed_at"), "eligibility_reviewed_at")
     if reviewed_at < occurred_at or reviewed_at > recorded + MAX_FUTURE_SKEW:
@@ -2926,6 +2931,7 @@ def record_attributed_outcome(
                 "reviewed_exclusions_hash": reviewed_exclusions_hash,
                 "matched_exclusions": normalized_matches,
                 "evidence_url": review_evidence_url,
+                "artifact_sha256": review_artifact_sha256,
                 "reviewed_at": reviewed_at.isoformat(),
                 "requires_human_escalation": requires_escalation,
                 "human_escalation_decision": normalized_escalation,
