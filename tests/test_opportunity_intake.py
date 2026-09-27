@@ -3348,11 +3348,42 @@ class OpportunityIntakeTests(unittest.TestCase):
                     "recurring_payment_receipt_id":
                         second_settled["receipt_id"],
                 }, now=second_now)
+            with self.assertRaisesRegex(
+                    ValueError,
+                    "recurring_repeatability_requires_multiple_receipts"):
+                opportunity_intake.promote_reusable_ip_asset(
+                    path, opportunity_id, asset_id,
+                    "repeatable_positive_margin", {
+                        "recurring_economics_id":
+                            second_realized["economics_id"],
+                    }, now=second_now)
+            with self.assertRaisesRegex(
+                    ValueError,
+                    "recurring_repeatability_requires_multiple_receipts"):
+                opportunity_intake.promote_reusable_ip_asset(
+                    path, opportunity_id, asset_id,
+                    "repeatable_positive_margin", {
+                        "recurring_economics_ids": [
+                            second_realized["economics_id"]],
+                    }, now=second_now)
+            with self.assertRaisesRegex(
+                    ValueError,
+                    "recurring_economics_receipts_must_be_distinct"):
+                opportunity_intake.promote_reusable_ip_asset(
+                    path, opportunity_id, asset_id,
+                    "repeatable_positive_margin", {
+                        "recurring_economics_ids": [
+                            second_realized["economics_id"],
+                            second_realized["economics_id"],
+                        ],
+                    }, now=second_now)
             repeatable = opportunity_intake.promote_reusable_ip_asset(
                 path, opportunity_id, asset_id,
                 "repeatable_positive_margin", {
-                    "recurring_economics_id":
+                    "recurring_economics_ids": [
+                        realized["economics_id"],
                         second_realized["economics_id"],
+                    ],
                 }, now=second_now)
             scale = opportunity_intake.promote_reusable_ip_asset(
                 path, opportunity_id, asset_id, "scale_candidate", {
@@ -3411,6 +3442,10 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertTrue(expansion["changed"])
         self.assertTrue(paid["changed"])
         self.assertTrue(repeatable["changed"])
+        self.assertEqual(
+            repeatable["evidence"]["repeatability_receipt_count"], 2)
+        self.assertEqual(
+            len(repeatable["evidence"]["recurring_economics_receipts"]), 2)
         self.assertTrue(scale["changed"])
         self.assertTrue(productized["changed"])
         self.assertEqual(productized["maturity"], "productize_candidate")

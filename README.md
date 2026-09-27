@@ -83,8 +83,11 @@ reconciliation, ordered timestamps, and idempotent external IDs. These later
 stages are reported independently and never increase collected revenue again.
 Settled recurring work can advance reusable-IP maturity only through
 `record_recurring_growth_evidence`. The current receipt must have separately
-recorded positive realized contribution. Retention additionally requires an
-earlier same-opportunity settled receipt and a subsequent non-overlapping service
+recorded positive realized contribution. Recurring
+`repeatable_positive_margin` promotion requires at least two distinct positive-
+contribution economics records backed by different settled recurring payments;
+one profitable billing period is paid validation, not repeatability. Retention
+additionally requires an earlier same-opportunity settled receipt and a subsequent non-overlapping service
 period; a contract alone is never retention evidence. Expansion requires an
 HTTPS evidence receipt plus explicit, increasing scope and measurable value.
 Promotion still proceeds one maturity step at a time.
