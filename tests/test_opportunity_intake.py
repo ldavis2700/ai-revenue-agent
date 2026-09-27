@@ -2781,9 +2781,27 @@ class OpportunityIntakeTests(unittest.TestCase):
                 "matched_exclusions": [],
                 "evidence_url":
                     "https://example.com/crm/appointments/eligibility-review",
+                "artifact_sha256": "1" * 64,
                 "reviewed_at": (NOW + timedelta(minutes=1)).isoformat(),
                 "requires_human_escalation": False,
             }
+            with self.assertRaisesRegex(
+                    ValueError, "eligibility_review_artifact_sha256_invalid"):
+                opportunity_intake.record_attributed_outcome(
+                    path, opportunity_id, contract_id, {
+                        "provider": "marketplace",
+                        "external_event_id": "appointment-unpinned-review",
+                        "evidence_url":
+                            "https://example.com/crm/appointments/unpinned-review",
+                        "attribution_reference": "approved-lead-unpinned-review",
+                        "eligibility_review": dict(
+                            eligibility_review,
+                            artifact_sha256="not-a-sha256"),
+                        "units": 1,
+                        "unit_fee_cents": 10000,
+                        "occurred_at":
+                            (NOW + timedelta(seconds=5)).isoformat(),
+                    }, now=NOW + timedelta(minutes=1))
             with self.assertRaisesRegex(
                     ValueError, "outcome_terms_review_mismatch"):
                 opportunity_intake.record_attributed_outcome(
@@ -2931,6 +2949,7 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(allocations, [(event["event_id"], 20000)])
         self.assertEqual(
             stored_review["reviewed_terms_hash"], accepted_terms_hash)
+        self.assertEqual(stored_review["artifact_sha256"], "1" * 64)
         self.assertEqual(stored_review["matched_exclusions"], [])
         self.assertFalse(stored_review["requires_human_escalation"])
         self.assertIsNone(stored_review["human_escalation_decision"])
