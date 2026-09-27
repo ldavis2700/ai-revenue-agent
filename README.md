@@ -151,6 +151,8 @@ An approved deployment should map its form checkbox to `contact_consent`, link t
 
 Reusable IP reaches `repeatable_positive_margin` only after at least two distinct settled positive-contribution economics receipts tied to the same captured asset identity. It reaches `productize_candidate` only after sequential paid validation, positive-margin repeatability, retention, expansion, and an explicit reuse receipt from a second opportunity. The second opportunity must contain the same named asset type and its own independently settled positive-contribution economics record. Duplicate assets, catalog membership, projections, and a single customer's repeated billing cannot establish cross-customer demand.
 
+Outcome-priced offers bind a positive per-unit fee into the immutable accepted terms hash in addition to the overall cap. Outcome events with a caller-selected or changed rate fail closed before accrual or invoicing.
+
 ## Run manually
 
 ```bash

@@ -315,6 +315,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             outcome_attribution_method="CRM event tied to the approved lead ID.",
             outcome_exclusions=["Duplicates, test records, and refunded appointments."],
             outcome_fee_cap_cents=250000,
+            outcome_unit_fee_cents=10000,
             human_escalation_defined=True,
             human_escalation_rule="Pause disputed events for owner review.",
         )
@@ -322,6 +323,8 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(len(accepted["opportunities"]), 1)
         self.assertEqual(
             accepted["opportunities"][0]["outcome_fee_cap_cents"], 250000)
+        self.assertEqual(
+            accepted["opportunities"][0]["outcome_unit_fee_cents"], 10000)
 
     def test_issue_164_captures_offer_and_reusable_ip_evidence(self):
         item = opportunity_intake.ingest([candidate(
@@ -2687,6 +2690,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             outcome_success_definition="Qualified appointment attended.",
             outcome_attribution_method="CRM event tied to approved lead ID.",
             outcome_fee_cap_cents=25000,
+            outcome_unit_fee_cents=10000,
             human_escalation_defined=True,
             human_escalation_rule="Pause disputes for owner review.",
         )], now=NOW)
@@ -2702,6 +2706,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             outcome_attribution_method="CRM event tied to approved lead ID.",
             outcome_exclusions=["Duplicates and refunded appointments."],
             outcome_fee_cap_cents=25000,
+            outcome_unit_fee_cents=10000,
             human_escalation_defined=True,
         )], now=NOW)
         self.assertEqual(
@@ -2716,6 +2721,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             outcome_attribution_method="CRM event tied to approved lead ID.",
             outcome_exclusions=["Duplicates and refunds."],
             outcome_fee_cap_cents=25000,
+            outcome_unit_fee_cents=10000,
             human_escalation_defined=True,
             human_escalation_rule="Pause disputes for owner review.",
         )], now=NOW)
@@ -2745,6 +2751,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             outcome_attribution_method="CRM event tied to approved lead ID.",
             outcome_exclusions=["Duplicates, test records, and refunds."],
             outcome_fee_cap_cents=25000,
+            outcome_unit_fee_cents=10000,
             human_escalation_defined=True,
             human_escalation_rule="Pause disputed events for owner review.",
         )], now=NOW)
@@ -2765,6 +2772,20 @@ class OpportunityIntakeTests(unittest.TestCase):
                    FROM contract_outcome_terms""").fetchone()
             connection.close()
 
+            with self.assertRaisesRegex(
+                    ValueError, "outcome_unit_fee_mismatch"):
+                opportunity_intake.record_attributed_outcome(
+                    path, opportunity_id, contract_id, {
+                        "provider": "marketplace",
+                        "external_event_id": "appointment-wrong-rate",
+                        "evidence_url":
+                            "https://example.com/crm/appointments/wrong-rate",
+                        "attribution_reference": "approved-lead-wrong-rate",
+                        "units": 1,
+                        "unit_fee_cents": 5000,
+                        "occurred_at":
+                            (NOW + timedelta(seconds=20)).isoformat(),
+                    }, now=NOW + timedelta(minutes=1))
             event = opportunity_intake.record_attributed_outcome(
                 path, opportunity_id, contract_id, {
                     "provider": "marketplace",
@@ -3015,6 +3036,7 @@ class OpportunityIntakeTests(unittest.TestCase):
                 "CRM event tied to an approved consented lead ID."),
             outcome_exclusions=["Duplicates, tests, refunds, and no-shows."],
             outcome_fee_cap_cents=25000,
+            outcome_unit_fee_cents=10000,
             human_escalation_defined=True,
             human_escalation_rule=(
                 "Pause disputed events for documented owner review."),
@@ -3081,6 +3103,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             outcome_attribution_method="CRM event tied to approved lead ID.",
             outcome_exclusions=["Duplicates, tests, refunds, and no-shows."],
             outcome_fee_cap_cents=25000,
+            outcome_unit_fee_cents=10000,
             human_escalation_defined=True,
             human_escalation_rule="Pause disputes for documented review.",
         )], now=NOW)
