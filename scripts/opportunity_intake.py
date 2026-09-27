@@ -599,6 +599,7 @@ def derive_offer_architecture(opportunity, proposal_price_cents, milestones):
             "attribution_method": opportunity["outcome_attribution_method"],
             "exclusions": opportunity["outcome_exclusions"],
             "fee_cap_cents": opportunity["outcome_fee_cap_cents"],
+            "unit_fee_cents": opportunity["outcome_unit_fee_cents"],
             "human_escalation_rule": opportunity["human_escalation_rule"],
         }
         outcome_terms["terms_hash"] = payload_hash(outcome_terms)
@@ -901,6 +902,8 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         payload.get("outcome_attribution_method") or "").strip()
     outcome_fee_cap_cents = finite_number(
         payload, "outcome_fee_cap_cents", minimum=1, required=False)
+    outcome_unit_fee_cents = finite_number(
+        payload, "outcome_unit_fee_cents", minimum=1, required=False)
     human_escalation_defined = boolean_flag(
         payload, "human_escalation_defined")
     human_escalation_rule = str(
@@ -919,6 +922,9 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
             outcome_exclusions.append(exclusion)
     if outcome_fee_cap_cents is not None and not outcome_fee_cap_cents.is_integer():
         raise ValueError("outcome_fee_cap_cents_invalid")
+    if (outcome_unit_fee_cents is not None
+            and not outcome_unit_fee_cents.is_integer()):
+        raise ValueError("outcome_unit_fee_cents_invalid")
     if outcome_pricing:
         if "outcome_pricing" not in offer_phases:
             raise ValueError("outcome_pricing_phase_required")
@@ -932,6 +938,10 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
             raise ValueError("outcome_fee_cap_cents_required")
         if not human_escalation_defined or not human_escalation_rule:
             raise ValueError("outcome_human_escalation_required")
+        if outcome_unit_fee_cents is None:
+            raise ValueError("outcome_unit_fee_cents_required")
+        if outcome_unit_fee_cents > outcome_fee_cap_cents:
+            raise ValueError("outcome_unit_fee_exceeds_cap")
     required_capabilities = capability_set(payload, "required_execution_capabilities")
     available_capabilities = capability_set(payload, "available_execution_capabilities")
     application_cost_units = finite_number(
@@ -1092,6 +1102,9 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
             outcome_attribution_method if outcome_pricing else None),
         "outcome_fee_cap_cents": (
             int(outcome_fee_cap_cents) if outcome_fee_cap_cents is not None else None),
+        "outcome_unit_fee_cents": (
+            int(outcome_unit_fee_cents)
+            if outcome_unit_fee_cents is not None else None),
         "outcome_exclusions": outcome_exclusions if outcome_pricing else [],
         "human_escalation_defined": human_escalation_defined,
         "human_escalation_rule": (
@@ -2818,6 +2831,16 @@ def record_attributed_outcome(
                     or binding[1] != current_terms[0]
                     or binding[2] != current_terms[1]):
                 raise ValueError("outcome_contract_terms_mismatch")
+            opportunity_row = connection.execute(
+                "SELECT payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            configured_unit_fee = (
+                json.loads(opportunity_row[0]).get("outcome_unit_fee_cents")
+                if opportunity_row else None)
+            if not isinstance(configured_unit_fee, int) or configured_unit_fee <= 0:
+                raise ValueError("outcome_unit_fee_terms_not_found")
+            if unit_fee != configured_unit_fee:
+                raise ValueError("outcome_unit_fee_mismatch")
             normalized = {
                 "opportunity_id": opportunity_id,
                 "term_id": terms[0],
@@ -4680,6 +4703,7 @@ def persist(result, path=DEFAULT_DB_PATH, *, now=None):
                             "attribution_method": item["outcome_attribution_method"],
                             "exclusions": item["outcome_exclusions"],
                             "fee_cap_cents": item["outcome_fee_cap_cents"],
+                            "unit_fee_cents": item["outcome_unit_fee_cents"],
                             "human_escalation_rule": item["human_escalation_rule"],
                         }
                         terms_json = json.dumps(
