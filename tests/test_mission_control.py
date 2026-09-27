@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 import tempfile
@@ -156,6 +157,79 @@ class MissionControlTests(unittest.TestCase):
         competition = result['business_model_intelligence']['portfolio_competition']
         self.assertIsNotNone(competition.get('champion'))
         self.assertIsNotNone(competition.get('challenger'))
+
+    def test_recurring_growth_lineage_feeds_verified_model_evidence(self):
+        conn = mission_control.connect(self.path)
+        conn.execute('''CREATE TABLE opportunities (
+            id TEXT PRIMARY KEY, payload_json TEXT NOT NULL
+        )''')
+        conn.execute('''CREATE TABLE recurring_payment_receipts (
+            receipt_id TEXT PRIMARY KEY, opportunity_id TEXT NOT NULL,
+            net_amount_cents INTEGER NOT NULL
+        )''')
+        conn.execute('''CREATE TABLE recurring_realized_unit_economics (
+            economics_id TEXT PRIMARY KEY,
+            recurring_payment_receipt_id TEXT NOT NULL,
+            contribution_cents INTEGER NOT NULL,
+            delivery_cost_cents INTEGER NOT NULL,
+            inference_cost_cents INTEGER NOT NULL,
+            cac_cents INTEGER NOT NULL
+        )''')
+        conn.execute('''CREATE TABLE recurring_growth_evidence_receipts (
+            receipt_id TEXT PRIMARY KEY, opportunity_id TEXT NOT NULL,
+            recurring_payment_receipt_id TEXT NOT NULL,
+            recurring_economics_id TEXT NOT NULL, kind TEXT NOT NULL,
+            prior_recurring_payment_receipt_id TEXT,
+            baseline_value_cents INTEGER, expanded_value_cents INTEGER,
+            occurred_at TEXT NOT NULL
+        )''')
+        conn.execute('''CREATE TABLE reusable_ip_assets (
+            asset_id TEXT PRIMARY KEY, opportunity_id TEXT NOT NULL,
+            maturity TEXT NOT NULL
+        )''')
+        payload = json.dumps({
+            'offer_family': 'multi_system_operational_integration'})
+        conn.execute(
+            "INSERT INTO opportunities VALUES (?,?)", ('opp_1', payload))
+        conn.execute(
+            "INSERT INTO recurring_payment_receipts VALUES (?,?,?)",
+            ('recur_2', 'opp_1', 14500))
+        conn.execute(
+            "INSERT INTO recurring_realized_unit_economics "
+            "VALUES (?,?,?,?,?,?)",
+            ('econ_2', 'recur_2', 12000, 1500, 500, 500))
+        conn.executemany(
+            "INSERT INTO recurring_growth_evidence_receipts "
+            "VALUES (?,?,?,?,?,?,?,?,?)", [
+                ('grow_ret', 'opp_1', 'recur_2', 'econ_2', 'retention',
+                 'recur_1', None, None, '2026-09-26T23:00:00+00:00'),
+                ('grow_exp', 'opp_1', 'recur_2', 'econ_2', 'expansion',
+                 None, 50000, 75000, '2026-09-26T23:05:00+00:00'),
+            ])
+        conn.execute(
+            "INSERT INTO reusable_ip_assets VALUES (?,?,?)",
+            ('asset_1', 'opp_1', 'productize_candidate'))
+        conn.commit()
+
+        evidence = mission_control.ledger_business_model_evidence(conn)
+        snapshot = mission_control.business_model_snapshot(conn)
+        conn.close()
+
+        model = evidence['ai_agent_implementation']
+        self.assertTrue(model['_ledger_verified'])
+        self.assertEqual(model['verified_retention_receipts'], 1)
+        self.assertEqual(model['verified_expansion_receipts'], 1)
+        self.assertEqual(model['realized_recurring_net_cents'], 14500)
+        self.assertEqual(
+            model['realized_recurring_contribution_cents'], 12000)
+        self.assertEqual(model['retained_recurring_value_cents'], 14500)
+        self.assertEqual(model['expanded_value_delta_cents'], 25000)
+        self.assertEqual(model['mastery'], 'productize_candidate')
+        self.assertEqual(len(model['receipt_lineage']), 2)
+        self.assertEqual(snapshot['ledger_verified_evidence_models'], 1)
+        self.assertEqual(
+            snapshot['verified_model_evidence']
+            ['ai_agent_implementation']['observed_revenue'], 145)
 
     def test_nonfinite_evidence_cannot_insert_or_replace_measurements(self):
         conn = mission_control.connect(self.path)
