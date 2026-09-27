@@ -185,8 +185,9 @@ def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]]
     Supported evidence keys: observed_revenue, observed_cost, conversion_rate,
     evidence_quality (0..1), observed_at (ISO-8601), and sample_size. Mission
     Control may also add receipt-backed recurring retention, expansion, realized
-    contribution, and mastery fields marked with its private ledger-verification
-    flag; unverified callers receive no maturity or recurring-growth bonus.
+    contribution, cross-opportunity reusable-IP reuse, and mastery fields marked
+    with its private ledger-verification flag; unverified callers receive no
+    maturity, recurring-growth, or reuse bonus.
     """
     active = active or {}
     enriched = []
@@ -207,6 +208,13 @@ def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]]
         expansion_receipts = (
             max(0, int(evidence.get("verified_expansion_receipts", 0) or 0))
             if ledger_verified else 0)
+        reuse_receipts = (
+            max(0, int(evidence.get("verified_reuse_receipts", 0) or 0))
+            if ledger_verified else 0)
+        reused_opportunities = (
+            max(0, int(evidence.get(
+                "verified_reused_opportunities", 0) or 0))
+            if ledger_verified else 0)
         retained_value_cents = (
             max(0, int(evidence.get("retained_recurring_value_cents", 0) or 0))
             if ledger_verified else 0)
@@ -220,8 +228,11 @@ def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]]
             8.0, max(-8.0, profit / 100.0 + conversion * 5.0))
         recurring_growth_bonus = effective_quality * min(
             3.0, retention_receipts * 0.5 + expansion_receipts * 0.75)
+        verified_reuse_bonus = effective_quality * min(
+            2.0, reuse_receipts * 0.5 + reused_opportunities * 0.75)
         pursuit_score = round(
-            model["apex_score"] + evidence_bonus + recurring_growth_bonus, 2)
+            model["apex_score"] + evidence_bonus + recurring_growth_bonus
+            + verified_reuse_bonus, 2)
         sample_size = None if "sample_size" not in evidence else max(0.0, float(evidence.get("sample_size", 0) or 0))
         enriched.append({
             **model,
@@ -234,6 +245,10 @@ def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]]
             "ledger_verified_recurring_evidence": ledger_verified,
             "verified_retention_receipts": retention_receipts,
             "verified_expansion_receipts": expansion_receipts,
+            "verified_reuse_receipts": reuse_receipts,
+            "verified_reused_opportunities": reused_opportunities,
+            "ledger_verified_reuse_evidence":
+                ledger_verified and reuse_receipts > 0,
             "retained_recurring_value_cents": retained_value_cents,
             "expanded_value_delta_cents": expanded_value_delta_cents,
             "mastery": mastery,
