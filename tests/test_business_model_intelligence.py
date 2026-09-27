@@ -71,6 +71,46 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
         self.assertGreater(directory["observed_profit"], 0)
         self.assertIn("maximize durable risk-adjusted owner wealth", plan["objective"])
 
+    def test_only_ledger_verified_growth_can_promote_model_mastery(self):
+        catalog = module.load_catalog(ROOT / "config" / "business_models.json")
+        ranked = module.rank_models(catalog["models"], {})
+        common = {
+            "observed_revenue": 145,
+            "observed_cost": 25,
+            "conversion_rate": 0.5,
+            "evidence_quality": 1,
+            "sample_size": 20,
+            "verified_retention_receipts": 2,
+            "verified_expansion_receipts": 1,
+            "retained_recurring_value_cents": 29000,
+            "expanded_value_delta_cents": 25000,
+            "mastery": "productize_candidate",
+        }
+        unverified = module.pursuit_plan(
+            ranked, {"ai_agent_implementation": common}, 200)
+        verified = module.pursuit_plan(
+            ranked, {"ai_agent_implementation": {
+                **common, "_ledger_verified": True}}, 200)
+        unverified_model = next(
+            item for item in unverified["pursue"]
+            if item["id"] == "ai_agent_implementation")
+        verified_model = next(
+            item for item in verified["pursue"]
+            if item["id"] == "ai_agent_implementation")
+        self.assertFalse(
+            unverified_model["ledger_verified_recurring_evidence"])
+        self.assertEqual(unverified_model["mastery"], "learned")
+        self.assertEqual(unverified_model["verified_retention_receipts"], 0)
+        self.assertTrue(
+            verified_model["ledger_verified_recurring_evidence"])
+        self.assertEqual(
+            verified_model["mastery"], "productize_candidate")
+        self.assertEqual(verified_model["verified_retention_receipts"], 2)
+        self.assertEqual(verified_model["verified_expansion_receipts"], 1)
+        self.assertGreater(
+            verified_model["pursuit_score"],
+            unverified_model["pursuit_score"])
+
     def test_old_evidence_decays_influence(self):
         catalog = module.load_catalog(ROOT / "config" / "business_models.json")
         ranked = module.rank_models(catalog["models"], {})
