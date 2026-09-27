@@ -3549,6 +3549,38 @@ def summarize_settled_recurring_revenue(path, opportunity_id):
         connection.close()
 
 
+def _verified_payment_receipt(connection, payment_receipt_id):
+    """Return a payment receipt only when its immutable snapshot still matches."""
+    payment = connection.execute(
+        """SELECT opportunity_id,invoice_receipt_id,provider,
+                  external_transaction_id,transaction_url,gross_amount_cents,
+                  fee_amount_cents,net_amount_cents,currency,paid_at,settled_at,
+                  receipt_hash
+           FROM payment_receipts WHERE receipt_id=?""",
+        (payment_receipt_id,)).fetchone()
+    if payment is None:
+        raise ValueError("payment_receipt_not_found")
+    snapshot = {
+        "opportunity_id": payment[0],
+        "invoice_receipt_id": payment[1],
+        "provider": payment[2],
+        "external_transaction_id": payment[3],
+        "transaction_url": payment[4],
+        "gross_amount_cents": payment[5],
+        "fee_amount_cents": payment[6],
+        "net_amount_cents": payment[7],
+        "currency": payment[8],
+        "paid_at": payment[9],
+        "settled_at": payment[10],
+    }
+    serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    if payment[11] != expected_hash or payment_receipt_id != (
+            "payr_" + expected_hash[:24]):
+        raise ValueError("payment_receipt_unverified")
+    return payment
+
+
 def record_realized_unit_economics(
         path, opportunity_id, payment_receipt_id, economics, *, now=None):
     """Record realized economics derived from one settled payment receipt."""
@@ -3594,18 +3626,14 @@ def record_realized_unit_economics(
                 (opportunity_id,)).fetchone()
             if opportunity is None:
                 raise ValueError("opportunity_not_found")
-            payment = connection.execute(
-                """SELECT opportunity_id,net_amount_cents,currency,settled_at
-                   FROM payment_receipts WHERE receipt_id=?""",
-                (payment_receipt_id,)).fetchone()
-            if payment is None:
-                raise ValueError("payment_receipt_not_found")
+            payment = _verified_payment_receipt(
+                connection, payment_receipt_id)
             if payment[0] != opportunity_id:
                 raise ValueError("realized_economics_opportunity_mismatch")
-            if measured_at < parse_time(payment[3], "payment_settled_at"):
+            if measured_at < parse_time(payment[10], "payment_settled_at"):
                 raise ValueError("economics_measured_before_settlement")
 
-            net_collected = payment[1]
+            net_collected = payment[7]
             total_cost = sum(costs.values())
             contribution = net_collected - total_cost
             hours = minutes / 60
@@ -3622,7 +3650,7 @@ def record_realized_unit_economics(
                 "contribution_margin": round(margin, 6),
                 "revenue_per_human_hour": round(revenue_per_hour, 2),
                 "contribution_per_human_hour": round(contribution_per_hour, 2),
-                "currency": payment[2],
+                "currency": payment[8],
                 "evidence": evidence,
                 "measured_at": measured_at.isoformat(),
                 "evidence_status": "realized_from_settled_payment",
@@ -3653,7 +3681,7 @@ def record_realized_unit_economics(
                  net_collected, costs["delivery_cost_cents"],
                  costs["inference_cost_cents"], costs["cac_cents"], minutes,
                  contribution, round(margin, 6), round(revenue_per_hour, 2),
-                 round(contribution_per_hour, 2), payment[2],
+                 round(contribution_per_hour, 2), payment[8],
                  json.dumps(evidence, sort_keys=True, separators=(",", ":")),
                  evidence_hash, measured_at.isoformat(), recorded_at))
         return {"economics_id": economics_id, "changed": True, **normalized}
@@ -4616,21 +4644,17 @@ def record_withdrawable_balance(path, opportunity_id, payment_receipt_id, eviden
                 (opportunity_id,)).fetchone()
             if row is None:
                 raise ValueError("opportunity_not_found")
-            payment = connection.execute("""SELECT opportunity_id,provider,
-                    net_amount_cents,currency,settled_at
-                FROM payment_receipts WHERE receipt_id=?""",
-                (payment_receipt_id,)).fetchone()
-            if payment is None:
-                raise ValueError("payment_receipt_not_found")
+            payment = _verified_payment_receipt(
+                connection, payment_receipt_id)
             if payment[0] != opportunity_id:
                 raise ValueError("payout_opportunity_mismatch")
-            if payment[1].casefold() != provider.casefold():
+            if payment[2].casefold() != provider.casefold():
                 raise ValueError("payout_provider_mismatch")
-            if payment[2] != amount_cents:
+            if payment[7] != amount_cents:
                 raise ValueError("payout_amount_mismatch")
-            if payment[3] != currency:
+            if payment[8] != currency:
                 raise ValueError("payout_currency_mismatch")
-            if available_at < parse_time(payment[4], "payment_settled_at"):
+            if available_at < parse_time(payment[10], "payment_settled_at"):
                 raise ValueError("withdrawable_before_settlement")
             receipt = {"opportunity_id": opportunity_id,
                        "payment_receipt_id": payment_receipt_id,

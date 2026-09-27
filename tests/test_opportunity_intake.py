@@ -2257,6 +2257,60 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(count, 0)
         self.assertEqual(state, "invoiced")
 
+    def test_downstream_revenue_rejects_mutated_payment_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, payment_id = self.advance_to_collected(path)
+            connection = sqlite3.connect(path)
+            connection.execute(
+                "UPDATE payment_receipts SET transaction_url=? WHERE receipt_id=?",
+                ("https://example.com/payments/substituted", payment_id))
+            connection.commit()
+            connection.close()
+            payout_evidence = {
+                "provider": "Marketplace",
+                "external_balance_id": "balance-tampered-payment",
+                "evidence_url":
+                    "https://example.com/balances/tampered-payment",
+                "amount_cents": 97000,
+                "currency": "USD",
+                "available_at": (NOW + timedelta(minutes=5)).isoformat(),
+            }
+            with self.assertRaisesRegex(
+                    ValueError, "payment_receipt_unverified"):
+                opportunity_intake.record_withdrawable_balance(
+                    path, opportunity_id, payment_id, payout_evidence,
+                    now=NOW + timedelta(minutes=5))
+            economics = {
+                "delivery_cost_cents": 20000,
+                "inference_cost_cents": 2000,
+                "cac_cents": 5000,
+                "human_operating_minutes": 120,
+                "delivery_cost_evidence_url":
+                    "https://example.com/costs/delivery",
+                "inference_cost_evidence_url":
+                    "https://example.com/costs/inference",
+                "cac_evidence_url": "https://example.com/costs/cac",
+                "human_time_evidence_url":
+                    "https://example.com/time/ledger",
+                "measured_at": (NOW + timedelta(minutes=5)).isoformat(),
+            }
+            with self.assertRaisesRegex(
+                    ValueError, "payment_receipt_unverified"):
+                opportunity_intake.record_realized_unit_economics(
+                    path, opportunity_id, payment_id, economics,
+                    now=NOW + timedelta(minutes=5))
+            connection = sqlite3.connect(path)
+            payout_count = connection.execute(
+                "SELECT COUNT(*) FROM payout_availability_receipts").fetchone()[0]
+            economics_count = connection.execute(
+                "SELECT COUNT(*) FROM realized_unit_economics").fetchone()[0]
+            state = connection.execute(
+                "SELECT pipeline_state FROM opportunities").fetchone()[0]
+            connection.close()
+        self.assertEqual((payout_count, economics_count), (0, 0))
+        self.assertEqual(state, "collected")
+
     def test_payout_lifecycle_distinguishes_collected_withdrawable_and_received(self):
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "opportunities.db")
