@@ -118,22 +118,30 @@ class OpportunityIntakeTests(unittest.TestCase):
         value.update(overrides)
         return self.proposal(**value)
 
-    def advance_to_contract(self, path, contract_overrides=None):
-        result = opportunity_intake.ingest([candidate()], now=NOW)
+    def advance_to_contract(
+            self, path, contract_overrides=None, *, suffix="",
+            candidate_overrides=None):
+        candidate_values = {"external_id": f"job-123{suffix}"}
+        candidate_values.update(candidate_overrides or {})
+        result = opportunity_intake.ingest(
+            [candidate(**candidate_values)], now=NOW)
         opportunity_id = result["opportunities"][0]["id"]
         opportunity_intake.persist(result, path, now=NOW)
         proposal = opportunity_intake.prepare_proposal(path, opportunity_id, self.proposal(), now=NOW)
         submitted = opportunity_intake.record_submission(path, opportunity_id, proposal["proposal_id"], {
-            "provider": "marketplace", "external_submission_id": "application-456",
-            "submission_url": "https://example.com/applications/456",
+            "provider": "marketplace",
+            "external_submission_id": f"application-456{suffix}",
+            "submission_url": f"https://example.com/applications/456{suffix}",
             "submitted_at": NOW.isoformat()}, now=NOW)
         replied = opportunity_intake.record_response(path, opportunity_id, submitted["receipt_id"], {
-            "provider": "marketplace", "external_message_id": "message-789",
-            "message_url": "https://example.com/messages/789",
+            "provider": "marketplace",
+            "external_message_id": f"message-789{suffix}",
+            "message_url": f"https://example.com/messages/789{suffix}",
             "received_at": NOW.isoformat()}, now=NOW)
         contract = {
-            "provider": "marketplace", "external_contract_id": "contract-321",
-            "contract_url": "https://example.com/contracts/321",
+            "provider": "marketplace",
+            "external_contract_id": f"contract-321{suffix}",
+            "contract_url": f"https://example.com/contracts/321{suffix}",
             "amount_cents": 100000, "currency": "USD", "contracted_at": NOW.isoformat(),
             "terms_authority": "preapproved_standard_terms",
             "authority_evidence_url": "https://example.com/terms/standard-v1"}
@@ -155,8 +163,9 @@ class OpportunityIntakeTests(unittest.TestCase):
             path, opportunity_id, replied["receipt_id"], contract, now=NOW)
         return opportunity_id, contracted["receipt_id"]
 
-    def advance_to_execution(self, path):
-        opportunity_id, contract_id = self.advance_to_contract(path)
+    def advance_to_execution(self, path, *, suffix="", candidate_overrides=None):
+        opportunity_id, contract_id = self.advance_to_contract(
+            path, suffix=suffix, candidate_overrides=candidate_overrides)
         execution = opportunity_intake.start_execution(path, opportunity_id, contract_id, {
             "execution_environment": "Isolated test environment", "started_at": NOW.isoformat(),
             "deliverables": [{"title": "Workflow", "description": "Build it.",
@@ -164,41 +173,45 @@ class OpportunityIntakeTests(unittest.TestCase):
                               "due_at": (NOW + timedelta(days=7)).isoformat()}]}, now=NOW)
         return opportunity_id, execution["plan_id"]
 
-    def advance_to_qa(self, path):
-        opportunity_id, plan_id = self.advance_to_execution(path)
+    def advance_to_qa(self, path, *, suffix="", candidate_overrides=None):
+        opportunity_id, plan_id = self.advance_to_execution(
+            path, suffix=suffix, candidate_overrides=candidate_overrides)
         qa = opportunity_intake.pass_qa(path, opportunity_id, plan_id, {
             "artifact_sha256": "a" * 64, "completed_at": NOW.isoformat(),
             "tests": [{"name": "Acceptance suite", "status": "passed",
                        "evidence_url": "https://example.com/runs/123"}]}, now=NOW)
         return opportunity_id, qa["report_id"]
 
-    def advance_to_delivery(self, path):
-        opportunity_id, qa_id = self.advance_to_qa(path)
+    def advance_to_delivery(self, path, *, suffix="", candidate_overrides=None):
+        opportunity_id, qa_id = self.advance_to_qa(
+            path, suffix=suffix, candidate_overrides=candidate_overrides)
         delivery = opportunity_intake.record_delivery(path, opportunity_id, qa_id, {
-            "provider": "marketplace", "external_delivery_id": "delivery-654",
-            "delivery_url": "https://example.com/deliveries/654",
+            "provider": "marketplace", "external_delivery_id": f"delivery-654{suffix}",
+            "delivery_url": f"https://example.com/deliveries/654{suffix}",
             "artifact_sha256": "a" * 64,
             "delivered_at": (NOW + timedelta(minutes=1)).isoformat()},
             now=NOW + timedelta(minutes=1))
         return opportunity_id, delivery["receipt_id"]
 
-    def advance_to_invoice(self, path):
-        opportunity_id, delivery_id = self.advance_to_delivery(path)
+    def advance_to_invoice(self, path, *, suffix="", candidate_overrides=None):
+        opportunity_id, delivery_id = self.advance_to_delivery(
+            path, suffix=suffix, candidate_overrides=candidate_overrides)
         invoice = opportunity_intake.record_invoice(path, opportunity_id, delivery_id, {
-            "provider": "marketplace", "external_invoice_id": "invoice-987",
-            "invoice_url": "https://example.com/invoices/987",
+            "provider": "marketplace", "external_invoice_id": f"invoice-987{suffix}",
+            "invoice_url": f"https://example.com/invoices/987{suffix}",
             "amount_cents": 100000, "currency": "USD",
             "issued_at": (NOW + timedelta(minutes=2)).isoformat(),
             "due_at": (NOW + timedelta(days=7)).isoformat()},
             now=NOW + timedelta(minutes=2))
         return opportunity_id, invoice["receipt_id"]
 
-    def advance_to_collected(self, path):
-        opportunity_id, invoice_id = self.advance_to_invoice(path)
+    def advance_to_collected(self, path, *, suffix="", candidate_overrides=None):
+        opportunity_id, invoice_id = self.advance_to_invoice(
+            path, suffix=suffix, candidate_overrides=candidate_overrides)
         payment = opportunity_intake.record_collected_payment(
             path, opportunity_id, invoice_id, {
-                "provider": "marketplace", "external_transaction_id": "payment-246",
-                "transaction_url": "https://example.com/payments/246",
+                "provider": "marketplace", "external_transaction_id": f"payment-246{suffix}",
+                "transaction_url": f"https://example.com/payments/246{suffix}",
                 "gross_amount_cents": 100000, "fee_amount_cents": 3000,
                 "net_amount_cents": 97000, "currency": "USD",
                 "paid_at": (NOW + timedelta(minutes=3)).isoformat(),
@@ -2538,13 +2551,55 @@ class OpportunityIntakeTests(unittest.TestCase):
                 path, opportunity_id, asset_id, "scale_candidate",
                 {"growth_receipt_id": retention["receipt_id"]},
                 now=NOW + timedelta(minutes=8))
+            with self.assertRaisesRegex(
+                    ValueError, "reuse_receipt_id_required"):
+                opportunity_intake.promote_reusable_ip_asset(
+                    path, opportunity_id, asset_id, "productize_candidate",
+                    {"growth_receipt_id": expansion["receipt_id"]},
+                    now=NOW + timedelta(minutes=8))
+            reused_opportunity_id, reused_payment_id = (
+                self.advance_to_collected(
+                    path, suffix="-reuse", candidate_overrides={
+                        "reusable_ip_assets": [{
+                            "name": "Lead recovery workflow",
+                            "type": "workflow",
+                            "maturity": "learned",
+                            "evidence": ["github:issue-164"],
+                        }],
+                    }))
+            reused_economics = (
+                opportunity_intake.record_realized_unit_economics(
+                    path, reused_opportunity_id, reused_payment_id,
+                    dict(economics_evidence, measured_at=(
+                        NOW + timedelta(minutes=5)).isoformat()),
+                    now=NOW + timedelta(minutes=5)))
+            connection = sqlite3.connect(path)
+            reused_asset_id = connection.execute(
+                """SELECT asset_id FROM reusable_ip_assets
+                   WHERE opportunity_id=?""",
+                (reused_opportunity_id,)).fetchone()[0]
+            connection.close()
+            reuse = opportunity_intake.record_reusable_ip_reuse_evidence(
+                path, asset_id, reused_asset_id,
+                reused_economics["economics_id"], {
+                    "provider": "marketplace",
+                    "external_event_id": "reuse-client-2",
+                    "evidence_url":
+                        "https://example.com/deliveries/reuse-client-2",
+                    "occurred_at":
+                        (NOW + timedelta(minutes=8)).isoformat(),
+                }, now=NOW + timedelta(minutes=8))
             productized = opportunity_intake.promote_reusable_ip_asset(
-                path, opportunity_id, asset_id, "productize_candidate",
-                {"growth_receipt_id": expansion["receipt_id"]},
-                now=NOW + timedelta(minutes=8))
+                path, opportunity_id, asset_id, "productize_candidate", {
+                    "growth_receipt_id": expansion["receipt_id"],
+                    "reuse_receipt_id": reuse["receipt_id"],
+                }, now=NOW + timedelta(minutes=8))
             duplicate = opportunity_intake.promote_reusable_ip_asset(
                 path, opportunity_id, asset_id, "productize_candidate",
-                {"growth_receipt_id": expansion["receipt_id"]},
+                {
+                    "growth_receipt_id": expansion["receipt_id"],
+                    "reuse_receipt_id": reuse["receipt_id"],
+                },
                 now=NOW + timedelta(minutes=8))
 
             connection = sqlite3.connect(path)
@@ -3389,10 +3444,13 @@ class OpportunityIntakeTests(unittest.TestCase):
                 path, opportunity_id, asset_id, "scale_candidate", {
                     "recurring_growth_receipt_id": retention["receipt_id"],
                 }, now=second_now)
-            productized = opportunity_intake.promote_reusable_ip_asset(
-                path, opportunity_id, asset_id, "productize_candidate", {
-                    "recurring_growth_receipt_id": expansion["receipt_id"],
-                }, now=second_now)
+            with self.assertRaisesRegex(
+                    ValueError, "reuse_receipt_id_required"):
+                opportunity_intake.promote_reusable_ip_asset(
+                    path, opportunity_id, asset_id, "productize_candidate", {
+                        "recurring_growth_receipt_id": expansion["receipt_id"],
+                    }, now=second_now)
+            productized = {"changed": False, "maturity": "scale_candidate"}
             connection = sqlite3.connect(path)
             binding = connection.execute(
                 """SELECT term_id,accepted_terms_hash,
@@ -3447,8 +3505,8 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(
             len(repeatable["evidence"]["recurring_economics_receipts"]), 2)
         self.assertTrue(scale["changed"])
-        self.assertTrue(productized["changed"])
-        self.assertEqual(productized["maturity"], "productize_candidate")
+        self.assertFalse(productized["changed"])
+        self.assertEqual(productized["maturity"], "scale_candidate")
         self.assertEqual(
             retention["recurring_economics_id"],
             second_realized["economics_id"])

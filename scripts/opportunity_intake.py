@@ -1470,6 +1470,26 @@ def open_ledger(path):
           REFERENCES recurring_payment_receipts(receipt_id),
         UNIQUE(provider, kind, external_event_id)
     )""")
+    connection.execute("""CREATE TABLE IF NOT EXISTS reusable_ip_reuse_receipts (
+        receipt_id TEXT PRIMARY KEY,
+        source_asset_id TEXT NOT NULL,
+        source_opportunity_id TEXT NOT NULL,
+        reused_asset_id TEXT NOT NULL,
+        reused_opportunity_id TEXT NOT NULL,
+        economics_kind TEXT NOT NULL CHECK(economics_kind IN ('one_time','recurring')),
+        economics_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        external_event_id TEXT NOT NULL,
+        evidence_url TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        receipt_hash TEXT NOT NULL,
+        recorded_at TEXT NOT NULL,
+        FOREIGN KEY(source_asset_id) REFERENCES reusable_ip_assets(asset_id),
+        FOREIGN KEY(source_opportunity_id) REFERENCES opportunities(id),
+        FOREIGN KEY(reused_asset_id) REFERENCES reusable_ip_assets(asset_id),
+        FOREIGN KEY(reused_opportunity_id) REFERENCES opportunities(id),
+        UNIQUE(provider, external_event_id)
+    )""")
     connection.execute("""CREATE TABLE IF NOT EXISTS reusable_ip_promotions (
         promotion_id TEXT PRIMARY KEY,
         asset_id TEXT NOT NULL,
@@ -3934,6 +3954,113 @@ def record_recurring_growth_evidence(
         connection.close()
 
 
+def record_reusable_ip_reuse_evidence(
+        path, source_asset_id, reused_asset_id, economics_id, evidence,
+        *, economics_kind="one_time", now=None):
+    """Record independently settled positive-margin reuse by another opportunity."""
+    source_asset_id = _proposal_text(
+        source_asset_id, "source_asset_id", 160)
+    reused_asset_id = _proposal_text(
+        reused_asset_id, "reused_asset_id", 160)
+    economics_id = _proposal_text(economics_id, "economics_id", 160)
+    economics_kind = str(economics_kind or "").strip().lower()
+    if economics_kind not in {"one_time", "recurring"}:
+        raise ValueError("reuse_economics_kind_invalid")
+    if not isinstance(evidence, dict):
+        raise ValueError("reuse_evidence_object_required")
+    provider = _proposal_text(evidence.get("provider"), "reuse_provider", 160)
+    external_event_id = _proposal_text(
+        evidence.get("external_event_id"), "reuse_external_event_id", 500)
+    evidence_url = canonical_url(
+        _proposal_text(evidence.get("evidence_url"), "reuse_evidence_url", 2000))
+    if urlsplit(evidence_url).scheme != "https":
+        raise ValueError("reuse_evidence_url_https_required")
+    occurred_at = parse_time(evidence.get("occurred_at"), "reuse_occurred_at")
+    recorded = now or utc_now()
+    if occurred_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("reuse_occurred_at_future")
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            source = connection.execute(
+                """SELECT opportunity_id,name,asset_type
+                   FROM reusable_ip_assets WHERE asset_id=?""",
+                (source_asset_id,)).fetchone()
+            reused = connection.execute(
+                """SELECT opportunity_id,name,asset_type
+                   FROM reusable_ip_assets WHERE asset_id=?""",
+                (reused_asset_id,)).fetchone()
+            if source is None or reused is None:
+                raise ValueError("reusable_ip_asset_not_found")
+            if source[0] == reused[0]:
+                raise ValueError("cross_opportunity_reuse_required")
+            if source[1].casefold() != reused[1].casefold() or source[2] != reused[2]:
+                raise ValueError("reused_asset_identity_mismatch")
+            if economics_kind == "recurring":
+                economics = connection.execute(
+                    """SELECT opportunity_id,contribution_cents,measured_at,
+                              recurring_payment_receipt_id
+                       FROM recurring_realized_unit_economics
+                       WHERE economics_id=?""", (economics_id,)).fetchone()
+                missing_error = "recurring_realized_economics_not_found"
+            else:
+                economics = connection.execute(
+                    """SELECT opportunity_id,contribution_cents,measured_at,
+                              payment_receipt_id
+                       FROM realized_unit_economics WHERE economics_id=?""",
+                    (economics_id,)).fetchone()
+                missing_error = "realized_economics_not_found"
+            if economics is None:
+                raise ValueError(missing_error)
+            if economics[0] != reused[0]:
+                raise ValueError("reuse_economics_opportunity_mismatch")
+            if economics[1] <= 0:
+                raise ValueError("positive_contribution_required")
+            if occurred_at < parse_time(economics[2], "reuse_economics_measured_at"):
+                raise ValueError("reuse_evidence_before_economics")
+            normalized = {
+                "source_asset_id": source_asset_id,
+                "source_opportunity_id": source[0],
+                "reused_asset_id": reused_asset_id,
+                "reused_opportunity_id": reused[0],
+                "economics_kind": economics_kind,
+                "economics_id": economics_id,
+                "settled_payment_receipt_id": economics[3],
+                "provider": provider,
+                "external_event_id": external_event_id,
+                "evidence_url": evidence_url,
+                "occurred_at": occurred_at.isoformat(),
+            }
+            receipt_json = json.dumps(
+                normalized, sort_keys=True, separators=(",", ":"))
+            receipt_hash = hashlib.sha256(receipt_json.encode()).hexdigest()
+            receipt_id = "ipr_" + receipt_hash[:24]
+            existing = connection.execute(
+                """SELECT receipt_id,receipt_hash
+                   FROM reusable_ip_reuse_receipts
+                   WHERE provider=? AND external_event_id=?""",
+                (provider, external_event_id)).fetchone()
+            if existing:
+                if existing[1] != receipt_hash:
+                    raise ValueError("reuse_evidence_conflict")
+                return {"receipt_id": existing[0], "changed": False, **normalized}
+            connection.execute(
+                """INSERT INTO reusable_ip_reuse_receipts
+                   (receipt_id,source_asset_id,source_opportunity_id,
+                    reused_asset_id,reused_opportunity_id,economics_kind,
+                    economics_id,provider,external_event_id,evidence_url,
+                    occurred_at,receipt_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (receipt_id, source_asset_id, source[0], reused_asset_id,
+                 reused[0], economics_kind, economics_id, provider,
+                 external_event_id, evidence_url, occurred_at.isoformat(),
+                 receipt_hash, recorded.isoformat()))
+            return {"receipt_id": receipt_id, "changed": True, **normalized}
+    finally:
+        connection.close()
+
+
 def promote_reusable_ip_asset(
         path, opportunity_id, asset_id, target_maturity, evidence, *, now=None):
     """Promote reusable IP only through evidence resolved from the ledger."""
@@ -4112,6 +4239,30 @@ def promote_reusable_ip_asset(
                     resolved_key: reference,
                     "growth_kind": expected_kind,
                 }
+                if target_maturity == "productize_candidate":
+                    reuse_reference = _proposal_text(
+                        evidence.get("reuse_receipt_id"),
+                        "reuse_receipt_id", 160)
+                    reuse = connection.execute(
+                        """SELECT source_asset_id,source_opportunity_id,
+                                  reused_opportunity_id,economics_kind,
+                                  economics_id
+                           FROM reusable_ip_reuse_receipts
+                           WHERE receipt_id=?""",
+                        (reuse_reference,)).fetchone()
+                    if reuse is None:
+                        raise ValueError("reuse_evidence_receipt_not_found")
+                    if reuse[0] != asset_id or reuse[1] != opportunity_id:
+                        raise ValueError(
+                            "promotion_reuse_evidence_source_mismatch")
+                    if reuse[2] == opportunity_id:
+                        raise ValueError("cross_opportunity_reuse_required")
+                    resolved.update({
+                        "reuse_receipt_id": reuse_reference,
+                        "reused_opportunity_id": reuse[2],
+                        "reuse_economics_kind": reuse[3],
+                        "reuse_economics_id": reuse[4],
+                    })
 
             normalized = {
                 "asset_id": asset_id,
