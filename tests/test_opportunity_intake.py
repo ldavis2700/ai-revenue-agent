@@ -2988,10 +2988,56 @@ class OpportunityIntakeTests(unittest.TestCase):
                     path, opportunity_id, delivery_id,
                     dict(invoice_base, outcome_event_ids=["oute_missing"]),
                     now=NOW + timedelta(minutes=2))
+            invoice_event_ids = [
+                escalated_event["event_id"], event["event_id"]]
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE attributed_outcome_events SET artifact_sha256=NULL
+                   WHERE event_id=?""", (event["event_id"],))
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                    ValueError, "outcome_event_evidence_unverified"):
+                opportunity_intake.record_invoice(
+                    path, opportunity_id, delivery_id,
+                    dict(invoice_base, outcome_event_ids=invoice_event_ids),
+                    now=NOW + timedelta(minutes=2))
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE attributed_outcome_events SET artifact_sha256=?
+                   WHERE event_id=?""", ("2" * 64, event["event_id"]))
+            escalation_json = json.loads(connection.execute(
+                """SELECT eligibility_review_json
+                   FROM attributed_outcome_events WHERE event_id=?""",
+                (escalated_event["event_id"],)).fetchone()[0])
+            escalation_json["human_escalation_decision"].pop(
+                "artifact_sha256")
+            connection.execute(
+                """UPDATE attributed_outcome_events
+                   SET eligibility_review_json=? WHERE event_id=?""",
+                (json.dumps(escalation_json, sort_keys=True, separators=(",", ":")),
+                 escalated_event["event_id"]))
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                    ValueError, "outcome_event_evidence_unverified"):
+                opportunity_intake.record_invoice(
+                    path, opportunity_id, delivery_id,
+                    dict(invoice_base, outcome_event_ids=invoice_event_ids),
+                    now=NOW + timedelta(minutes=2))
+            escalation_json["human_escalation_decision"][
+                "artifact_sha256"] = "3" * 64
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE attributed_outcome_events
+                   SET eligibility_review_json=? WHERE event_id=?""",
+                (json.dumps(escalation_json, sort_keys=True, separators=(",", ":")),
+                 escalated_event["event_id"]))
+            connection.commit()
+            connection.close()
             invoice = opportunity_intake.record_invoice(
                 path, opportunity_id, delivery_id,
-                dict(invoice_base, outcome_event_ids=[
-                    escalated_event["event_id"], event["event_id"]]),
+                dict(invoice_base, outcome_event_ids=invoice_event_ids),
                 now=NOW + timedelta(minutes=2))
             connection = sqlite3.connect(path)
             allocations = connection.execute(
