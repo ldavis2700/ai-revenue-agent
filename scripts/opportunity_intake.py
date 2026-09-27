@@ -4106,6 +4106,8 @@ def record_growth_evidence(
                     "SELECT 1 FROM opportunities WHERE id=?",
                     (opportunity_id,)).fetchone() is None:
                 raise ValueError("opportunity_not_found")
+            # Growth claims can promote reusable IP, so derive them only
+            # from the same immutable payment snapshot used for revenue.
             payment = _verified_payment_receipt(
                 connection, payment_receipt_id)
             if payment[0] != opportunity_id:
