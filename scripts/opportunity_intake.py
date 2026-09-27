@@ -3689,6 +3689,46 @@ def record_realized_unit_economics(
         connection.close()
 
 
+def _verified_recurring_payment_receipt(
+        connection, recurring_payment_receipt_id):
+    """Return recurring payment evidence only when its snapshot matches."""
+    payment = connection.execute(
+        """SELECT opportunity_id,contract_receipt_id,term_id,provider,
+                  external_invoice_id,invoice_url,external_transaction_id,
+                  transaction_url,gross_amount_cents,fee_amount_cents,
+                  net_amount_cents,currency,service_period_start,
+                  service_period_end,invoiced_at,paid_at,settled_at,receipt_hash
+           FROM recurring_payment_receipts WHERE receipt_id=?""",
+        (recurring_payment_receipt_id,)).fetchone()
+    if payment is None:
+        raise ValueError("recurring_payment_receipt_not_found")
+    snapshot = {
+        "opportunity_id": payment[0],
+        "contract_receipt_id": payment[1],
+        "term_id": payment[2],
+        "provider": payment[3],
+        "external_invoice_id": payment[4],
+        "invoice_url": payment[5],
+        "external_transaction_id": payment[6],
+        "transaction_url": payment[7],
+        "gross_amount_cents": payment[8],
+        "fee_amount_cents": payment[9],
+        "net_amount_cents": payment[10],
+        "currency": payment[11],
+        "service_period_start": payment[12],
+        "service_period_end": payment[13],
+        "invoiced_at": payment[14],
+        "paid_at": payment[15],
+        "settled_at": payment[16],
+    }
+    serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    if payment[17] != expected_hash or recurring_payment_receipt_id != (
+            "recurpay_" + expected_hash[:24]):
+        raise ValueError("recurring_payment_receipt_unverified")
+    return payment
+
+
 def record_recurring_withdrawable_balance(
         path, opportunity_id, recurring_payment_receipt_id, evidence, *, now=None):
     """Record provider evidence that settled recurring net is withdrawable."""
@@ -3725,22 +3765,17 @@ def record_recurring_withdrawable_balance(
     connection = open_ledger(path)
     try:
         with connection:
-            payment = connection.execute(
-                """SELECT opportunity_id,provider,net_amount_cents,currency,
-                          settled_at
-                   FROM recurring_payment_receipts WHERE receipt_id=?""",
-                (recurring_payment_receipt_id,)).fetchone()
-            if payment is None:
-                raise ValueError("recurring_payment_receipt_not_found")
+            payment = _verified_recurring_payment_receipt(
+                connection, recurring_payment_receipt_id)
             if payment[0] != opportunity_id:
                 raise ValueError("recurring_withdrawable_opportunity_mismatch")
-            if payment[1].casefold() != provider.casefold():
+            if payment[3].casefold() != provider.casefold():
                 raise ValueError("recurring_withdrawable_provider_mismatch")
-            if payment[2] != amount_cents:
+            if payment[10] != amount_cents:
                 raise ValueError("recurring_withdrawable_amount_mismatch")
-            if payment[3] != currency:
+            if payment[11] != currency:
                 raise ValueError("recurring_withdrawable_currency_mismatch")
-            if available_at < parse_time(payment[4], "payment_settled_at"):
+            if available_at < parse_time(payment[16], "payment_settled_at"):
                 raise ValueError("recurring_withdrawable_before_settlement")
             normalized = {
                 "opportunity_id": opportunity_id,
@@ -3791,6 +3826,35 @@ def record_recurring_withdrawable_balance(
         connection.close()
 
 
+def _verified_recurring_payout_receipt(
+        connection, recurring_payout_receipt_id):
+    """Return recurring payout evidence only when its snapshot matches."""
+    payout = connection.execute(
+        """SELECT opportunity_id,recurring_payment_receipt_id,provider,
+                  external_balance_id,evidence_url,amount_cents,currency,
+                  available_at,receipt_hash
+           FROM recurring_payout_availability_receipts WHERE receipt_id=?""",
+        (recurring_payout_receipt_id,)).fetchone()
+    if payout is None:
+        raise ValueError("recurring_payout_receipt_not_found")
+    snapshot = {
+        "opportunity_id": payout[0],
+        "recurring_payment_receipt_id": payout[1],
+        "provider": payout[2],
+        "external_balance_id": payout[3],
+        "evidence_url": payout[4],
+        "amount_cents": payout[5],
+        "currency": payout[6],
+        "available_at": payout[7],
+    }
+    serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    if payout[8] != expected_hash or recurring_payout_receipt_id != (
+            "recuravail_" + expected_hash[:24]):
+        raise ValueError("recurring_payout_receipt_unverified")
+    return payout
+
+
 def record_recurring_bank_receipt(
         path, opportunity_id, recurring_payout_receipt_id, evidence, *, now=None):
     """Record proof that recurring withdrawable funds reached the bank."""
@@ -3827,21 +3891,16 @@ def record_recurring_bank_receipt(
     connection = open_ledger(path)
     try:
         with connection:
-            payout = connection.execute(
-                """SELECT opportunity_id,amount_cents,currency,available_at
-                   FROM recurring_payout_availability_receipts
-                   WHERE receipt_id=?""",
-                (recurring_payout_receipt_id,)).fetchone()
-            if payout is None:
-                raise ValueError("recurring_payout_receipt_not_found")
+            payout = _verified_recurring_payout_receipt(
+                connection, recurring_payout_receipt_id)
             if payout[0] != opportunity_id:
                 raise ValueError("recurring_bank_opportunity_mismatch")
-            if payout[1] != amount_cents:
+            if payout[5] != amount_cents:
                 raise ValueError("recurring_bank_amount_mismatch")
-            if payout[2] != currency:
+            if payout[6] != currency:
                 raise ValueError("recurring_bank_currency_mismatch")
             if received_at < parse_time(
-                    payout[3], "recurring_payout_available_at"):
+                    payout[7], "recurring_payout_available_at"):
                 raise ValueError("recurring_bank_before_withdrawable")
             normalized = {
                 "opportunity_id": opportunity_id,
@@ -3935,17 +3994,13 @@ def record_recurring_realized_unit_economics(
                     "SELECT 1 FROM opportunities WHERE id=?",
                     (opportunity_id,)).fetchone() is None:
                 raise ValueError("opportunity_not_found")
-            payment = connection.execute(
-                """SELECT opportunity_id,net_amount_cents,currency,settled_at
-                   FROM recurring_payment_receipts WHERE receipt_id=?""",
-                (recurring_payment_receipt_id,)).fetchone()
-            if payment is None:
-                raise ValueError("recurring_payment_receipt_not_found")
+            payment = _verified_recurring_payment_receipt(
+                connection, recurring_payment_receipt_id)
             if payment[0] != opportunity_id:
                 raise ValueError("realized_economics_opportunity_mismatch")
-            if measured_at < parse_time(payment[3], "payment_settled_at"):
+            if measured_at < parse_time(payment[16], "payment_settled_at"):
                 raise ValueError("economics_measured_before_settlement")
-            net_collected = payment[1]
+            net_collected = payment[10]
             contribution = net_collected - sum(costs.values())
             hours = minutes / 60
             normalized = {
@@ -3961,7 +4016,7 @@ def record_recurring_realized_unit_economics(
                     net_collected / 100 / hours, 2),
                 "contribution_per_human_hour": round(
                     contribution / 100 / hours, 2),
-                "currency": payment[2],
+                "currency": payment[11],
                 "evidence": evidence,
                 "measured_at": measured_at.isoformat(),
                 "evidence_status":
@@ -3996,7 +4051,7 @@ def record_recurring_realized_unit_economics(
                  costs["inference_cost_cents"], costs["cac_cents"], minutes,
                  contribution, normalized["contribution_margin"],
                  normalized["revenue_per_human_hour"],
-                 normalized["contribution_per_human_hour"], payment[2],
+                 normalized["contribution_per_human_hour"], payment[11],
                  json.dumps(evidence, sort_keys=True, separators=(",", ":")),
                  evidence_hash, measured_at.isoformat(), recorded.isoformat()))
             return {
@@ -4120,16 +4175,11 @@ def record_recurring_growth_evidence(
     connection = open_ledger(path)
     try:
         with connection:
-            payment = connection.execute(
-                """SELECT opportunity_id,service_period_start,
-                          service_period_end,settled_at
-                   FROM recurring_payment_receipts WHERE receipt_id=?""",
-                (recurring_payment_receipt_id,)).fetchone()
-            if payment is None:
-                raise ValueError("recurring_payment_receipt_not_found")
+            payment = _verified_recurring_payment_receipt(
+                connection, recurring_payment_receipt_id)
             if payment[0] != opportunity_id:
                 raise ValueError("growth_evidence_opportunity_mismatch")
-            if occurred_at < parse_time(payment[3], "recurring_settled_at"):
+            if occurred_at < parse_time(payment[16], "recurring_settled_at"):
                 raise ValueError("growth_evidence_before_settlement")
             economics = connection.execute(
                 """SELECT economics_id,contribution_cents
@@ -4151,16 +4201,18 @@ def record_recurring_growth_evidence(
                     "prior_recurring_payment_receipt_id", 160)
                 if prior_id == recurring_payment_receipt_id:
                     raise ValueError("retention_prior_receipt_invalid")
-                prior = connection.execute(
-                    """SELECT opportunity_id,service_period_end
-                       FROM recurring_payment_receipts WHERE receipt_id=?""",
-                    (prior_id,)).fetchone()
-                if prior is None:
-                    raise ValueError("prior_recurring_payment_receipt_not_found")
+                try:
+                    prior = _verified_recurring_payment_receipt(
+                        connection, prior_id)
+                except ValueError as exc:
+                    if str(exc) == "recurring_payment_receipt_not_found":
+                        raise ValueError(
+                            "prior_recurring_payment_receipt_not_found") from exc
+                    raise
                 if prior[0] != opportunity_id:
                     raise ValueError("growth_evidence_opportunity_mismatch")
-                if parse_time(payment[1], "service_period_start") < parse_time(
-                        prior[1], "prior_service_period_end"):
+                if parse_time(payment[12], "service_period_start") < parse_time(
+                        prior[13], "prior_service_period_end"):
                     raise ValueError("retention_subsequent_service_period_required")
                 normalized["prior_recurring_payment_receipt_id"] = prior_id
             else:
