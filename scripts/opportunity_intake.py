@@ -2865,6 +2865,11 @@ def record_attributed_outcome(
             "human_escalation_evidence_url", 2000))
         if urlsplit(decision_url).scheme != "https":
             raise ValueError("human_escalation_evidence_url_https_required")
+        decision_artifact_sha256 = _proposal_text(
+            escalation.get("artifact_sha256"),
+            "human_escalation_artifact_sha256", 64).lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", decision_artifact_sha256):
+            raise ValueError("human_escalation_artifact_sha256_invalid")
         decided_at = parse_time(
             escalation.get("decided_at"), "human_escalation_decided_at")
         if decided_at < reviewed_at or decided_at > recorded + MAX_FUTURE_SKEW:
@@ -2872,6 +2877,7 @@ def record_attributed_outcome(
         normalized_escalation = {
             "decision": decision,
             "evidence_url": decision_url,
+            "artifact_sha256": decision_artifact_sha256,
             "decided_at": decided_at.isoformat(),
         }
         if decision != "approved":

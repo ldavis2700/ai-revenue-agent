@@ -2874,6 +2874,50 @@ class OpportunityIntakeTests(unittest.TestCase):
                             (NOW + timedelta(seconds=10)).isoformat(),
                     }, now=NOW + timedelta(minutes=1))
 
+            escalation_review = dict(
+                eligibility_review,
+                requires_human_escalation=True,
+                human_escalation_decision={
+                    "decision": "approved",
+                    "evidence_url":
+                        "https://example.com/reviews/disputed-lead/approval",
+                    "artifact_sha256": "3" * 64,
+                    "decided_at": (NOW + timedelta(minutes=1)).isoformat(),
+                })
+            with self.assertRaisesRegex(
+                    ValueError, "human_escalation_artifact_sha256_invalid"):
+                opportunity_intake.record_attributed_outcome(
+                    path, opportunity_id, contract_id, {
+                        "provider": "marketplace",
+                        "external_event_id": "appointment-unpinned-escalation",
+                        "evidence_url":
+                            "https://example.com/crm/appointments/unpinned-escalation",
+                        "attribution_reference": "disputed-lead-unpinned",
+                        "artifact_sha256": "2" * 64,
+                        "eligibility_review": dict(
+                            escalation_review,
+                            human_escalation_decision=dict(
+                                escalation_review["human_escalation_decision"],
+                                artifact_sha256="not-a-sha256")),
+                        "units": 1,
+                        "unit_fee_cents": 10000,
+                        "occurred_at":
+                            (NOW + timedelta(seconds=20)).isoformat(),
+                    }, now=NOW + timedelta(minutes=1))
+            escalated_event = opportunity_intake.record_attributed_outcome(
+                path, opportunity_id, contract_id, {
+                    "provider": "marketplace",
+                    "external_event_id": "appointment-escalated-approved",
+                    "evidence_url":
+                        "https://example.com/crm/appointments/escalated-approved",
+                    "attribution_reference": "disputed-lead-approved",
+                    "artifact_sha256": "2" * 64,
+                    "eligibility_review": escalation_review,
+                    "units": 1,
+                    "unit_fee_cents": 10000,
+                    "occurred_at": (NOW + timedelta(seconds=20)).isoformat(),
+                }, now=NOW + timedelta(minutes=1))
+
             with self.assertRaisesRegex(
                     ValueError, "outcome_unit_fee_mismatch"):
                 opportunity_intake.record_attributed_outcome(
@@ -2898,7 +2942,7 @@ class OpportunityIntakeTests(unittest.TestCase):
                     "attribution_reference": "approved-lead-1",
                     "artifact_sha256": "2" * 64,
                     "eligibility_review": eligibility_review,
-                    "units": 2,
+                    "units": 1,
                     "unit_fee_cents": 10000,
                     "occurred_at": (NOW + timedelta(seconds=30)).isoformat(),
                 }, now=NOW + timedelta(minutes=1))
@@ -2910,7 +2954,7 @@ class OpportunityIntakeTests(unittest.TestCase):
                     "attribution_reference": "approved-lead-1",
                     "artifact_sha256": "2" * 64,
                     "eligibility_review": eligibility_review,
-                    "units": 2,
+                    "units": 1,
                     "unit_fee_cents": 10000,
                     "occurred_at": (NOW + timedelta(seconds=30)).isoformat(),
                 }, now=NOW + timedelta(minutes=1))
@@ -2946,7 +2990,8 @@ class OpportunityIntakeTests(unittest.TestCase):
                     now=NOW + timedelta(minutes=2))
             invoice = opportunity_intake.record_invoice(
                 path, opportunity_id, delivery_id,
-                dict(invoice_base, outcome_event_ids=[event["event_id"]]),
+                dict(invoice_base, outcome_event_ids=[
+                    escalated_event["event_id"], event["event_id"]]),
                 now=NOW + timedelta(minutes=2))
             connection = sqlite3.connect(path)
             allocations = connection.execute(
@@ -2957,6 +3002,10 @@ class OpportunityIntakeTests(unittest.TestCase):
                    FROM attributed_outcome_events WHERE event_id=?""",
                 (event["event_id"],)).fetchone()
             stored_review = json.loads(stored_event[1])
+            stored_escalation_review = json.loads(connection.execute(
+                """SELECT eligibility_review_json
+                   FROM attributed_outcome_events WHERE event_id=?""",
+                (escalated_event["event_id"],)).fetchone()[0])
             connection.close()
 
         self.assertEqual(terms[:2], (
@@ -2971,8 +3020,14 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertTrue(event["changed"])
         self.assertFalse(duplicate["changed"])
         self.assertEqual(invoice["outcome_fee_cents"], 20000)
-        self.assertEqual(allocations, [(event["event_id"], 20000)])
+        self.assertCountEqual(allocations, [
+            (escalated_event["event_id"], 10000),
+            (event["event_id"], 10000),
+        ])
         self.assertEqual(stored_event[0], "2" * 64)
+        self.assertEqual(
+            stored_escalation_review["human_escalation_decision"][
+                "artifact_sha256"], "3" * 64)
         self.assertEqual(
             stored_review["reviewed_terms_hash"], accepted_terms_hash)
         self.assertEqual(stored_review["artifact_sha256"], "1" * 64)
