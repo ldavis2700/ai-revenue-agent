@@ -20,6 +20,29 @@ KILL_SWITCH = os.getenv('REVENUE_AGENT_KILL_SWITCH', 'false').lower() == 'true'
 EXECUTION_ENABLED = os.getenv('REVENUE_AGENT_EXECUTION_ENABLED', 'false').lower() == 'true'
 DAILY_RUN_CAP = max(0, int(os.getenv('REVENUE_AGENT_DAILY_RUN_CAP', '0')))
 
+OFFER_FAMILY_MODEL_MAP = {
+    'lead_intake_qualification_routing_booking': 'local_business_ai_package',
+    'missed_lead_recovery_reactivation': 'lead_generation',
+    'crm_sales_ops_automation': 'crm_automation_service',
+    'support_resolution_routing': 'ai_customer_support_service',
+    'back_office_document_data_workflows': 'document_automation_service',
+    'multi_system_operational_integration': 'ai_agent_implementation',
+}
+MASTERY_ORDER = {
+    'learned': 0,
+    'paid_validated': 1,
+    'repeatable_positive_margin': 2,
+    'scale_candidate': 3,
+    'productize_candidate': 4,
+}
+LEDGER_EVIDENCE_KEYS = {
+    '_ledger_verified', 'verified_retention_receipts',
+    'verified_expansion_receipts', 'retained_recurring_value_cents',
+    'expanded_value_delta_cents', 'realized_recurring_net_cents',
+    'realized_recurring_contribution_cents', 'realized_recurring_cost_cents',
+    'mastery', 'receipt_lineage',
+}
+
 
 def now_iso():
     return datetime.now(timezone.utc).isoformat()
@@ -139,6 +162,106 @@ def load_persisted_evidence(conn):
     return evidence
 
 
+def ledger_business_model_evidence(conn):
+    """Derive model evidence only from verified recurring ledger lineage."""
+    try:
+        rows = conn.execute('''
+            SELECT g.receipt_id AS growth_receipt_id, g.opportunity_id,
+                   g.recurring_payment_receipt_id, g.recurring_economics_id,
+                   g.kind, g.prior_recurring_payment_receipt_id,
+                   g.baseline_value_cents, g.expanded_value_cents,
+                   g.occurred_at, o.payload_json,
+                   p.net_amount_cents, e.contribution_cents,
+                   (e.delivery_cost_cents + e.inference_cost_cents + e.cac_cents)
+                     AS realized_cost_cents,
+                   (SELECT a.maturity FROM reusable_ip_assets a
+                    WHERE a.opportunity_id=g.opportunity_id
+                    ORDER BY CASE a.maturity
+                      WHEN 'productize_candidate' THEN 4
+                      WHEN 'scale_candidate' THEN 3
+                      WHEN 'repeatable_positive_margin' THEN 2
+                      WHEN 'paid_validated' THEN 1
+                      ELSE 0 END DESC LIMIT 1) AS mastery
+            FROM recurring_growth_evidence_receipts g
+            JOIN opportunities o ON o.id=g.opportunity_id
+            JOIN recurring_payment_receipts p
+              ON p.receipt_id=g.recurring_payment_receipt_id
+            JOIN recurring_realized_unit_economics e
+              ON e.economics_id=g.recurring_economics_id
+             AND e.recurring_payment_receipt_id=p.receipt_id
+            ORDER BY g.occurred_at, g.receipt_id
+        ''').fetchall()
+    except sqlite3.OperationalError:
+        return {}
+
+    aggregated = {}
+    for row in rows:
+        try:
+            payload = json.loads(row['payload_json'])
+        except (TypeError, ValueError):
+            continue
+        family_id = payload.get('offer_family')
+        model_id = OFFER_FAMILY_MODEL_MAP.get(family_id)
+        if not model_id or row['contribution_cents'] <= 0:
+            continue
+        item = aggregated.setdefault(model_id, {
+            '_ledger_verified': True,
+            'verified_retention_receipts': 0,
+            'verified_expansion_receipts': 0,
+            'retained_recurring_value_cents': 0,
+            'expanded_value_delta_cents': 0,
+            'realized_recurring_net_cents': 0,
+            'realized_recurring_contribution_cents': 0,
+            'realized_recurring_cost_cents': 0,
+            'mastery': 'learned',
+            'receipt_lineage': [],
+            '_counted_payments': set(),
+        })
+        payment_id = row['recurring_payment_receipt_id']
+        if payment_id not in item['_counted_payments']:
+            item['_counted_payments'].add(payment_id)
+            item['realized_recurring_net_cents'] += row['net_amount_cents']
+            item['realized_recurring_contribution_cents'] += row['contribution_cents']
+            item['realized_recurring_cost_cents'] += row['realized_cost_cents']
+        if row['kind'] == 'retention':
+            item['verified_retention_receipts'] += 1
+            item['retained_recurring_value_cents'] += row['net_amount_cents']
+        else:
+            item['verified_expansion_receipts'] += 1
+            item['expanded_value_delta_cents'] += max(
+                0, (row['expanded_value_cents'] or 0)
+                - (row['baseline_value_cents'] or 0))
+        maturity = row['mastery'] or 'learned'
+        if MASTERY_ORDER.get(maturity, 0) > MASTERY_ORDER[item['mastery']]:
+            item['mastery'] = maturity
+        item['receipt_lineage'].append({
+            'growth_receipt_id': row['growth_receipt_id'],
+            'kind': row['kind'],
+            'recurring_payment_receipt_id':
+                row['recurring_payment_receipt_id'],
+            'recurring_economics_id': row['recurring_economics_id'],
+            'prior_recurring_payment_receipt_id':
+                row['prior_recurring_payment_receipt_id'],
+            'occurred_at': row['occurred_at'],
+        })
+
+    for item in aggregated.values():
+        sample_size = len(item.pop('_counted_payments'))
+        retained = item['verified_retention_receipts']
+        item.update({
+            'observed_revenue':
+                item['realized_recurring_net_cents'] / 100.0,
+            'observed_cost':
+                item['realized_recurring_cost_cents'] / 100.0,
+            'conversion_rate': min(1.0, retained / max(sample_size, 1)),
+            'evidence_quality': 1.0,
+            'sample_size': sample_size,
+            'observed_at': max(
+                line['occurred_at'] for line in item['receipt_lineage']),
+        })
+    return aggregated
+
+
 def _finite_evidence_value(value, field):
     number = float(value)
     if not math.isfinite(number):
@@ -189,6 +312,16 @@ def business_model_snapshot(conn=None):
     evidence_raw = os.getenv('APEX_BUSINESS_MODEL_EVIDENCE_JSON', '').strip()
     if evidence_raw:
         evidence.update(json.loads(evidence_raw))
+    # Ledger-only maturity fields cannot be asserted through environment or
+    # manually persisted evidence. Verified ledger lineage overwrites the
+    # ranking inputs for any model it proves.
+    for item in evidence.values():
+        if isinstance(item, dict):
+            for key in LEDGER_EVIDENCE_KEYS:
+                item.pop(key, None)
+    ledger_evidence = (
+        ledger_business_model_evidence(conn) if conn is not None else {})
+    evidence.update(ledger_evidence)
     catalog = load_catalog()
     ranked = rank_models(catalog['models'], constraints)
     pursuit = pursuit_plan(
@@ -199,6 +332,8 @@ def business_model_snapshot(conn=None):
         'catalog_size': len(catalog['models']),
         'constraints': constraints,
         'evidence_models': len(evidence),
+        'ledger_verified_evidence_models': len(ledger_evidence),
+        'verified_model_evidence': ledger_evidence,
         'top_candidates': pursuit['pursue'],
         'portfolio_competition': competition,
         'mode': pursuit['mode'],
