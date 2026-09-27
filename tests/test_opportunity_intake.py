@@ -2992,8 +2992,9 @@ class OpportunityIntakeTests(unittest.TestCase):
                 escalated_event["event_id"], event["event_id"]]
             connection = sqlite3.connect(path)
             connection.execute(
-                """UPDATE attributed_outcome_events SET artifact_sha256=NULL
-                   WHERE event_id=?""", (event["event_id"],))
+                """UPDATE attributed_outcome_events SET artifact_sha256=?
+                   WHERE event_id=?""",
+                ("legacy-unverified", event["event_id"]))
             connection.commit()
             connection.close()
             with self.assertRaisesRegex(
