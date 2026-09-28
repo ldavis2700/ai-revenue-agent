@@ -5,6 +5,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 PAGE = ROOT / "sales" / "home-services-lead-intake-preview.html"
 DIAGNOSTIC = ROOT / "templates" / "home_services_lead_intake_diagnostic.md"
+PILOT_SCOPE = ROOT / "templates" / "home_services_lead_intake_pilot_scope.md"
 
 
 class HomeServicesLeadIntakeOfferTests(unittest.TestCase):
@@ -13,6 +14,7 @@ class HomeServicesLeadIntakeOfferTests(unittest.TestCase):
         cls.html = PAGE.read_text(encoding="utf-8")
         cls.lower = cls.html.lower()
         cls.diagnostic = DIAGNOSTIC.read_text(encoding="utf-8").lower()
+        cls.pilot_scope = PILOT_SCOPE.read_text(encoding="utf-8").lower()
 
     def test_preview_cannot_be_mistaken_for_a_live_purchase_page(self):
         self.assertIn('name="robots" content="noindex,nofollow"', self.lower)
@@ -79,6 +81,40 @@ class HomeServicesLeadIntakeOfferTests(unittest.TestCase):
             "audit trail / rollback",
         ):
             self.assertIn(scenario, self.diagnostic)
+
+    def test_pilot_scope_is_bounded_and_does_not_grant_authority(self):
+        for text in (
+            "draft scope template — not an offer, contract, invoice",
+            "one consented inbound lead source",
+            "one qualification and routing path",
+            "one authorized crm / booking destination",
+            "anything not enumerated above is out of scope",
+            "work may begin only after",
+        ):
+            self.assertIn(text, self.pilot_scope)
+
+    def test_pilot_scope_preserves_safety_payment_and_revenue_gates(self):
+        for text in (
+            "outcome pricing is excluded",
+            "collected revenue $0 unless independently verified as settled",
+            "do not record proposal value as collected revenue",
+            "explicit owner review before acceptance",
+            "a failed safety control stops the pilot",
+            "settled payment plus accepted delivery",
+        ):
+            self.assertIn(text, self.pilot_scope)
+
+    def test_pilot_scope_requires_launch_and_rollback_evidence(self):
+        for text in (
+            "## launch gates",
+            "integration access expressly authorized",
+            "consent, opt-out, suppression, quiet hours",
+            "duplicate, retry, idempotency, timeout, stale-state, and rollback",
+            "prompt-injection paths fail closed",
+            "volume, duration, api-spend, and action caps",
+            "## stop, incident, and rollback rules",
+        ):
+            self.assertIn(text, self.pilot_scope)
 
 
 if __name__ == "__main__":
