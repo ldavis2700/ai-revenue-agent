@@ -7,6 +7,7 @@ PAGE = ROOT / "sales" / "home-services-lead-intake-preview.html"
 DIAGNOSTIC = ROOT / "templates" / "home_services_lead_intake_diagnostic.md"
 PILOT_SCOPE = ROOT / "templates" / "home_services_lead_intake_pilot_scope.md"
 MANAGED_RUNBOOK = ROOT / "templates" / "home_services_lead_intake_managed_service_runbook.md"
+ACQUISITION = ROOT / "templates" / "home_services_lead_intake_acquisition_playbook.md"
 
 
 class HomeServicesLeadIntakeOfferTests(unittest.TestCase):
@@ -17,6 +18,7 @@ class HomeServicesLeadIntakeOfferTests(unittest.TestCase):
         cls.diagnostic = DIAGNOSTIC.read_text(encoding="utf-8").lower()
         cls.pilot_scope = PILOT_SCOPE.read_text(encoding="utf-8").lower()
         cls.managed_runbook = MANAGED_RUNBOOK.read_text(encoding="utf-8").lower()
+        cls.acquisition = ACQUISITION.read_text(encoding="utf-8").lower()
 
     def test_preview_cannot_be_mistaken_for_a_live_purchase_page(self):
         self.assertIn('name="robots" content="noindex,nofollow"', self.lower)
@@ -152,6 +154,38 @@ class HomeServicesLeadIntakeOfferTests(unittest.TestCase):
             "no promotion gate is earned from this template alone",
         ):
             self.assertIn(text, self.managed_runbook)
+
+    def test_acquisition_playbook_prioritizes_real_buyer_intent(self):
+        for text in (
+            "active buyer replies, interviews, invitations, offers, and contracts",
+            "current marketplace posts with verified application eligibility",
+            "existing consented inbound requests",
+            "never use bought, rented, scraped, harvested, or guessed contact lists",
+            "never convert an invitation sent to other freelancers",
+        ):
+            self.assertIn(text, self.acquisition)
+
+    def test_acquisition_playbook_preserves_contact_spend_and_contract_gates(self):
+        for text in (
+            "never spend connects, bid credits",
+            "without the required channel-specific approval",
+            "never accept or sign materially consequential custom terms",
+            "direct outreach is prohibited until",
+            "stop immediately on opt-out",
+            "do not send the skeleton unchanged",
+        ):
+            self.assertIn(text, self.acquisition)
+
+    def test_acquisition_playbook_separates_funnel_and_verified_revenue(self):
+        for text in (
+            "prospect → qualified opportunity → proposal → buyer reply/interview",
+            "funded/billable work",
+            "only independently verified settled funds count as collected revenue",
+            "never report proposal value as revenue",
+            "repeatability requires at least two independent profitable accepted deliveries",
+            "no acquisition or mastery claim is earned from this playbook alone",
+        ):
+            self.assertIn(text, self.acquisition)
 
 
 if __name__ == "__main__":
