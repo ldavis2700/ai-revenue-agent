@@ -124,6 +124,45 @@ class LeadIntakeQualificationTests(unittest.TestCase):
         self.assertTrue(result["eligible_for_scoping"])
         self.assertIn("diagnostic_price_cents_outside_test_band", result["warnings"])
 
+    def test_raw_credentials_and_customer_contacts_fail_closed_without_echoing_values(self):
+        cases = (
+            ("access_token", "opaque-value"),
+            ("notes", "contact buyer@example.com"),
+            ("notes", "call 562-555-0199"),
+            ("notes", "Bearer abc.def.ghi"),
+            ("notes", "sk_live_1234567890"),
+        )
+        for key, value in cases:
+            with self.subTest(key=key, value=value):
+                payload = valid_payload()
+                payload["unsafe"] = {key: value}
+                result = module.qualify(payload)
+                serialized = json.dumps(result)
+                self.assertFalse(result["eligible_for_scoping"])
+                self.assertIn("raw_secret_or_contact_data_detected", result["blockers"])
+                self.assertIn("redaction_blockers", result)
+                self.assertNotIn(value, serialized)
+
+    def test_redacted_evidence_references_and_authorization_fields_are_allowed(self):
+        payload = valid_payload()
+        payload["evidence_reference"] = "redacted://crm-export-2026-09"
+        result = module.qualify(payload)
+        self.assertTrue(result["eligible_for_scoping"])
+        self.assertNotIn("redaction_blockers", result)
+
+    def test_excessive_nesting_fails_closed(self):
+        payload = valid_payload()
+        nested = {}
+        cursor = nested
+        for _ in range(14):
+            cursor["next"] = {}
+            cursor = cursor["next"]
+        payload["nested"] = nested
+        result = module.qualify(payload)
+        self.assertFalse(result["eligible_for_scoping"])
+        self.assertIn("raw_secret_or_contact_data_detected", result["blockers"])
+        self.assertTrue(any("nesting_too_deep" in path for path in result["redaction_blockers"]))
+
     def test_unprofitable_estimate_warns_but_is_not_recorded_as_revenue(self):
         payload = valid_payload()
         payload["economics"]["initial_delivery_cost_cents"] = 300000
