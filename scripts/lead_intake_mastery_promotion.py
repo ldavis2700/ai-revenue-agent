@@ -172,12 +172,13 @@ def evaluate(payload: dict) -> dict:
     contribution = candidate_collected - candidate_cost
     return {
         "mastery_candidate": stage,
-        "promotion_review_ready": not blockers,
+        "evidence_record_valid": not blockers,
+        "promotion_review_ready": not blockers and stage != "learned",
         "evidence_status": "redacted_assertions_require_owner_verification",
         "verified_paid_delivery_count_for_review": len(paid),
         "independent_paid_buyer_count_for_review": len(paid_buyers),
         "positive_margin_delivery_count_for_review": len(positive),
-        "candidate_collected_revenue_cents": candidate_collected,
+        "settled_revenue_asserted_for_review_cents": candidate_collected,
         "candidate_contribution_cents": contribution,
         "candidate_contribution_per_human_hour_cents": (
             round(contribution / candidate_hours) if candidate_hours else 0
@@ -206,7 +207,7 @@ def main(argv=None):
         return 2
     result = evaluate(payload)
     print(json.dumps(result, indent=2, sort_keys=True))
-    return 0 if result["promotion_review_ready"] else 1
+    return 0 if result["evidence_record_valid"] else 1
 
 
 if __name__ == "__main__":
