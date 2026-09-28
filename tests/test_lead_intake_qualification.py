@@ -38,6 +38,18 @@ def valid_payload():
         "uses_bought_or_scraped_lists": False,
         "emergency_dispatch_required": False,
         "guaranteed_outcome_requested": False,
+        "economics": {
+            "diagnostic_price_cents": 35000,
+            "implementation_price_cents": 200000,
+            "monthly_fee_cents": 90000,
+            "initial_delivery_cost_cents": 40000,
+            "monthly_delivery_cost_cents": 15000,
+            "estimated_initial_api_cost_cents": 5000,
+            "estimated_monthly_api_cost_cents": 5000,
+            "estimated_cac_cents": 10000,
+            "estimated_initial_human_hours": 8,
+            "estimated_monthly_human_hours": 2,
+        },
     }
 
 
@@ -48,6 +60,10 @@ class LeadIntakeQualificationTests(unittest.TestCase):
         self.assertEqual(result["execution_gate"], "qualified_evidence_only")
         self.assertEqual(result["authorized_actions"], [])
         self.assertEqual(result["mastery"], "learned")
+        self.assertEqual(result["economics"]["status"], "estimate_only")
+        self.assertEqual(result["economics"]["initial_contribution_cents"], 180000)
+        self.assertEqual(result["economics"]["monthly_contribution_cents"], 70000)
+        self.assertEqual(result["economics"]["collected_revenue_cents"], 0)
 
     def test_missing_consent_and_suppression_fail_closed(self):
         payload = valid_payload()
@@ -86,6 +102,36 @@ class LeadIntakeQualificationTests(unittest.TestCase):
         result = module.qualify(payload)
         self.assertTrue(result["eligible_for_scoping"])
         self.assertIn("monthly_inbound_leads_below_target_icp", result["warnings"])
+
+    def test_missing_economics_warns_without_inventing_values(self):
+        payload = valid_payload()
+        del payload["economics"]
+        result = module.qualify(payload)
+        self.assertTrue(result["eligible_for_scoping"])
+        self.assertIn("economics_not_supplied_for_pricing", result["warnings"])
+        self.assertNotIn("economics", result)
+
+    def test_invalid_economics_block_and_out_of_band_prices_warn(self):
+        payload = valid_payload()
+        payload["economics"]["estimated_initial_human_hours"] = 0
+        result = module.qualify(payload)
+        self.assertFalse(result["eligible_for_scoping"])
+        self.assertIn("estimated_initial_human_hours_invalid", result["blockers"])
+
+        payload = valid_payload()
+        payload["economics"]["diagnostic_price_cents"] = 10000
+        result = module.qualify(payload)
+        self.assertTrue(result["eligible_for_scoping"])
+        self.assertIn("diagnostic_price_cents_outside_test_band", result["warnings"])
+
+    def test_unprofitable_estimate_warns_but_is_not_recorded_as_revenue(self):
+        payload = valid_payload()
+        payload["economics"]["initial_delivery_cost_cents"] = 300000
+        payload["economics"]["monthly_delivery_cost_cents"] = 100000
+        result = module.qualify(payload)
+        self.assertIn("initial_contribution_not_positive", result["warnings"])
+        self.assertIn("monthly_contribution_not_positive", result["warnings"])
+        self.assertEqual(result["economics"]["collected_revenue_cents"], 0)
 
     def test_cli_exit_codes_distinguish_valid_blocked_and_malformed(self):
         with tempfile.TemporaryDirectory() as directory:
