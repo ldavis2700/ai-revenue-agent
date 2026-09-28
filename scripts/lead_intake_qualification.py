@@ -14,10 +14,84 @@ from typing import Any
 
 RATE_FIELDS = ("contact", "qualification", "booking", "attendance", "close")
 REQUIRED_CHANNELS = {"phone", "sms", "email"}
+PRICE_BANDS_CENTS = {
+    "diagnostic_price_cents": (25000, 50000),
+    "implementation_price_cents": (150000, 300000),
+    "monthly_fee_cents": (50000, 150000),
+}
 
 
 def _present(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def evaluate_economics(value: Any) -> tuple[dict[str, Any] | None, list[str], list[str]]:
+    """Validate estimate-only economics without promoting projected revenue."""
+    if value is None:
+        return None, [], ["economics_not_supplied_for_pricing"]
+    if not isinstance(value, dict):
+        return None, ["economics_invalid"], []
+
+    blockers: list[str] = []
+    warnings: list[str] = []
+    required_cents = (
+        "diagnostic_price_cents", "implementation_price_cents", "monthly_fee_cents",
+        "initial_delivery_cost_cents", "monthly_delivery_cost_cents",
+        "estimated_initial_api_cost_cents", "estimated_monthly_api_cost_cents",
+        "estimated_cac_cents",
+    )
+    for field in required_cents:
+        amount = value.get(field)
+        if not isinstance(amount, int) or isinstance(amount, bool) or amount < 0:
+            blockers.append(f"{field}_invalid")
+
+    for field in ("estimated_initial_human_hours", "estimated_monthly_human_hours"):
+        hours = value.get(field)
+        if not isinstance(hours, (int, float)) or isinstance(hours, bool) or hours <= 0:
+            blockers.append(f"{field}_invalid")
+
+    if blockers:
+        return None, blockers, warnings
+
+    for field, (low, high) in PRICE_BANDS_CENTS.items():
+        if not low <= value[field] <= high:
+            warnings.append(f"{field}_outside_test_band")
+
+    initial_revenue = value["diagnostic_price_cents"] + value["implementation_price_cents"]
+    initial_cost = (
+        value["initial_delivery_cost_cents"]
+        + value["estimated_initial_api_cost_cents"]
+        + value["estimated_cac_cents"]
+    )
+    monthly_cost = value["monthly_delivery_cost_cents"] + value["estimated_monthly_api_cost_cents"]
+    initial_contribution = initial_revenue - initial_cost
+    monthly_contribution = value["monthly_fee_cents"] - monthly_cost
+    if initial_contribution <= 0:
+        warnings.append("initial_contribution_not_positive")
+    if monthly_contribution <= 0:
+        warnings.append("monthly_contribution_not_positive")
+
+    return {
+        "status": "estimate_only",
+        "initial_revenue_cents": initial_revenue,
+        "initial_cost_cents": initial_cost,
+        "initial_contribution_cents": initial_contribution,
+        "initial_contribution_margin": round(initial_contribution / initial_revenue, 4)
+        if initial_revenue else None,
+        "initial_contribution_per_human_hour_cents": round(
+            initial_contribution / value["estimated_initial_human_hours"]
+        ),
+        "monthly_recurring_revenue_cents": value["monthly_fee_cents"],
+        "monthly_cost_cents": monthly_cost,
+        "monthly_contribution_cents": monthly_contribution,
+        "monthly_contribution_margin": round(
+            monthly_contribution / value["monthly_fee_cents"], 4
+        ) if value["monthly_fee_cents"] else None,
+        "monthly_contribution_per_human_hour_cents": round(
+            monthly_contribution / value["estimated_monthly_human_hours"]
+        ),
+        "collected_revenue_cents": 0,
+    }, blockers, warnings
 
 
 def qualify(payload: dict[str, Any]) -> dict[str, Any]:
@@ -85,7 +159,11 @@ def qualify(payload: dict[str, Any]) -> dict[str, Any]:
     if payload.get("guaranteed_outcome_requested") is not False:
         blockers.append("guaranteed_outcome_not_disqualified")
 
-    return {
+    economics, economics_blockers, economics_warnings = evaluate_economics(payload.get("economics"))
+    blockers.extend(economics_blockers)
+    warnings.extend(economics_warnings)
+
+    result = {
         "schema_version": 1,
         "offer_id": "home_services_lead_intake_booking",
         "eligible_for_scoping": not blockers,
@@ -95,6 +173,9 @@ def qualify(payload: dict[str, Any]) -> dict[str, Any]:
         "authorized_actions": [],
         "mastery": "learned",
     }
+    if economics is not None:
+        result["economics"] = economics
+    return result
 
 
 def main() -> int:
