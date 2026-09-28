@@ -38,13 +38,16 @@ class LeadIntakeMasteryPromotionTests(unittest.TestCase):
         payload = json.loads((ROOT / "templates" / "home_services_lead_intake_mastery_promotion.example.json").read_text())
         result = module.evaluate(payload)
         self.assertEqual(result["mastery_candidate"], "learned")
-        self.assertEqual(result["candidate_collected_revenue_cents"], 0)
+        self.assertEqual(result["settled_revenue_asserted_for_review_cents"], 0)
+        self.assertTrue(result["evidence_record_valid"])
+        self.assertFalse(result["promotion_review_ready"])
         self.assertFalse(result["ledger_mutation_authorized"])
 
     def test_one_settled_accepted_delivery_validates_paid_engagement(self):
         result = module.evaluate({"deliveries": [delivery(1, "a")]})
         self.assertEqual(result["mastery_candidate"], "validated_paid_engagement")
         self.assertEqual(result["candidate_contribution_cents"], 10000)
+        self.assertTrue(result["promotion_review_ready"])
 
     def test_two_independent_positive_deliveries_are_repeatable(self):
         result = module.evaluate({"deliveries": [delivery(1, "a"), delivery(2, "b")]})
@@ -72,7 +75,7 @@ class LeadIntakeMasteryPromotionTests(unittest.TestCase):
         payload = {"deliveries": [delivery(1, "a", settled_payment_verified=False)]}
         result = module.evaluate(payload)
         self.assertFalse(result["promotion_review_ready"])
-        self.assertEqual(result["candidate_collected_revenue_cents"], 0)
+        self.assertEqual(result["settled_revenue_asserted_for_review_cents"], 0)
         self.assertIn("delivery_0_revenue_without_settled_payment", result["blockers"])
 
     def test_sensitive_data_fails_closed_without_echoing_value(self):
