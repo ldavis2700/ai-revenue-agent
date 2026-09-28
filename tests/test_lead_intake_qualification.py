@@ -38,6 +38,7 @@ def valid_payload():
         "uses_bought_or_scraped_lists": False,
         "emergency_dispatch_required": False,
         "guaranteed_outcome_requested": False,
+        "outcome_pricing_requested": False,
         "economics": {
             "diagnostic_price_cents": 35000,
             "implementation_price_cents": 200000,
@@ -81,6 +82,16 @@ class LeadIntakeQualificationTests(unittest.TestCase):
                 payload = valid_payload()
                 payload[field] = True
                 self.assertFalse(module.qualify(payload)["eligible_for_scoping"])
+
+    def test_outcome_pricing_is_blocked_until_verified_pilot_ledger(self):
+        payload = valid_payload()
+        payload["outcome_pricing_requested"] = True
+        result = module.qualify(payload)
+        self.assertFalse(result["eligible_for_scoping"])
+        self.assertIn(
+            "outcome_pricing_requires_verified_pilot_ledger", result["blockers"])
+        self.assertEqual(
+            result["outcome_pricing_gate"], "verified_pilot_ledger_required")
 
     def test_unknown_disqualifier_state_is_not_treated_as_false(self):
         payload = valid_payload()
@@ -162,6 +173,14 @@ class LeadIntakeQualificationTests(unittest.TestCase):
         self.assertFalse(result["eligible_for_scoping"])
         self.assertIn("raw_secret_or_contact_data_detected", result["blockers"])
         self.assertTrue(any("nesting_too_deep" in path for path in result["redaction_blockers"]))
+
+    def test_repository_example_is_redacted_and_eligible_for_scoping(self):
+        path = ROOT / "templates" / "home_services_lead_intake_qualification.example.json"
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        result = module.qualify(payload)
+        self.assertTrue(result["eligible_for_scoping"])
+        self.assertNotIn("redaction_blockers", result)
+        self.assertEqual(result["outcome_pricing_gate"], "not_requested")
 
     def test_unprofitable_estimate_warns_but_is_not_recorded_as_revenue(self):
         payload = valid_payload()
