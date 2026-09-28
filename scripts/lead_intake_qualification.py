@@ -200,6 +200,8 @@ def qualify(payload: dict[str, Any]) -> dict[str, Any]:
         blockers.append("emergency_dispatch_not_disqualified")
     if payload.get("guaranteed_outcome_requested") is not False:
         blockers.append("guaranteed_outcome_not_disqualified")
+    if payload.get("outcome_pricing_requested") is True:
+        blockers.append("outcome_pricing_requires_verified_pilot_ledger")
 
     economics, economics_blockers, economics_warnings = evaluate_economics(payload.get("economics"))
     blockers.extend(economics_blockers)
@@ -214,6 +216,11 @@ def qualify(payload: dict[str, Any]) -> dict[str, Any]:
         "execution_gate": "qualified_evidence_only" if not blockers else "blocked",
         "authorized_actions": [],
         "mastery": "learned",
+        "outcome_pricing_gate": (
+            "verified_pilot_ledger_required"
+            if payload.get("outcome_pricing_requested") is True
+            else "not_requested"
+        ),
     }
     if economics is not None:
         result["economics"] = economics
