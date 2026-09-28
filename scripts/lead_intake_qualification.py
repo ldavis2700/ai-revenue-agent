@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -19,10 +20,48 @@ PRICE_BANDS_CENTS = {
     "implementation_price_cents": (150000, 300000),
     "monthly_fee_cents": (50000, 150000),
 }
+SENSITIVE_KEY_TOKENS = {
+    "access_token", "refresh_token", "api_key", "apikey", "password", "secret",
+    "private_key", "session_cookie", "device_token", "customer_email",
+    "customer_phone", "lead_email", "lead_phone",
+}
+EMAIL_PATTERN = re.compile(r"(?<![\w.-])[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}(?![\w.-])")
+PHONE_PATTERN = re.compile(r"(?<!\d)(?:\+?1[ .-]?)?(?:\(?\d{3}\)?[ .-]?)\d{3}[ .-]?\d{4}(?!\d)")
+SECRET_VALUE_PATTERNS = (
+    re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----"),
+    re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/-]+=*"),
+    re.compile(r"\b(?:sk|pk)_(?:live|test)_[A-Za-z0-9]{8,}\b"),
+)
 
 
 def _present(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def sensitive_paths(value: Any, path: str = "$", depth: int = 0) -> list[str]:
+    """Return paths containing raw credentials/contact data, never their values."""
+    if depth > 12:
+        return [f"{path}:nesting_too_deep"]
+    found: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_text = str(key)
+            normalized = re.sub(r"[^a-z0-9]+", "_", key_text.lower()).strip("_")
+            child = f"{path}.{key_text}"
+            if any(token in normalized for token in SENSITIVE_KEY_TOKENS):
+                found.append(f"{child}:sensitive_key")
+            found.extend(sensitive_paths(item, child, depth + 1))
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            found.extend(sensitive_paths(item, f"{path}[{index}]", depth + 1))
+    elif isinstance(value, str):
+        if EMAIL_PATTERN.search(value):
+            found.append(f"{path}:email")
+        if PHONE_PATTERN.search(value):
+            found.append(f"{path}:phone")
+        if any(pattern.search(value) for pattern in SECRET_VALUE_PATTERNS):
+            found.append(f"{path}:credential")
+    return sorted(set(found))
 
 
 def evaluate_economics(value: Any) -> tuple[dict[str, Any] | None, list[str], list[str]]:
@@ -98,6 +137,9 @@ def qualify(payload: dict[str, Any]) -> dict[str, Any]:
     """Return auditable blockers/warnings without inferring missing evidence."""
     blockers: list[str] = []
     warnings: list[str] = []
+    redaction_blockers = sensitive_paths(payload)
+    if redaction_blockers:
+        blockers.append("raw_secret_or_contact_data_detected")
 
     leads = payload.get("monthly_inbound_leads")
     if not isinstance(leads, int) or isinstance(leads, bool) or leads < 0:
@@ -175,6 +217,8 @@ def qualify(payload: dict[str, Any]) -> dict[str, Any]:
     }
     if economics is not None:
         result["economics"] = economics
+    if redaction_blockers:
+        result["redaction_blockers"] = redaction_blockers
     return result
 
 
