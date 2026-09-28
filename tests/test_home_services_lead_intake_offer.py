@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PAGE = ROOT / "sales" / "home-services-lead-intake-preview.html"
 DIAGNOSTIC = ROOT / "templates" / "home_services_lead_intake_diagnostic.md"
 PILOT_SCOPE = ROOT / "templates" / "home_services_lead_intake_pilot_scope.md"
+MANAGED_RUNBOOK = ROOT / "templates" / "home_services_lead_intake_managed_service_runbook.md"
 
 
 class HomeServicesLeadIntakeOfferTests(unittest.TestCase):
@@ -15,6 +16,7 @@ class HomeServicesLeadIntakeOfferTests(unittest.TestCase):
         cls.lower = cls.html.lower()
         cls.diagnostic = DIAGNOSTIC.read_text(encoding="utf-8").lower()
         cls.pilot_scope = PILOT_SCOPE.read_text(encoding="utf-8").lower()
+        cls.managed_runbook = MANAGED_RUNBOOK.read_text(encoding="utf-8").lower()
 
     def test_preview_cannot_be_mistaken_for_a_live_purchase_page(self):
         self.assertIn('name="robots" content="noindex,nofollow"', self.lower)
@@ -115,6 +117,41 @@ class HomeServicesLeadIntakeOfferTests(unittest.TestCase):
             "## stop, incident, and rollback rules",
         ):
             self.assertIn(text, self.pilot_scope)
+
+    def test_managed_runbook_requires_evidence_before_recurring_operation(self):
+        for text in (
+            "reusable operating template only",
+            "accepted paid pilot",
+            "recurring scope accepted through an authorized channel",
+            "contract and payment/funding states independently classified",
+            "unknown or expired gate pauses service",
+            "anything outside this inventory requires change control",
+        ):
+            self.assertIn(text, self.managed_runbook)
+
+    def test_managed_runbook_operationalizes_controls_and_incidents(self):
+        for text in (
+            "## operating cadence",
+            "## monitoring and alerts",
+            "## exception and fail-closed matrix",
+            "## consent, privacy, and security review",
+            "## qa sampling and release control",
+            "## incident response and rollback",
+            "never weaken a privacy, security, consent, or audit control",
+        ):
+            self.assertIn(text, self.managed_runbook)
+
+    def test_managed_runbook_separates_economics_revenue_and_productization(self):
+        for text in (
+            "## unit-economics ledger",
+            "only verified settled funds enter collected revenue",
+            "invoiced/approved, collected, withdrawable, and actually received",
+            "outcome or usage pricing remains excluded",
+            "## renewal, expansion, and upsell",
+            "## termination and offboarding",
+            "no promotion gate is earned from this template alone",
+        ):
+            self.assertIn(text, self.managed_runbook)
 
 
 if __name__ == "__main__":
