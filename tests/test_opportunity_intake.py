@@ -243,6 +243,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             cac_cents=30000,
             human_operating_hours=5,
             buyer_stage="buyer_reply",
+            buyer_stage_evidence_url="https://example.com/messages/reply-1",
             payment_history_score=0.9,
             measurable_outcome=True,
             automation_potential=0.95,
@@ -263,6 +264,7 @@ class OpportunityIntakeTests(unittest.TestCase):
         stronger = candidate(
             external_id="stronger-outcome",
             buyer_stage="interview",
+            buyer_stage_evidence_url="https://example.com/interviews/stronger",
             contract_value_cents=300000,
             economic_value_cents=1200000,
             delivery_cost_cents=60000,
@@ -296,6 +298,53 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertGreater(
             result["opportunities"][0]["score"],
             result["opportunities"][1]["score"])
+
+    def test_issue_164_verified_buyer_stage_outranks_high_score_prospect(self):
+        reply = candidate(
+            external_id="verified-reply",
+            buyer_stage="buyer_reply",
+            buyer_stage_evidence_url="https://example.com/messages/verified-reply",
+            payout_cents=50000,
+            effort_hours=20,
+            buyer_intent=0.2,
+            win_probability=0.2,
+            execution_confidence=0.7,
+            payment_risk=0.5,
+            reuse_value=0.1,
+            recurring_value=0.1,
+        )
+        prospect = candidate(
+            external_id="high-score-prospect",
+            payout_cents=500000,
+            effort_hours=2,
+            buyer_intent=1.0,
+            win_probability=0.95,
+            execution_confidence=1.0,
+            payment_risk=0.0,
+            reuse_value=1.0,
+            recurring_value=1.0,
+            automation_potential=1.0,
+            delivery_risk=0.0,
+            compliance_risk=0.0,
+        )
+        result = opportunity_intake.ingest([prospect, reply], now=NOW)
+        self.assertEqual(
+            result["opportunities"][0]["external_id"], "verified-reply")
+        self.assertLess(
+            result["opportunities"][0]["score"],
+            result["opportunities"][1]["score"])
+        self.assertGreater(
+            result["opportunities"][0]["buyer_priority_rank"],
+            result["opportunities"][1]["buyer_priority_rank"])
+
+    def test_issue_164_non_prospect_buyer_stage_requires_evidence(self):
+        result = opportunity_intake.ingest([
+            candidate(external_id="unsupported-offer", buyer_stage="offer")
+        ], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(
+            result["rejections"][0]["reason"],
+            "buyer_stage_evidence_url_required")
 
     def test_issue_164_outcome_pricing_requires_attribution_caps_and_escalation(self):
         incomplete = candidate(
