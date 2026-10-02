@@ -244,6 +244,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             human_operating_hours=5,
             buyer_stage="buyer_reply",
             buyer_stage_evidence_url="https://example.com/messages/reply-1",
+            buyer_stage_evidence_at=(NOW - timedelta(minutes=30)).isoformat(),
             payment_history_score=0.9,
             measurable_outcome=True,
             automation_potential=0.95,
@@ -265,6 +266,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             external_id="stronger-outcome",
             buyer_stage="interview",
             buyer_stage_evidence_url="https://example.com/interviews/stronger",
+            buyer_stage_evidence_at=(NOW - timedelta(minutes=20)).isoformat(),
             contract_value_cents=300000,
             economic_value_cents=1200000,
             delivery_cost_cents=60000,
@@ -304,6 +306,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             external_id="verified-reply",
             buyer_stage="buyer_reply",
             buyer_stage_evidence_url="https://example.com/messages/verified-reply",
+            buyer_stage_evidence_at=(NOW - timedelta(minutes=10)).isoformat(),
             payout_cents=50000,
             effort_hours=20,
             buyer_intent=0.2,
@@ -345,6 +348,25 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(
             result["rejections"][0]["reason"],
             "buyer_stage_evidence_url_required")
+
+    def test_issue_164_buyer_stage_evidence_must_be_fresh_and_non_future(self):
+        stale = candidate(
+            external_id="stale-buyer-reply",
+            buyer_stage="buyer_reply",
+            buyer_stage_evidence_url="https://example.com/messages/stale",
+            buyer_stage_evidence_at=(NOW - timedelta(days=31)).isoformat(),
+        )
+        future = candidate(
+            external_id="future-offer",
+            buyer_stage="offer",
+            buyer_stage_evidence_url="https://example.com/offers/future",
+            buyer_stage_evidence_at=(NOW + timedelta(minutes=6)).isoformat(),
+        )
+        result = opportunity_intake.ingest([stale, future], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(
+            [rejection["reason"] for rejection in result["rejections"]],
+            ["buyer_stage_evidence_stale", "buyer_stage_evidence_at_future"])
 
     def test_issue_164_outcome_pricing_requires_attribution_caps_and_escalation(self):
         incomplete = candidate(
