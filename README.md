@@ -52,7 +52,8 @@ amount and currency remain within the verified contract and whose dates follow
 delivery; it records evidence but never creates a charge. Finally,
 Opportunity ranking treats an active buyer stage as a strict priority band before
 the numeric opportunity score. Any non-prospect `buyer_stage` requires a canonical
-HTTP(S) `buyer_stage_evidence_url`; unsupported reply, invitation, interview,
+HTTP(S) `buyer_stage_evidence_url` plus a fresh, non-future
+`buyer_stage_evidence_at`; unsupported or stale reply, invitation, interview,
 offer, or contract claims fail closed instead of outranking verified prospects.
 
 Opportunity intake can also carry explicit `required_execution_capabilities` and
