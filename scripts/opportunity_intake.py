@@ -905,8 +905,17 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         raise ValueError("buyer_stage_invalid")
     buyer_stage_evidence_url = canonical_url(
         payload.get("buyer_stage_evidence_url"))
-    if buyer_stage != "prospect" and not buyer_stage_evidence_url:
-        raise ValueError("buyer_stage_evidence_url_required")
+    buyer_stage_evidence_at = None
+    if buyer_stage != "prospect":
+        if not buyer_stage_evidence_url:
+            raise ValueError("buyer_stage_evidence_url_required")
+        buyer_stage_evidence_at = parse_time(
+            payload.get("buyer_stage_evidence_at"),
+            "buyer_stage_evidence_at")
+        if buyer_stage_evidence_at > now + MAX_FUTURE_SKEW:
+            raise ValueError("buyer_stage_evidence_at_future")
+        if buyer_stage_evidence_at < now - timedelta(days=max_age_days):
+            raise ValueError("buyer_stage_evidence_stale")
     offer_phases = enum_list(payload, "offer_phases", OFFER_PHASES)
     offer_evidence = offer_evidence_map(payload, offer_phases)
     ip_assets = reusable_ip_assets(payload)
@@ -1081,6 +1090,9 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         "buyer_stage_score": BUYER_STAGE_SCORES[buyer_stage],
         "buyer_stage_evidence_url": (
             buyer_stage_evidence_url if buyer_stage != "prospect" else None),
+        "buyer_stage_evidence_at": (
+            buyer_stage_evidence_at.isoformat()
+            if buyer_stage_evidence_at is not None else None),
         "offer_family": family_selection["id"],
         "offer_family_selection": family_selection,
         "payment_history_score": finite_number(
