@@ -243,6 +243,8 @@ class OpportunityIntakeTests(unittest.TestCase):
             cac_cents=30000,
             human_operating_hours=5,
             buyer_stage="buyer_reply",
+            buyer_stage_evidence_url="https://example.com/messages/reply-1",
+            buyer_stage_evidence_at=(NOW - timedelta(minutes=30)).isoformat(),
             payment_history_score=0.9,
             measurable_outcome=True,
             automation_potential=0.95,
@@ -263,6 +265,8 @@ class OpportunityIntakeTests(unittest.TestCase):
         stronger = candidate(
             external_id="stronger-outcome",
             buyer_stage="interview",
+            buyer_stage_evidence_url="https://example.com/interviews/stronger",
+            buyer_stage_evidence_at=(NOW - timedelta(minutes=20)).isoformat(),
             contract_value_cents=300000,
             economic_value_cents=1200000,
             delivery_cost_cents=60000,
@@ -296,6 +300,73 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertGreater(
             result["opportunities"][0]["score"],
             result["opportunities"][1]["score"])
+
+    def test_issue_164_verified_buyer_stage_outranks_high_score_prospect(self):
+        reply = candidate(
+            external_id="verified-reply",
+            buyer_stage="buyer_reply",
+            buyer_stage_evidence_url="https://example.com/messages/verified-reply",
+            buyer_stage_evidence_at=(NOW - timedelta(minutes=10)).isoformat(),
+            payout_cents=50000,
+            effort_hours=20,
+            buyer_intent=0.2,
+            win_probability=0.2,
+            execution_confidence=0.7,
+            payment_risk=0.5,
+            reuse_value=0.1,
+            recurring_value=0.1,
+        )
+        prospect = candidate(
+            external_id="high-score-prospect",
+            payout_cents=500000,
+            effort_hours=2,
+            buyer_intent=1.0,
+            win_probability=0.95,
+            execution_confidence=1.0,
+            payment_risk=0.0,
+            reuse_value=1.0,
+            recurring_value=1.0,
+            automation_potential=1.0,
+            delivery_risk=0.0,
+            compliance_risk=0.0,
+        )
+        result = opportunity_intake.ingest([prospect, reply], now=NOW)
+        self.assertEqual(
+            result["opportunities"][0]["external_id"], "verified-reply")
+        self.assertLess(
+            result["opportunities"][0]["score"],
+            result["opportunities"][1]["score"])
+        self.assertGreater(
+            result["opportunities"][0]["buyer_priority_rank"],
+            result["opportunities"][1]["buyer_priority_rank"])
+
+    def test_issue_164_non_prospect_buyer_stage_requires_evidence(self):
+        result = opportunity_intake.ingest([
+            candidate(external_id="unsupported-offer", buyer_stage="offer")
+        ], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(
+            result["rejections"][0]["reason"],
+            "buyer_stage_evidence_url_required")
+
+    def test_issue_164_buyer_stage_evidence_must_be_fresh_and_non_future(self):
+        stale = candidate(
+            external_id="stale-buyer-reply",
+            buyer_stage="buyer_reply",
+            buyer_stage_evidence_url="https://example.com/messages/stale",
+            buyer_stage_evidence_at=(NOW - timedelta(days=31)).isoformat(),
+        )
+        future = candidate(
+            external_id="future-offer",
+            buyer_stage="offer",
+            buyer_stage_evidence_url="https://example.com/offers/future",
+            buyer_stage_evidence_at=(NOW + timedelta(minutes=6)).isoformat(),
+        )
+        result = opportunity_intake.ingest([stale, future], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(
+            [rejection["reason"] for rejection in result["rejections"]],
+            ["buyer_stage_evidence_stale", "buyer_stage_evidence_at_future"])
 
     def test_issue_164_outcome_pricing_requires_attribution_caps_and_escalation(self):
         incomplete = candidate(
@@ -2656,6 +2727,37 @@ class OpportunityIntakeTests(unittest.TestCase):
             economics = opportunity_intake.record_realized_unit_economics(
                 path, opportunity_id, payment_id, economics_evidence,
                 now=NOW + timedelta(minutes=5))
+            connection = sqlite3.connect(path)
+            original_transaction_url = connection.execute(
+                """SELECT transaction_url FROM payment_receipts
+                   WHERE receipt_id=?""", (payment_id,)).fetchone()[0]
+            connection.execute(
+                """UPDATE payment_receipts SET transaction_url=?
+                   WHERE receipt_id=?""",
+                ("https://example.com/payments/substituted", payment_id))
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                    ValueError, "payment_receipt_unverified"):
+                opportunity_intake.record_growth_evidence(
+                    path, opportunity_id, payment_id, "retention", {
+                        "provider": "marketplace",
+                        "external_event_id": "renewal-tampered",
+                        "evidence_url":
+                            "https://example.com/contracts/renewal-tampered",
+                        "occurred_at":
+                            (NOW + timedelta(minutes=6)).isoformat(),
+                    }, now=NOW + timedelta(minutes=6))
+            connection = sqlite3.connect(path)
+            growth_count = connection.execute(
+                "SELECT COUNT(*) FROM growth_evidence_receipts").fetchone()[0]
+            connection.execute(
+                """UPDATE payment_receipts SET transaction_url=?
+                   WHERE receipt_id=?""",
+                (original_transaction_url, payment_id))
+            connection.commit()
+            connection.close()
+            self.assertEqual(growth_count, 0)
             retention = opportunity_intake.record_growth_evidence(
                 path, opportunity_id, payment_id, "retention", {
                     "provider": "marketplace",

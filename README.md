@@ -50,6 +50,12 @@ receipt to that exact QA-approved artifact checksum before advancing to
 `delivered`. `record_invoice` requires a delivery-linked provider invoice whose
 amount and currency remain within the verified contract and whose dates follow
 delivery; it records evidence but never creates a charge. Finally,
+Opportunity ranking treats an active buyer stage as a strict priority band before
+the numeric opportunity score. Any non-prospect `buyer_stage` requires a canonical
+HTTP(S) `buyer_stage_evidence_url` plus a fresh, non-future
+`buyer_stage_evidence_at`; unsupported or stale reply, invitation, interview,
+offer, or contract claims fail closed instead of outranking verified prospects.
+
 Opportunity intake can also carry explicit `required_execution_capabilities` and
 `available_execution_capabilities` lists. APEX fails closed when any requirement
 is unavailable, preventing technically open jobs from reaching proposal work when
