@@ -13,7 +13,7 @@ class PortfolioCompetitionTests(unittest.TestCase):
     def test_measured_winner_faces_strongest_distinct_challenger(self):
         candidates = [
             {"id": "winner", "eligible": True, "pursuit_score": 92.0,
-             "experiment_state": "scale_candidate", "effective_evidence_quality": 0.9},
+             "economics_verified": True, "experiment_state": "scale_candidate", "effective_evidence_quality": 0.9},
             {"id": "challenger", "eligible": True, "pursuit_score": 94.5,
              "experiment_state": "validate", "effective_evidence_quality": 0},
             {"id": "retired", "eligible": True, "pursuit_score": 99.0,
@@ -26,6 +26,33 @@ class PortfolioCompetitionTests(unittest.TestCase):
         self.assertEqual(result["recommended_action"], "run_bounded_head_to_head_validation")
         self.assertEqual(result["execution_gate"], "recommendation_only")
         self.assertFalse(result["guardrails"]["automatic_spend"])
+
+    def test_unverified_economics_cannot_create_a_measured_champion(self):
+        result = compare_candidates([
+            {"id": "claimed-winner", "eligible": True, "pursuit_score": 99,
+             "experiment_state": "scale_candidate",
+             "effective_evidence_quality": 1,
+             "economics_verified": False},
+            {"id": "verified-winner", "eligible": True, "pursuit_score": 88,
+             "experiment_state": "continue_validation",
+             "effective_evidence_quality": 0.7,
+             "economics_verified": True},
+        ])
+        self.assertEqual(result["champion"]["id"], "verified-winner")
+        self.assertEqual(result["challenger"]["id"], "claimed-winner")
+        self.assertFalse(result["challenger"]["economics_verified"])
+
+    def test_rejects_non_boolean_economics_verification(self):
+        result = compare_candidates([
+            {"id": "forged", "eligible": True, "pursuit_score": 99,
+             "experiment_state": "scale_candidate",
+             "effective_evidence_quality": 1,
+             "economics_verified": "yes"},
+            {"id": "candidate", "eligible": True, "pursuit_score": 80},
+        ])
+        self.assertIsNone(result["champion"])
+        self.assertEqual(result["challenger"]["id"], "candidate")
+        self.assertEqual(result["rejected_candidate_ids"], ["forged"])
 
     def test_unmeasured_portfolio_starts_with_validation(self):
         result = compare_candidates([
@@ -52,9 +79,9 @@ class PortfolioCompetitionTests(unittest.TestCase):
             {"id": "valid", "eligible": True, "pursuit_score": 88,
              "experiment_state": "validate", "effective_evidence_quality": 0},
             {"id": "nan-score", "eligible": True, "pursuit_score": float("nan"),
-             "experiment_state": "scale_candidate", "effective_evidence_quality": 1},
+             "economics_verified": True, "experiment_state": "scale_candidate", "effective_evidence_quality": 1},
             {"id": "infinite-quality", "eligible": True, "pursuit_score": 100,
-             "experiment_state": "scale_candidate", "effective_evidence_quality": float("inf")},
+             "economics_verified": True, "experiment_state": "scale_candidate", "effective_evidence_quality": float("inf")},
         ]
         result = compare_candidates(candidates)
         self.assertIsNone(result["champion"])
@@ -70,7 +97,7 @@ class PortfolioCompetitionTests(unittest.TestCase):
             {"id": "quality-overflow", "eligible": True, "pursuit_score": 97,
              "effective_evidence_quality": 1.01},
             {"id": "valid", "eligible": True, "pursuit_score": "86.5",
-             "experiment_state": "continue_validation", "effective_evidence_quality": "0.5"},
+             "economics_verified": True, "experiment_state": "continue_validation", "effective_evidence_quality": "0.5"},
         ]
         result = compare_candidates(candidates)
         self.assertEqual(result["champion"]["id"], "valid")
@@ -108,14 +135,14 @@ class PortfolioCompetitionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "score difference must be a finite number"):
                     compare_candidates([
                         {"id": "champion", "pursuit_score": champion_score,
-                         "experiment_state": "scale_candidate", "effective_evidence_quality": 1},
+                         "economics_verified": True, "experiment_state": "scale_candidate", "effective_evidence_quality": 1},
                         {"id": "challenger", "pursuit_score": challenger_score},
                     ])
 
     def test_large_representable_score_gap_remains_valid(self):
         result = compare_candidates([
             {"id": "champion", "pursuit_score": -4e307,
-             "experiment_state": "scale_candidate", "effective_evidence_quality": 1},
+             "economics_verified": True, "experiment_state": "scale_candidate", "effective_evidence_quality": 1},
             {"id": "challenger", "pursuit_score": 4e307},
         ])
         self.assertEqual(result["challenger_minus_champion_score"], 8e307)
@@ -129,7 +156,7 @@ class PortfolioCompetitionTests(unittest.TestCase):
             snapshot = Path(directory) / "intelligence.json"
             snapshot.write_text(json.dumps({"candidates": [
                 {"id": "champion", "pursuit_score": -1e308,
-                 "experiment_state": "scale_candidate", "effective_evidence_quality": 1},
+                 "economics_verified": True, "experiment_state": "scale_candidate", "effective_evidence_quality": 1},
                 {"id": "challenger", "pursuit_score": 1e308},
             ]}), encoding="utf-8")
             result = subprocess.run(

@@ -53,6 +53,9 @@ def _validated_candidates(candidates: list[dict[str, Any]]) -> tuple[list[dict[s
             )
             if not 0 <= quality <= 1:
                 raise ValueError("effective_evidence_quality must be between 0 and 1")
+            economics_verified = candidate.get("economics_verified", False)
+            if not isinstance(economics_verified, bool):
+                raise ValueError("economics_verified must be a boolean")
         except ValueError:
             rejected.append(rejection_id)
             continue
@@ -62,6 +65,7 @@ def _validated_candidates(candidates: list[dict[str, Any]]) -> tuple[list[dict[s
             "eligible": eligibility,
             "pursuit_score": score,
             "effective_evidence_quality": quality,
+            "economics_verified": economics_verified,
         })
     return valid, rejected
 
@@ -69,8 +73,9 @@ def _validated_candidates(candidates: list[dict[str, Any]]) -> tuple[list[dict[s
 def compare_candidates(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     """Return a recommendation-only champion/challenger comparison.
 
-    A champion must have measured evidence and a non-retired experiment state. A challenger
-    is the highest-scoring distinct eligible candidate. This never authorizes spend, outreach,
+    A champion must have receipt-verified economics, measured evidence, and a
+    non-retired validated experiment state. A challenger is the highest-scoring
+    distinct eligible candidate. This never authorizes spend, outreach,
     contracts, charging, deployment, or customer-system changes.
 
     Raises ValueError if the selected scores have an unrepresentable difference, rather
@@ -80,7 +85,9 @@ def compare_candidates(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     eligible = [c for c in candidates if c["eligible"] and c.get("experiment_state") not in RETIRED_STATES]
     measured = [
         c for c in eligible
-        if c.get("experiment_state") in VALIDATED_STATES and float(c.get("effective_evidence_quality", 0) or 0) > 0
+        if c["economics_verified"]
+        and c.get("experiment_state") in VALIDATED_STATES
+        and float(c.get("effective_evidence_quality", 0) or 0) > 0
     ]
     champion = max(measured, key=lambda c: float(c.get("pursuit_score", 0) or 0), default=None)
 
