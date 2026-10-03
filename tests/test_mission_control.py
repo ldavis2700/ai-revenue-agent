@@ -165,7 +165,10 @@ class MissionControlTests(unittest.TestCase):
         candidates = result['business_model_intelligence']['top_candidates']
         self.assertTrue(any(candidate['id'] == seed['id'] for candidate in candidates))
         measured = next(candidate for candidate in candidates if candidate['id'] == seed['id'])
-        self.assertIn(measured['experiment_state'], {'continue_validation', 'scale_candidate'})
+        self.assertEqual(measured['experiment_state'], 'validate')
+        self.assertFalse(measured['economics_verified'])
+        self.assertEqual(measured['observed_profit'], 0)
+        self.assertEqual(measured['claimed_observed_revenue'], 1200)
         competition = result['business_model_intelligence']['portfolio_competition']
         self.assertIsNotNone(competition.get('champion'))
         self.assertIsNotNone(competition.get('challenger'))

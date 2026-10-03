@@ -47,7 +47,7 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
         self.assertFalse(result["guardrails"]["automatic_spend"])
         self.assertTrue(all(m["execution_gate"] == "candidate_only" for m in result["candidates"]))
 
-    def test_observed_success_materially_promotes_a_validated_model(self):
+    def test_unverified_observation_can_inform_validation_not_profit_or_scale(self):
         catalog = module.load_catalog(ROOT / "config" / "business_models.json")
         constraints = {"max_startup_cost": 3, "max_owner_effort": 5, "max_compliance_risk": 4,
                        "min_speed_to_revenue": 5, "min_automation": 6}
@@ -66,9 +66,12 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
         directory = next(m for m in plan["pursue"] if m["id"] == "directory")
 
         self.assertEqual(plan["mode"], "continuous_opportunity_optimization")
-        self.assertLess(pursue_order.index("directory"), baseline_position)
         self.assertGreater(directory["pursuit_score"], baseline_score)
-        self.assertGreater(directory["observed_profit"], 0)
+        self.assertEqual(directory["observed_profit"], 0)
+        self.assertEqual(directory["claimed_observed_revenue"], 1000)
+        self.assertEqual(directory["claimed_observed_cost"], 50)
+        self.assertFalse(directory["economics_verified"])
+        self.assertEqual(directory["experiment_state"], "validate")
         self.assertIn("maximize durable risk-adjusted owner wealth", plan["objective"])
 
     def test_only_ledger_verified_growth_can_promote_model_mastery(self):
@@ -115,6 +118,12 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
         self.assertEqual(verified_model["verified_expansion_receipts"], 1)
         self.assertEqual(verified_model["verified_reuse_receipts"], 2)
         self.assertEqual(verified_model["verified_reused_opportunities"], 2)
+        self.assertFalse(unverified_model["economics_verified"])
+        self.assertEqual(unverified_model["observed_profit"], 0)
+        self.assertEqual(unverified_model["experiment_state"], "validate")
+        self.assertTrue(verified_model["economics_verified"])
+        self.assertEqual(verified_model["observed_profit"], 120)
+        self.assertEqual(verified_model["experiment_state"], "scale_candidate")
         self.assertGreater(
             verified_model["pursuit_score"],
             unverified_model["pursuit_score"])

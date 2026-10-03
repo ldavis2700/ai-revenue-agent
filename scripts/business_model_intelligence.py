@@ -164,14 +164,20 @@ def evidence_reliability(evidence: dict[str, Any]) -> float:
 
 
 def experiment_state(profit: float, conversion: float, effective_quality: float,
-                     sample_size: float | None) -> str:
+                     sample_size: float | None, economics_verified: bool) -> str:
     if effective_quality < 0.2:
         return "validate"
-    if profit < 0 and effective_quality >= 0.5:
+    if economics_verified and profit < 0 and effective_quality >= 0.5:
         return "deprioritize"
-    if profit > 0 and conversion > 0 and effective_quality >= 0.7 and (sample_size is None or sample_size >= 10):
+    if (
+        economics_verified
+        and profit > 0
+        and conversion > 0
+        and effective_quality >= 0.7
+        and (sample_size is None or sample_size >= 10)
+    ):
         return "scale_candidate"
-    if profit > 0:
+    if economics_verified and profit > 0:
         return "continue_validation"
     return "validate"
 
@@ -181,9 +187,11 @@ def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]]
                  evidence_half_life_days: float = 30.0) -> dict[str, Any]:
     """Turn rankings into a standing, evidence-driven pursuit posture.
 
-    Observed economics can promote/demote models without changing hard safety gates.
-    Supported evidence keys: observed_revenue, observed_cost, conversion_rate,
-    evidence_quality (0..1), observed_at (ISO-8601), and sample_size. Mission
+    Market observations can reprioritize validation without changing hard safety
+    gates, but only receipt-backed ledger economics may produce profit or scale
+    states. Supported evidence keys: observed_revenue, observed_cost,
+    conversion_rate, evidence_quality (0..1), observed_at (ISO-8601), and
+    sample_size. Unverified revenue/cost remain explicitly labeled claims. Mission
     Control may also add receipt-backed recurring retention, expansion, realized
     contribution, cross-opportunity reusable-IP reuse, and mastery fields marked
     with its private ledger-verification flag; unverified callers receive no
@@ -193,15 +201,19 @@ def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]]
     enriched = []
     for model in ranked:
         evidence = active.get(model["id"], {})
-        revenue = max(0.0, float(evidence.get("observed_revenue", 0) or 0))
-        cost = max(0.0, float(evidence.get("observed_cost", 0) or 0))
+        claimed_revenue = max(
+            0.0, float(evidence.get("observed_revenue", 0) or 0))
+        claimed_cost = max(
+            0.0, float(evidence.get("observed_cost", 0) or 0))
         conversion = min(1.0, max(0.0, float(evidence.get("conversion_rate", 0) or 0)))
         quality = min(1.0, max(0.0, float(evidence.get("evidence_quality", 0) or 0)))
         freshness = evidence_freshness(evidence, now, evidence_half_life_days)
         reliability = evidence_reliability(evidence)
         effective_quality = round(quality * freshness * reliability, 4)
-        profit = revenue - cost
         ledger_verified = evidence.get("_ledger_verified") is True
+        revenue = claimed_revenue if ledger_verified else 0.0
+        cost = claimed_cost if ledger_verified else 0.0
+        profit = revenue - cost
         retention_receipts = (
             max(0, int(evidence.get("verified_retention_receipts", 0) or 0))
             if ledger_verified else 0)
@@ -238,6 +250,9 @@ def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]]
             **model,
             "pursuit_score": pursuit_score,
             "observed_profit": round(profit, 2),
+            "claimed_observed_revenue": round(claimed_revenue, 2),
+            "claimed_observed_cost": round(claimed_cost, 2),
+            "economics_verified": ledger_verified,
             "evidence_quality": quality,
             "evidence_freshness": freshness,
             "evidence_reliability": reliability,
@@ -252,7 +267,9 @@ def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]]
             "retained_recurring_value_cents": retained_value_cents,
             "expanded_value_delta_cents": expanded_value_delta_cents,
             "mastery": mastery,
-            "experiment_state": experiment_state(profit, conversion, effective_quality, sample_size),
+            "experiment_state": experiment_state(
+                profit, conversion, effective_quality, sample_size,
+                ledger_verified),
         })
     enriched.sort(key=lambda item: (item["eligible"], item["pursuit_score"]), reverse=True)
     pursue = [m for m in enriched if m["eligible"]][:max(1, pursue_limit)]
