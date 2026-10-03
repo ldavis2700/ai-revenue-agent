@@ -31,10 +31,21 @@ BUYER_STAGE_SCORES = {
     "prospect": 0.0,
     "qualified": 0.15,
     "proposal": 0.30,
+    "invitation": 0.55,
     "buyer_reply": 0.55,
     "interview": 0.70,
     "offer": 0.90,
     "contract": 1.0,
+}
+BUYER_STAGE_PRIORITY = {
+    "prospect": 0,
+    "qualified": 1,
+    "proposal": 2,
+    "invitation": 3,
+    "buyer_reply": 3,
+    "interview": 4,
+    "offer": 5,
+    "contract": 6,
 }
 OFFER_PHASES = {
     "diagnostic", "pilot", "implementation", "managed_recurring",
@@ -892,6 +903,19 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
     buyer_stage = str(payload.get("buyer_stage") or "prospect").strip().lower()
     if buyer_stage not in BUYER_STAGE_SCORES:
         raise ValueError("buyer_stage_invalid")
+    buyer_stage_evidence_url = canonical_url(
+        payload.get("buyer_stage_evidence_url"))
+    buyer_stage_evidence_at = None
+    if buyer_stage != "prospect":
+        if not buyer_stage_evidence_url:
+            raise ValueError("buyer_stage_evidence_url_required")
+        buyer_stage_evidence_at = parse_time(
+            payload.get("buyer_stage_evidence_at"),
+            "buyer_stage_evidence_at")
+        if buyer_stage_evidence_at > now + MAX_FUTURE_SKEW:
+            raise ValueError("buyer_stage_evidence_at_future")
+        if buyer_stage_evidence_at < now - timedelta(days=max_age_days):
+            raise ValueError("buyer_stage_evidence_stale")
     offer_phases = enum_list(payload, "offer_phases", OFFER_PHASES)
     offer_evidence = offer_evidence_map(payload, offer_phases)
     ip_assets = reusable_ip_assets(payload)
@@ -1064,6 +1088,11 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         "time_to_cash_days": time_to_cash_days,
         "buyer_stage": buyer_stage,
         "buyer_stage_score": BUYER_STAGE_SCORES[buyer_stage],
+        "buyer_stage_evidence_url": (
+            buyer_stage_evidence_url if buyer_stage != "prospect" else None),
+        "buyer_stage_evidence_at": (
+            buyer_stage_evidence_at.isoformat()
+            if buyer_stage_evidence_at is not None else None),
         "offer_family": family_selection["id"],
         "offer_family_selection": family_selection,
         "payment_history_score": finite_number(
@@ -1387,6 +1416,8 @@ def ingest(payloads, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
             continue
         try:
             item["score"], item["score_components"] = score(item)
+            item["buyer_priority_rank"] = BUYER_STAGE_PRIORITY[
+                item["buyer_stage"]]
             item["action_mode"] = action_mode(item)
             item["pipeline_state"] = ("payment_rail_blocked"
                                       if item["payment_rail_status"] == "temporarily_unavailable"
@@ -1396,7 +1427,9 @@ def ingest(payloads, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         except ValueError as exc:
             rejection_by_index[record["index"]] = {
                 "index": record["index"], "reason": str(exc)}
-    accepted.sort(key=lambda item: (-item["score"], item["time_to_cash_days"], item["id"]))
+    accepted.sort(key=lambda item: (
+        -item["buyer_priority_rank"], -item["score"],
+        item["time_to_cash_days"], item["id"]))
     rejected = [rejection_by_index[index] for index in sorted(rejection_by_index)]
     for rejection in rejected:
         rejection.setdefault("payload_hash", payload_hash(payloads[rejection["index"]]))
@@ -4106,14 +4139,13 @@ def record_growth_evidence(
                     "SELECT 1 FROM opportunities WHERE id=?",
                     (opportunity_id,)).fetchone() is None:
                 raise ValueError("opportunity_not_found")
-            payment = connection.execute(
-                """SELECT opportunity_id,settled_at FROM payment_receipts
-                   WHERE receipt_id=?""", (payment_receipt_id,)).fetchone()
-            if payment is None:
-                raise ValueError("payment_receipt_not_found")
+            # Growth claims can promote reusable IP, so derive them only
+            # from the same immutable payment snapshot used for revenue.
+            payment = _verified_payment_receipt(
+                connection, payment_receipt_id)
             if payment[0] != opportunity_id:
                 raise ValueError("growth_evidence_opportunity_mismatch")
-            if occurred_at < parse_time(payment[1], "payment_settled_at"):
+            if occurred_at < parse_time(payment[10], "payment_settled_at"):
                 raise ValueError("growth_evidence_before_settlement")
             existing = connection.execute(
                 """SELECT receipt_id,receipt_hash FROM growth_evidence_receipts
