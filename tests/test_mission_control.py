@@ -26,17 +26,26 @@ class MissionControlTests(unittest.TestCase):
         self.assertFalse(result['execution_gate']['external_actions_allowed'])
         self.assertFalse(result['execution_gate']['spending_allowed'])
 
-    def test_verified_revenue_drives_score_and_plan(self):
+    def test_unverified_sale_claim_does_not_drive_score_or_plan(self):
         conn = sqlite3.connect(self.path)
         conn.execute("INSERT INTO leads VALUES ('l1', 80, 1)")
         conn.executemany('INSERT INTO events VALUES (?,?,?)', [
-            ('l1', 'sent', 0), ('l1', 'reply', 0), ('l1', 'interested', 0), ('l1', 'sale', 100)])
+            ('l1', 'sent', 0), ('l1', 'reply', 0),
+            ('l1', 'interested', 0), ('l1', 'sale', 100)])
         conn.commit()
         conn.close()
         result = mission_control.run(self.path)
-        self.assertEqual(result['metrics']['verified_net_revenue'], 100)
-        self.assertGreater(result['objective_score'], 100)
-        self.assertEqual(result['plan'][0]['action'], 'replicate_verified_winning_segment')
+        metrics = result['metrics']
+        self.assertEqual(metrics['claimed_sale_events'], 1)
+        self.assertEqual(metrics['claimed_sale_value'], 100)
+        self.assertEqual(
+            metrics['claimed_sale_status'],
+            'unverified_not_collected_revenue')
+        self.assertEqual(metrics['verified_collected_payments'], 0)
+        self.assertEqual(metrics['verified_net_revenue'], 0)
+        self.assertEqual(result['objective_score'], 25)
+        self.assertNotEqual(
+            result['plan'][0]['action'], 'replicate_verified_winning_segment')
 
     def test_settled_opportunity_payments_feed_mission_metrics_without_double_refunds(self):
         conn = sqlite3.connect(self.path)
@@ -76,7 +85,10 @@ class MissionControlTests(unittest.TestCase):
         conn.commit()
         metrics = mission_control.snapshot(conn)
         conn.close()
-        self.assertEqual(metrics['sales'], 3)
+        self.assertEqual(metrics['sales'], 2)
+        self.assertEqual(metrics['claimed_sale_events'], 1)
+        self.assertEqual(metrics['claimed_sale_value'], 100)
+        self.assertEqual(metrics['claimed_refund_value'], 20)
         self.assertEqual(metrics['verified_collected_payments'], 2)
         self.assertEqual(metrics['verified_one_time_payment_receipts'], 1)
         self.assertEqual(metrics['verified_recurring_payment_receipts'], 1)
@@ -89,9 +101,9 @@ class MissionControlTests(unittest.TestCase):
         self.assertEqual(metrics['verified_opportunity_gross_revenue'], 650)
         self.assertEqual(metrics['verified_opportunity_fees'], 30)
         self.assertEqual(metrics['verified_opportunity_net_revenue'], 620)
-        self.assertEqual(metrics['verified_gross_revenue'], 750)
-        self.assertEqual(metrics['verified_net_revenue'], 700)
-        self.assertEqual(mission_control.objective_score(metrics), 850)
+        self.assertEqual(metrics['verified_gross_revenue'], 650)
+        self.assertEqual(metrics['verified_net_revenue'], 620)
+        self.assertEqual(mission_control.objective_score(metrics), 720)
 
     def test_missing_payment_table_remains_backward_compatible(self):
         conn = sqlite3.connect(self.path)

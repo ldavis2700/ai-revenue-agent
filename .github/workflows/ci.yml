@@ -21,6 +21,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_delivery_adapter.py' -v
           python -m unittest discover -s tests -p 'test_opportunity_intake.py' -v
           python -m unittest discover -s tests -p 'test_revenue_report.py' -v
+          python -m unittest discover -s tests -p 'test_mission_control.py' -v
           python -m unittest discover -s tests -p 'test_consignment_payout.py' -v
           python -m unittest discover -s tests -p 'test_notification_audit.py' -v
       - name: Smoke test referral attribution loop
@@ -47,8 +48,11 @@ jobs:
           assert sale['duplicate'] is False
           assert report['active_partners'] == 1
           assert report['leads'] == 1
-          assert report['sales'] == 1
-          assert report['attributed_revenue'] == 100
+          assert report['claimed_sales'] == 1
+          assert report['claimed_attributed_value'] == 100
+          assert report['claim_status'] == 'unverified_not_collected_revenue'
+          assert 'sales' not in report
+          assert 'attributed_revenue' not in report
           assert report['payouts_enabled'] is False
           PY
       - name: Smoke test Supabase APEX request contract

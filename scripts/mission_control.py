@@ -83,9 +83,9 @@ def snapshot(conn):
     sent = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='sent'")
     replies = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='reply'")
     interested = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='interested'")
-    event_sales = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='sale'")
-    event_gross = scalar(conn, "SELECT COALESCE(SUM(value),0) FROM events WHERE event_type='sale'")
-    refunds = scalar(conn, "SELECT COALESCE(SUM(value),0) FROM events WHERE event_type='refund'")
+    claimed_sales = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='sale'")
+    claimed_sale_value = scalar(conn, "SELECT COALESCE(SUM(value),0) FROM events WHERE event_type='sale'")
+    claimed_refund_value = scalar(conn, "SELECT COALESCE(SUM(value),0) FROM events WHERE event_type='refund'")
     collected_payments = scalar(conn, "SELECT COUNT(*) FROM payment_receipts")
     recurring_payments = scalar(
         conn, "SELECT COUNT(*) FROM recurring_payment_receipts")
@@ -118,7 +118,11 @@ def snapshot(conn):
     return {
         'eligible_leads': eligible, 'sent': sent, 'replies': replies,
         'interested': interested,
-        'sales': event_sales + collected_payments + recurring_payments,
+        'sales': collected_payments + recurring_payments,
+        'claimed_sale_events': claimed_sales,
+        'claimed_sale_value': claimed_sale_value,
+        'claimed_refund_value': claimed_refund_value,
+        'claimed_sale_status': 'unverified_not_collected_revenue',
         'verified_collected_payments':
             collected_payments + recurring_payments,
         'verified_one_time_payment_receipts': collected_payments,
@@ -131,8 +135,8 @@ def snapshot(conn):
         'verified_opportunity_gross_revenue': opportunity_gross,
         'verified_opportunity_fees': opportunity_fees,
         'verified_opportunity_net_revenue': opportunity_net,
-        'verified_gross_revenue': event_gross + opportunity_gross, 'refunds': refunds,
-        'verified_net_revenue': event_gross - refunds + opportunity_net,
+        'verified_gross_revenue': opportunity_gross,
+        'verified_net_revenue': opportunity_net,
     }
 
 
