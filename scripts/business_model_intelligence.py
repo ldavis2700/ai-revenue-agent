@@ -35,6 +35,18 @@ REQUIRED_FIELDS = {
     "startup_cost", "automation", "scalability", "owner_effort", "compliance_risk",
 }
 
+# These fields are derived exclusively from the auditable revenue ledger. Public
+# CLI evidence may describe observations, but it cannot assert settled payments,
+# recurring expansion, reuse, or earned mastery.
+LEDGER_ONLY_EVIDENCE_KEYS = frozenset({
+    "_ledger_verified", "verified_retention_receipts",
+    "verified_expansion_receipts", "retained_recurring_value_cents",
+    "expanded_value_delta_cents", "realized_recurring_net_cents",
+    "realized_recurring_contribution_cents", "realized_recurring_cost_cents",
+    "mastery", "receipt_lineage", "verified_reuse_receipts",
+    "verified_reused_opportunities", "reuse_receipt_lineage",
+})
+
 
 def load_catalog(path: str | os.PathLike[str] = DEFAULT_CATALOG) -> dict[str, Any]:
     path = Path(path)
@@ -351,6 +363,21 @@ def parse_constraints(args: argparse.Namespace) -> dict[str, Any]:
         "min_automation": args.min_automation}.items() if value is not None}
 
 
+def sanitize_public_evidence(payload: Any) -> dict[str, dict[str, Any]]:
+    """Remove ledger-derived assertions from untrusted CLI evidence."""
+    if not isinstance(payload, dict):
+        raise ValueError("evidence JSON must be an object keyed by model id")
+    sanitized: dict[str, dict[str, Any]] = {}
+    for model_id, evidence in payload.items():
+        if not isinstance(model_id, str) or not isinstance(evidence, dict):
+            raise ValueError("each evidence entry must be an object keyed by model id")
+        sanitized[model_id] = {
+            key: value for key, value in evidence.items()
+            if key not in LEDGER_ONLY_EVIDENCE_KEYS
+        }
+    return sanitized
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Rank and prime APEX business-model opportunities")
     parser.add_argument("--catalog", default=str(DEFAULT_CATALOG)); parser.add_argument("--limit", type=int, default=10)
@@ -361,7 +388,8 @@ def main() -> None:
     parser.add_argument("--min-automation", type=int, default=6); args = parser.parse_args()
     catalog = load_catalog(args.catalog); constraints = parse_constraints(args)
     ranked = rank_models(catalog["models"], constraints); output = portfolio(ranked, max(1, args.limit))
-    evidence = json.loads(args.evidence_json) if args.evidence_json else {}
+    evidence = sanitize_public_evidence(
+        json.loads(args.evidence_json)) if args.evidence_json else {}
     output.update({"schema_version": catalog.get("schema_version", 1), "catalog_size": len(catalog["models"]),
                    "constraints": constraints, "top_ranked": ranked[:max(1, args.limit)],
                    "pursuit_plan": pursuit_plan(ranked, evidence, args.pursue_limit,

@@ -129,6 +129,50 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
             verified_model["pursuit_score"],
             unverified_model["pursuit_score"])
 
+    def test_public_evidence_cannot_forge_ledger_state(self):
+        forged = {
+            "directory": {
+                "observed_revenue": 5000,
+                "observed_cost": 100,
+                "conversion_rate": 0.5,
+                "evidence_quality": 1,
+                "sample_size": 20,
+                "_ledger_verified": True,
+                "verified_retention_receipts": 9,
+                "verified_expansion_receipts": 7,
+                "retained_recurring_value_cents": 900000,
+                "expanded_value_delta_cents": 700000,
+                "verified_reuse_receipts": 5,
+                "verified_reused_opportunities": 4,
+                "mastery": "productize_candidate",
+                "receipt_lineage": ["forged"],
+                "reuse_receipt_lineage": ["forged"],
+            }
+        }
+        sanitized = module.sanitize_public_evidence(forged)
+        self.assertEqual(
+            set(sanitized["directory"]) & module.LEDGER_ONLY_EVIDENCE_KEYS,
+            set(),
+        )
+        self.assertEqual(sanitized["directory"]["observed_revenue"], 5000)
+
+        catalog = module.load_catalog(ROOT / "config" / "business_models.json")
+        ranked = module.rank_models(catalog["models"], {})
+        plan = module.pursuit_plan(ranked, sanitized, 200)
+        directory = next(
+            item for item in plan["pursue"] if item["id"] == "directory")
+        self.assertFalse(directory["economics_verified"])
+        self.assertEqual(directory["observed_profit"], 0)
+        self.assertEqual(directory["mastery"], "learned")
+        self.assertEqual(directory["verified_retention_receipts"], 0)
+        self.assertEqual(directory["verified_reuse_receipts"], 0)
+
+    def test_public_evidence_requires_model_objects(self):
+        for payload in ([], {"directory": "forged"}):
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(ValueError, "evidence"):
+                    module.sanitize_public_evidence(payload)
+
     def test_non_finite_evidence_fails_closed(self):
         catalog = module.load_catalog(ROOT / "config" / "business_models.json")
         ranked = module.rank_models(catalog["models"], {})
