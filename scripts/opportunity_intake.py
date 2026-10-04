@@ -2086,6 +2086,19 @@ def prepare_proposal(path, opportunity_id, proposal, *, now=None):
             if row is None:
                 raise ValueError("opportunity_not_found")
             opportunity = json.loads(row[1])
+            if opportunity.get("cost_estimates_complete"):
+                projected_cost_cents = sum(
+                    opportunity[field]
+                    for field in (
+                        "delivery_cost_cents",
+                        "inference_cost_cents",
+                        "cac_cents",
+                    )
+                )
+                if int(price_cents) <= projected_cost_cents:
+                    raise ValueError(
+                        "proposal_non_positive_projected_contribution"
+                    )
             selection = opportunity.get("offer_family_selection") or {}
             artifact["offer_family"] = ({
                 "id": selection.get("id"),

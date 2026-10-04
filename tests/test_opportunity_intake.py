@@ -1488,6 +1488,35 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(counts, (0, 0))
         self.assertEqual(state, "qualified")
 
+    def test_proposal_rejects_non_positive_projected_contribution(self):
+        result = opportunity_intake.ingest([candidate(
+            external_id="loss-making-proposal",
+            payout_cents=200000,
+            contract_value_cents=200000,
+            delivery_cost_cents=80000,
+            inference_cost_cents=10000,
+            cac_cents=10000,
+        )], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            with self.assertRaisesRegex(
+                    ValueError,
+                    "proposal_non_positive_projected_contribution"):
+                opportunity_intake.prepare_proposal(
+                    path, opportunity_id, self.proposal(), now=NOW)
+            connection = sqlite3.connect(path)
+            artifact_count = connection.execute(
+                "SELECT COUNT(*) FROM proposal_artifacts"
+            ).fetchone()[0]
+            state = connection.execute(
+                "SELECT pipeline_state FROM opportunities"
+            ).fetchone()[0]
+            connection.close()
+        self.assertEqual(artifact_count, 0)
+        self.assertEqual(state, "qualified")
+
     def test_proposal_rolls_back_if_transition_insert_fails(self):
         result = opportunity_intake.ingest([candidate()], now=NOW)
         opportunity_id = result["opportunities"][0]["id"]
