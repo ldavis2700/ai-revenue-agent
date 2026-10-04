@@ -805,6 +805,9 @@ def projected_unit_economics(opportunity):
         "projected_revenue_per_human_hour": round(
             contract_value / 100 / opportunity["human_operating_hours"], 2
         ),
+        "projected_contribution_per_human_hour": round(
+            contribution / 100 / opportunity["human_operating_hours"], 2
+        ),
         "evidence_status": "projected_not_collected",
     }
 
@@ -1294,10 +1297,13 @@ def score(opportunity):
         / max(opportunity["contract_value_cents"] * 3, 1)
     )
     economic_value_score = min(value_to_fee, 1)
-    leverage_score = min(
-        opportunity["unit_economics"]["projected_revenue_per_human_hour"] / 1000,
+    # Effective leverage must reflect contribution after delivery, API, and
+    # acquisition costs; gross revenue per hour can reward loss-making offers.
+    leverage_score = max(0, min(
+        opportunity["unit_economics"][
+            "projected_contribution_per_human_hour"] / 1000,
         1,
-    )
+    ))
     margin_score = max(
         0, min(opportunity["unit_economics"]["projected_contribution_margin"], 1)
     )

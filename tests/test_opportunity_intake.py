@@ -257,9 +257,44 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(economics["projected_contribution_cents"], 350000)
         self.assertEqual(economics["projected_contribution_margin"], 0.7)
         self.assertEqual(economics["projected_revenue_per_human_hour"], 1000.0)
+        self.assertEqual(
+            economics["projected_contribution_per_human_hour"], 700.0)
         self.assertEqual(economics["evidence_status"], "projected_not_collected")
         self.assertGreater(item["score_components"]["active_buyer_stage"], 0)
         self.assertGreater(item["score_components"]["effective_leverage"], 0)
+
+    def test_effective_leverage_uses_contribution_not_gross_revenue(self):
+        efficient = opportunity_intake.ingest([candidate(
+            external_id="efficient",
+            contract_value_cents=500000,
+            delivery_cost_cents=50000,
+            inference_cost_cents=0,
+            cac_cents=0,
+            human_operating_hours=5,
+        )], now=NOW)["opportunities"][0]
+        costly = opportunity_intake.ingest([candidate(
+            external_id="costly",
+            contract_value_cents=500000,
+            delivery_cost_cents=450000,
+            inference_cost_cents=0,
+            cac_cents=0,
+            human_operating_hours=5,
+        )], now=NOW)["opportunities"][0]
+
+        self.assertEqual(
+            efficient["unit_economics"]["projected_revenue_per_human_hour"],
+            costly["unit_economics"]["projected_revenue_per_human_hour"],
+        )
+        self.assertGreater(
+            efficient["unit_economics"][
+                "projected_contribution_per_human_hour"],
+            costly["unit_economics"][
+                "projected_contribution_per_human_hour"],
+        )
+        self.assertGreater(
+            efficient["score_components"]["effective_leverage"],
+            costly["score_components"]["effective_leverage"],
+        )
 
     def test_issue_164_buyer_intent_margin_and_reuse_change_ranking(self):
         stronger = candidate(
