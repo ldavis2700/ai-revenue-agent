@@ -10,6 +10,15 @@ from typing import Any
 
 VALIDATED_STATES = {"continue_validation", "scale_candidate"}
 RETIRED_STATES = {"deprioritize"}
+PUBLIC_LEDGER_ONLY_FIELDS = frozenset({
+    "_ledger_verified", "economics_verified", "observed_profit",
+    "verified_retention_receipts", "verified_expansion_receipts",
+    "verified_reuse_receipts", "verified_reused_opportunities",
+    "retained_recurring_value_cents", "expanded_value_delta_cents",
+    "realized_recurring_net_cents", "realized_recurring_contribution_cents",
+    "realized_recurring_cost_cents", "mastery", "receipt_lineage",
+    "reuse_receipt_lineage",
+})
 
 
 def _finite_number(value: Any, field: str) -> float:
@@ -148,12 +157,33 @@ def candidates_from_intelligence(payload: dict[str, Any]) -> list[dict[str, Any]
     return candidates if isinstance(candidates, list) else []
 
 
+def public_candidates_from_intelligence(
+    payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Strip ledger-derived assertions from an untrusted snapshot file."""
+    sanitized: list[dict[str, Any]] = []
+    for candidate in candidates_from_intelligence(payload):
+        if not isinstance(candidate, dict):
+            sanitized.append(candidate)
+            continue
+        public = {
+            key: value for key, value in candidate.items()
+            if key not in PUBLIC_LEDGER_ONLY_FIELDS
+        }
+        public["economics_verified"] = False
+        if public.get("experiment_state") in VALIDATED_STATES:
+            public["experiment_state"] = "validate"
+        sanitized.append(public)
+    return sanitized
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare APEX champion and challenger opportunities")
     parser.add_argument("--intelligence-json", required=True, help="Path to a business-model intelligence snapshot")
     args = parser.parse_args()
     payload = json.loads(Path(args.intelligence_json).read_text(encoding="utf-8"))
-    print(json.dumps(compare_candidates(candidates_from_intelligence(payload)), indent=2))
+    candidates = public_candidates_from_intelligence(payload)
+    print(json.dumps(compare_candidates(candidates), indent=2))
 
 
 if __name__ == "__main__":

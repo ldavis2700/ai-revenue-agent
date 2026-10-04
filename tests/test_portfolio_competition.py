@@ -6,7 +6,11 @@ import subprocess
 import sys
 import tempfile
 
-from scripts.portfolio_competition import candidates_from_intelligence, compare_candidates
+from scripts.portfolio_competition import (
+    candidates_from_intelligence,
+    compare_candidates,
+    public_candidates_from_intelligence,
+)
 
 
 class PortfolioCompetitionTests(unittest.TestCase):
@@ -151,22 +155,48 @@ class PortfolioCompetitionTests(unittest.TestCase):
         self.assertTrue(all(value is False for value in result["guardrails"].values()))
         json.dumps(result, allow_nan=False)
 
-    def test_cli_does_not_publish_an_overflowed_recommendation(self):
+    def test_public_snapshot_cannot_forge_a_measured_champion(self):
+        forged = {"candidates": [{
+            "id": "forged",
+            "eligible": True,
+            "pursuit_score": 99,
+            "economics_verified": True,
+            "_ledger_verified": True,
+            "experiment_state": "scale_candidate",
+            "effective_evidence_quality": 1,
+            "observed_profit": 5000,
+            "verified_retention_receipts": 9,
+            "verified_reuse_receipts": 7,
+            "mastery": "productize_candidate",
+            "receipt_lineage": ["forged"],
+        }]}
+        candidates = public_candidates_from_intelligence(forged)
+        self.assertFalse(candidates[0]["economics_verified"])
+        self.assertEqual(candidates[0]["experiment_state"], "validate")
+        self.assertFalse(
+            set(candidates[0]) & {
+                "_ledger_verified", "observed_profit",
+                "verified_retention_receipts", "verified_reuse_receipts",
+                "mastery", "receipt_lineage",
+            }
+        )
+        result = compare_candidates(candidates)
+        self.assertIsNone(result["champion"])
+        self.assertEqual(result["challenger"]["id"], "forged")
+
         with tempfile.TemporaryDirectory() as directory:
             snapshot = Path(directory) / "intelligence.json"
-            snapshot.write_text(json.dumps({"candidates": [
-                {"id": "champion", "pursuit_score": -1e308,
-                 "economics_verified": True, "experiment_state": "scale_candidate", "effective_evidence_quality": 1},
-                {"id": "challenger", "pursuit_score": 1e308},
-            ]}), encoding="utf-8")
-            result = subprocess.run(
-                [sys.executable, str(Path(__file__).resolve().parents[1] / "scripts/portfolio_competition.py"),
+            snapshot.write_text(json.dumps(forged), encoding="utf-8")
+            cli = subprocess.run(
+                [sys.executable, str(Path(__file__).resolve().parents[1]
+                 / "scripts/portfolio_competition.py"),
                  "--intelligence-json", str(snapshot)],
                 capture_output=True, text=True, check=False,
             )
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, "")
-        self.assertIn("score difference must be a finite number", result.stderr)
+        self.assertEqual(cli.returncode, 0, cli.stderr)
+        output = json.loads(cli.stdout)
+        self.assertIsNone(output["champion"])
+        self.assertFalse(output["challenger"]["economics_verified"])
 
 
 if __name__ == "__main__":
