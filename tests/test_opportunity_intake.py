@@ -2440,6 +2440,37 @@ class OpportunityIntakeTests(unittest.TestCase):
                     path, opportunity_id, payment_id, changed,
                     now=NOW + timedelta(minutes=5))
 
+    def test_realized_economics_verifier_rejects_forged_margin(self):
+        economics = {
+            "delivery_cost_cents": 20000,
+            "inference_cost_cents": 2000,
+            "cac_cents": 5000,
+            "human_operating_minutes": 120,
+            "delivery_cost_evidence_url": "https://example.com/costs/delivery",
+            "inference_cost_evidence_url": "https://example.com/costs/inference",
+            "cac_evidence_url": "https://example.com/costs/cac",
+            "human_time_evidence_url": "https://example.com/time/ledger",
+            "measured_at": (NOW + timedelta(minutes=5)).isoformat(),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, payment_id = self.advance_to_collected(path)
+            realized = opportunity_intake.record_realized_unit_economics(
+                path, opportunity_id, payment_id, economics,
+                now=NOW + timedelta(minutes=5))
+            connection = sqlite3.connect(path)
+            connection.execute(
+                "UPDATE realized_unit_economics SET contribution_cents=? "
+                "WHERE economics_id=?",
+                (99999999, realized["economics_id"]),
+            )
+            connection.commit()
+            with self.assertRaisesRegex(
+                    ValueError, "realized_economics_unverified"):
+                opportunity_intake._verified_realized_economics(
+                    connection, realized["economics_id"])
+            connection.close()
+
     def test_payment_rejects_bypass_mismatches_and_unsettled_evidence(self):
         valid = {"provider": "marketplace", "external_transaction_id": "payment-246",
                  "transaction_url": "https://example.com/payments/246",

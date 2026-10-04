@@ -3848,6 +3848,71 @@ def _verified_recurring_payment_receipt(
     return payment
 
 
+def _verified_realized_economics(connection, economics_id, *, recurring=False):
+    """Rebuild and verify an immutable realized-economics snapshot."""
+    table = (
+        "recurring_realized_unit_economics"
+        if recurring else "realized_unit_economics"
+    )
+    receipt_column = (
+        "recurring_payment_receipt_id" if recurring else "payment_receipt_id"
+    )
+    row = connection.execute(
+        f"""SELECT opportunity_id,{receipt_column},net_collected_cents,
+                   delivery_cost_cents,inference_cost_cents,cac_cents,
+                   human_operating_minutes,contribution_cents,
+                   contribution_margin,revenue_per_human_hour,
+                   contribution_per_human_hour,currency,evidence_json,
+                   evidence_hash,measured_at
+            FROM {table} WHERE economics_id=?""",
+        (economics_id,),
+    ).fetchone()
+    missing = (
+        "recurring_realized_economics_not_found"
+        if recurring else "realized_economics_not_found"
+    )
+    if row is None:
+        raise ValueError(missing)
+    try:
+        evidence = json.loads(row[12])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("realized_economics_unverified") from exc
+    if not isinstance(evidence, dict):
+        raise ValueError("realized_economics_unverified")
+    normalized = {
+        "opportunity_id": row[0],
+        receipt_column: row[1],
+        "net_collected_cents": row[2],
+        "delivery_cost_cents": row[3],
+        "inference_cost_cents": row[4],
+        "cac_cents": row[5],
+        "human_operating_minutes": row[6],
+        "contribution_cents": row[7],
+        "contribution_margin": row[8],
+        "revenue_per_human_hour": row[9],
+        "contribution_per_human_hour": row[10],
+        "currency": row[11],
+        "evidence": evidence,
+        "measured_at": row[14],
+        "evidence_status": (
+            "realized_from_settled_recurring_payment"
+            if recurring else "realized_from_settled_payment"
+        ),
+    }
+    serialized = json.dumps(
+        normalized, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    prefix = "rruec_" if recurring else "ruec_"
+    if row[13] != expected_hash or economics_id != prefix + expected_hash[:24]:
+        raise ValueError("realized_economics_unverified")
+    return {
+        "opportunity_id": row[0],
+        "payment_receipt_id": row[1],
+        "contribution_cents": row[7],
+        "measured_at": row[14],
+    }
+
+
 def record_recurring_withdrawable_balance(
         path, opportunity_id, recurring_payment_receipt_id, evidence, *, now=None):
     """Record provider evidence that settled recurring net is withdrawable."""
@@ -4299,14 +4364,17 @@ def record_recurring_growth_evidence(
                 raise ValueError("growth_evidence_opportunity_mismatch")
             if occurred_at < parse_time(payment[16], "recurring_settled_at"):
                 raise ValueError("growth_evidence_before_settlement")
-            economics = connection.execute(
-                """SELECT economics_id,contribution_cents
-                   FROM recurring_realized_unit_economics
+            economics_row = connection.execute(
+                """SELECT economics_id FROM recurring_realized_unit_economics
                    WHERE recurring_payment_receipt_id=?""",
                 (recurring_payment_receipt_id,)).fetchone()
-            if economics is None or economics[1] <= 0:
+            if economics_row is None:
                 raise ValueError("positive_recurring_contribution_required")
-            normalized["recurring_economics_id"] = economics[0]
+            economics = _verified_realized_economics(
+                connection, economics_row[0], recurring=True)
+            if economics["contribution_cents"] <= 0:
+                raise ValueError("positive_recurring_contribution_required")
+            normalized["recurring_economics_id"] = economics_row[0]
 
             prior_id = None
             baseline_scope = None
@@ -4379,7 +4447,8 @@ def record_recurring_growth_evidence(
                     expanded_value_cents,occurred_at,receipt_hash,recorded_at)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (receipt_id, opportunity_id, recurring_payment_receipt_id,
-                 economics[0], kind, provider, external_event_id, evidence_url,
+                 economics_row[0], kind, provider, external_event_id,
+                 evidence_url,
                  prior_id, baseline_scope, expanded_scope, baseline_value,
                  expanded_value, occurred_at.isoformat(), receipt_hash,
                  recorded.isoformat()))
@@ -4432,26 +4501,17 @@ def record_reusable_ip_reuse_evidence(
             if source[1].casefold() != reused[1].casefold() or source[2] != reused[2]:
                 raise ValueError("reused_asset_identity_mismatch")
             if economics_kind == "recurring":
-                economics = connection.execute(
-                    """SELECT opportunity_id,contribution_cents,measured_at,
-                              recurring_payment_receipt_id
-                       FROM recurring_realized_unit_economics
-                       WHERE economics_id=?""", (economics_id,)).fetchone()
-                missing_error = "recurring_realized_economics_not_found"
+                economics = _verified_realized_economics(
+                    connection, economics_id, recurring=True)
             else:
-                economics = connection.execute(
-                    """SELECT opportunity_id,contribution_cents,measured_at,
-                              payment_receipt_id
-                       FROM realized_unit_economics WHERE economics_id=?""",
-                    (economics_id,)).fetchone()
-                missing_error = "realized_economics_not_found"
-            if economics is None:
-                raise ValueError(missing_error)
-            if economics[0] != reused[0]:
+                economics = _verified_realized_economics(
+                    connection, economics_id)
+            if economics["opportunity_id"] != reused[0]:
                 raise ValueError("reuse_economics_opportunity_mismatch")
-            if economics[1] <= 0:
+            if economics["contribution_cents"] <= 0:
                 raise ValueError("positive_contribution_required")
-            if occurred_at < parse_time(economics[2], "reuse_economics_measured_at"):
+            if occurred_at < parse_time(
+                    economics["measured_at"], "reuse_economics_measured_at"):
                 raise ValueError("reuse_evidence_before_economics")
             normalized = {
                 "source_asset_id": source_asset_id,
@@ -4460,7 +4520,7 @@ def record_reusable_ip_reuse_evidence(
                 "reused_opportunity_id": reused[0],
                 "economics_kind": economics_kind,
                 "economics_id": economics_id,
-                "settled_payment_receipt_id": economics[3],
+                "settled_payment_receipt_id": economics["payment_receipt_id"],
                 "provider": provider,
                 "external_event_id": external_event_id,
                 "evidence_url": evidence_url,
@@ -4595,28 +4655,22 @@ def promote_reusable_ip_asset(
                         if reference in seen_economics:
                             raise ValueError(
                                 "recurring_economics_receipts_must_be_distinct")
-                        row = connection.execute(
-                            """SELECT opportunity_id,contribution_cents,
-                                      recurring_payment_receipt_id
-                               FROM recurring_realized_unit_economics
-                               WHERE economics_id=?""",
-                            (reference,)).fetchone()
-                        if row is None:
-                            raise ValueError(
-                                "recurring_realized_economics_not_found")
-                        if row[0] != opportunity_id:
+                        row = _verified_realized_economics(
+                            connection, reference, recurring=True)
+                        if row["opportunity_id"] != opportunity_id:
                             raise ValueError(
                                 "promotion_evidence_opportunity_mismatch")
-                        if row[1] <= 0:
+                        if row["contribution_cents"] <= 0:
                             raise ValueError("positive_contribution_required")
-                        if row[2] in seen_payments:
+                        if row["payment_receipt_id"] in seen_payments:
                             raise ValueError(
                                 "recurring_payment_receipts_must_be_distinct")
                         seen_economics.add(reference)
-                        seen_payments.add(row[2])
+                        seen_payments.add(row["payment_receipt_id"])
                         normalized_references.append({
                             "economics_id": reference,
-                            "recurring_payment_receipt_id": row[2],
+                            "recurring_payment_receipt_id":
+                                row["payment_receipt_id"],
                         })
                     resolved = {
                         "recurring_economics_receipts":
@@ -4640,36 +4694,31 @@ def promote_reusable_ip_asset(
                         if reference in seen_economics:
                             raise ValueError(
                                 "one_time_economics_receipts_must_be_distinct")
-                        row = connection.execute(
-                            """SELECT opportunity_id,contribution_cents,
-                                      payment_receipt_id
-                               FROM realized_unit_economics
-                               WHERE economics_id=?""",
-                            (reference,)).fetchone()
-                        if row is None:
-                            raise ValueError("realized_economics_not_found")
-                        if row[1] <= 0:
+                        row = _verified_realized_economics(
+                            connection, reference)
+                        if row["contribution_cents"] <= 0:
                             raise ValueError("positive_contribution_required")
-                        if row[2] in seen_payments:
+                        if row["payment_receipt_id"] in seen_payments:
                             raise ValueError(
                                 "one_time_payment_receipts_must_be_distinct")
-                        if row[0] != opportunity_id:
+                        if row["opportunity_id"] != opportunity_id:
                             linked_asset = connection.execute(
                                 """SELECT 1 FROM reusable_ip_assets
                                    WHERE opportunity_id=?
                                      AND lower(name)=lower(?)
                                      AND asset_type=?""",
-                                (row[0], asset[2], asset[3])).fetchone()
+                                (row["opportunity_id"], asset[2],
+                                 asset[3])).fetchone()
                             if linked_asset is None:
                                 raise ValueError(
                                     "repeatability_asset_identity_mismatch")
                         seen_economics.add(reference)
-                        seen_payments.add(row[2])
-                        seen_opportunities.add(row[0])
+                        seen_payments.add(row["payment_receipt_id"])
+                        seen_opportunities.add(row["opportunity_id"])
                         normalized_references.append({
                             "economics_id": reference,
-                            "payment_receipt_id": row[2],
-                            "opportunity_id": row[0],
+                            "payment_receipt_id": row["payment_receipt_id"],
+                            "opportunity_id": row["opportunity_id"],
                         })
                     if opportunity_id not in seen_opportunities:
                         raise ValueError(
