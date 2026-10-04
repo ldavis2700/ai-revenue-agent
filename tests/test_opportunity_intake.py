@@ -1488,6 +1488,46 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(counts, (0, 0))
         self.assertEqual(state, "qualified")
 
+    def test_proposal_records_proposal_specific_projected_economics(self):
+        result = opportunity_intake.ingest([candidate(
+            external_id="profitable-proposal",
+            payout_cents=200000,
+            contract_value_cents=200000,
+            delivery_cost_cents=40000,
+            inference_cost_cents=5000,
+            cac_cents=5000,
+            effort_hours=10,
+        )], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        proposal = self.proposal(
+            price_cents=150000,
+            milestones=[{
+                "title": "Validated implementation",
+                "deliverable": "Tested workflow and acceptance evidence.",
+                "amount_cents": 150000,
+                "due_days": 7,
+            }],
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            prepared = opportunity_intake.prepare_proposal(
+                path, opportunity_id, proposal, now=NOW)
+            connection = sqlite3.connect(path)
+            artifact = json.loads(connection.execute(
+                "SELECT artifact_json FROM proposal_artifacts WHERE proposal_id=?",
+                (prepared["proposal_id"],)).fetchone()[0])
+            connection.close()
+        economics = artifact["proposal_unit_economics"]
+        self.assertEqual(economics["basis"], "proposal_price")
+        self.assertEqual(economics["evidence_status"], "projected_not_collected")
+        self.assertEqual(economics["price_cents"], 150000)
+        self.assertEqual(economics["total_cost_cents"], 50000)
+        self.assertEqual(economics["projected_contribution_cents"], 100000)
+        self.assertEqual(economics["projected_contribution_margin"], 0.666667)
+        self.assertEqual(
+            economics["projected_contribution_per_human_hour_cents"], 10000.0)
+
     def test_proposal_rejects_non_positive_projected_contribution(self):
         result = opportunity_intake.ingest([candidate(
             external_id="loss-making-proposal",

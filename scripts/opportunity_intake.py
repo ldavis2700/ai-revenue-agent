@@ -2086,6 +2086,11 @@ def prepare_proposal(path, opportunity_id, proposal, *, now=None):
             if row is None:
                 raise ValueError("opportunity_not_found")
             opportunity = json.loads(row[1])
+            proposal_economics = {
+                "basis": "proposal_price",
+                "evidence_status": "cost_estimates_incomplete",
+                "price_cents": int(price_cents),
+            }
             if opportunity.get("cost_estimates_complete"):
                 projected_cost_cents = sum(
                     opportunity[field]
@@ -2095,10 +2100,28 @@ def prepare_proposal(path, opportunity_id, proposal, *, now=None):
                         "cac_cents",
                     )
                 )
-                if int(price_cents) <= projected_cost_cents:
+                projected_contribution_cents = (
+                    int(price_cents) - projected_cost_cents
+                )
+                if projected_contribution_cents <= 0:
                     raise ValueError(
                         "proposal_non_positive_projected_contribution"
                     )
+                effort_hours = opportunity["effort_hours"]
+                proposal_economics.update({
+                    "evidence_status": "projected_not_collected",
+                    "delivery_cost_cents": opportunity["delivery_cost_cents"],
+                    "inference_cost_cents": opportunity["inference_cost_cents"],
+                    "cac_cents": opportunity["cac_cents"],
+                    "total_cost_cents": projected_cost_cents,
+                    "projected_contribution_cents": projected_contribution_cents,
+                    "projected_contribution_margin": round(
+                        projected_contribution_cents / int(price_cents), 6),
+                    "required_human_hours": effort_hours,
+                    "projected_contribution_per_human_hour_cents": round(
+                        projected_contribution_cents / effort_hours, 2),
+                })
+            artifact["proposal_unit_economics"] = proposal_economics
             selection = opportunity.get("offer_family_selection") or {}
             artifact["offer_family"] = ({
                 "id": selection.get("id"),
