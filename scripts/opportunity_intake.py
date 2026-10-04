@@ -799,6 +799,12 @@ def projected_unit_economics(opportunity):
         "delivery_cost_cents": opportunity["delivery_cost_cents"],
         "inference_cost_cents": opportunity["inference_cost_cents"],
         "cac_cents": opportunity["cac_cents"],
+        "cost_estimates_complete": opportunity["cost_estimates_complete"],
+        "cost_evidence_status": (
+            "complete_projected_inputs"
+            if opportunity["cost_estimates_complete"]
+            else "incomplete_projected_inputs"
+        ),
         "projected_contribution_cents": contribution,
         "projected_contribution_margin": round(margin, 6),
         "human_operating_hours": opportunity["human_operating_hours"],
@@ -890,6 +896,10 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
     inference_cost_cents = finite_number(
         payload, "inference_cost_cents", minimum=0, required=False)
     cac_cents = finite_number(payload, "cac_cents", minimum=0, required=False)
+    cost_estimates_complete = all(
+        value is not None
+        for value in (delivery_cost_cents, inference_cost_cents, cac_cents)
+    )
     human_operating_hours = finite_number(
         payload, "human_operating_hours", minimum=0.01, maximum=10000,
         required=False)
@@ -1105,6 +1115,7 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         "delivery_cost_cents": int(delivery_cost_cents or 0),
         "inference_cost_cents": int(inference_cost_cents or 0),
         "cac_cents": int(cac_cents or 0),
+        "cost_estimates_complete": cost_estimates_complete,
         "human_operating_hours": human_operating_hours or effort_hours,
         "measurable_outcome": boolean_flag(payload, "measurable_outcome"),
         "automation_potential": finite_number(
@@ -1299,13 +1310,24 @@ def score(opportunity):
     economic_value_score = min(value_to_fee, 1)
     # Effective leverage must reflect contribution after delivery, API, and
     # acquisition costs; gross revenue per hour can reward loss-making offers.
-    leverage_score = max(0, min(
-        opportunity["unit_economics"][
-            "projected_contribution_per_human_hour"] / 1000,
-        1,
-    ))
-    margin_score = max(
-        0, min(opportunity["unit_economics"]["projected_contribution_margin"], 1)
+    cost_estimates_complete = opportunity["cost_estimates_complete"]
+    leverage_score = (
+        max(0, min(
+            opportunity["unit_economics"][
+                "projected_contribution_per_human_hour"] / 1000,
+            1,
+        ))
+        if cost_estimates_complete else 0
+    )
+    margin_score = (
+        max(
+            0,
+            min(
+                opportunity["unit_economics"]["projected_contribution_margin"],
+                1,
+            ),
+        )
+        if cost_estimates_complete else 0
     )
     remaining_positions = None
     if (opportunity["positions_to_hire"] is not None

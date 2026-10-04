@@ -260,8 +260,39 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(
             economics["projected_contribution_per_human_hour"], 700.0)
         self.assertEqual(economics["evidence_status"], "projected_not_collected")
+        self.assertTrue(economics["cost_estimates_complete"])
+        self.assertEqual(
+            economics["cost_evidence_status"], "complete_projected_inputs")
         self.assertGreater(item["score_components"]["active_buyer_stage"], 0)
         self.assertGreater(item["score_components"]["effective_leverage"], 0)
+
+    def test_missing_cost_estimates_do_not_earn_margin_or_leverage(self):
+        complete = opportunity_intake.ingest([candidate(
+            external_id="complete-cost-estimates",
+            delivery_cost_cents=0,
+            inference_cost_cents=0,
+            cac_cents=0,
+        )], now=NOW)["opportunities"][0]
+        incomplete = opportunity_intake.ingest([candidate(
+            external_id="missing-cost-estimates",
+        )], now=NOW)["opportunities"][0]
+
+        self.assertTrue(complete["cost_estimates_complete"])
+        self.assertFalse(incomplete["cost_estimates_complete"])
+        self.assertEqual(
+            incomplete["unit_economics"]["cost_evidence_status"],
+            "incomplete_projected_inputs",
+        )
+        self.assertEqual(
+            incomplete["score_components"]["effective_leverage"], 0)
+        self.assertEqual(
+            incomplete["score_components"]["automation_and_margin"],
+            5 * incomplete["automation_potential"],
+        )
+        self.assertGreater(
+            complete["score_components"]["effective_leverage"], 0)
+        self.assertGreater(
+            complete["score_components"]["automation_and_margin"], 0)
 
     def test_effective_leverage_uses_contribution_not_gross_revenue(self):
         efficient = opportunity_intake.ingest([candidate(
