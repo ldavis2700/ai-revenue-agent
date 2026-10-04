@@ -1,6 +1,7 @@
 import importlib.util
 from datetime import datetime, timezone
 from pathlib import Path
+import math
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -127,6 +128,48 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
         self.assertGreater(
             verified_model["pursuit_score"],
             unverified_model["pursuit_score"])
+
+    def test_non_finite_evidence_fails_closed(self):
+        catalog = module.load_catalog(ROOT / "config" / "business_models.json")
+        ranked = module.rank_models(catalog["models"], {})
+        fields = (
+            "observed_revenue",
+            "observed_cost",
+            "conversion_rate",
+            "evidence_quality",
+            "sample_size",
+        )
+        for field in fields:
+            for value in (math.nan, math.inf, -math.inf):
+                with self.subTest(field=field, value=value):
+                    with self.assertRaisesRegex(
+                        ValueError, f"{field} must be a finite number"
+                    ):
+                        module.pursuit_plan(
+                            ranked,
+                            {"directory": {
+                                field: value,
+                                "_ledger_verified": True,
+                            }},
+                            10,
+                        )
+
+    def test_non_finite_half_life_fails_closed(self):
+        catalog = module.load_catalog(ROOT / "config" / "business_models.json")
+        ranked = module.rank_models(catalog["models"], {})
+        with self.assertRaisesRegex(
+            ValueError, "evidence_half_life_days must be a finite number"
+        ):
+            module.pursuit_plan(
+                ranked,
+                {"directory": {
+                    "observed_at": "2026-08-31T00:00:00Z",
+                    "evidence_quality": 1,
+                }},
+                10,
+                now=datetime(2026, 8, 31, tzinfo=timezone.utc),
+                evidence_half_life_days=math.inf,
+            )
 
     def test_old_evidence_decays_influence(self):
         catalog = module.load_catalog(ROOT / "config" / "business_models.json")

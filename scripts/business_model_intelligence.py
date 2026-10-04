@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -125,6 +126,19 @@ def portfolio(ranked: list[dict[str, Any]], limit: int = 10) -> dict[str, Any]:
         "automatic_production_deploy": False, "automatic_unsolicited_outreach": False}}
 
 
+def _finite_evidence_number(value: Any, field: str) -> float:
+    """Reject booleans, NaN, and infinity before they can alter rankings."""
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be a finite number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{field} must be a finite number") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{field} must be a finite number")
+    return number
+
+
 def _parse_observed_at(value: Any) -> datetime | None:
     if not value:
         return None
@@ -151,7 +165,8 @@ def evidence_freshness(evidence: dict[str, Any], now: datetime | None = None,
     if observed_at > now:
         return 0.0
     age_days = (now - observed_at).total_seconds() / 86400.0
-    half_life_days = max(1.0, float(half_life_days))
+    half_life_days = max(
+        1.0, _finite_evidence_number(half_life_days, "evidence_half_life_days"))
     return round(0.5 ** (age_days / half_life_days), 4)
 
 
@@ -159,7 +174,11 @@ def evidence_reliability(evidence: dict[str, Any]) -> float:
     """Temper small samples while keeping backward compatibility for uncounted legacy evidence."""
     if "sample_size" not in evidence:
         return 1.0
-    sample_size = max(0.0, float(evidence.get("sample_size", 0) or 0))
+    sample_size = max(
+        0.0,
+        _finite_evidence_number(
+            evidence.get("sample_size", 0) or 0, "sample_size"),
+    )
     return round(min(1.0, sample_size / 20.0), 4)
 
 
@@ -202,11 +221,39 @@ def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]]
     for model in ranked:
         evidence = active.get(model["id"], {})
         claimed_revenue = max(
-            0.0, float(evidence.get("observed_revenue", 0) or 0))
+            0.0,
+            _finite_evidence_number(
+                evidence.get("observed_revenue", 0) or 0,
+                "observed_revenue",
+            ),
+        )
         claimed_cost = max(
-            0.0, float(evidence.get("observed_cost", 0) or 0))
-        conversion = min(1.0, max(0.0, float(evidence.get("conversion_rate", 0) or 0)))
-        quality = min(1.0, max(0.0, float(evidence.get("evidence_quality", 0) or 0)))
+            0.0,
+            _finite_evidence_number(
+                evidence.get("observed_cost", 0) or 0,
+                "observed_cost",
+            ),
+        )
+        conversion = min(
+            1.0,
+            max(
+                0.0,
+                _finite_evidence_number(
+                    evidence.get("conversion_rate", 0) or 0,
+                    "conversion_rate",
+                ),
+            ),
+        )
+        quality = min(
+            1.0,
+            max(
+                0.0,
+                _finite_evidence_number(
+                    evidence.get("evidence_quality", 0) or 0,
+                    "evidence_quality",
+                ),
+            ),
+        )
         freshness = evidence_freshness(evidence, now, evidence_half_life_days)
         reliability = evidence_reliability(evidence)
         effective_quality = round(quality * freshness * reliability, 4)
@@ -245,7 +292,15 @@ def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]]
         pursuit_score = round(
             model["apex_score"] + evidence_bonus + recurring_growth_bonus
             + verified_reuse_bonus, 2)
-        sample_size = None if "sample_size" not in evidence else max(0.0, float(evidence.get("sample_size", 0) or 0))
+        sample_size = (
+            None
+            if "sample_size" not in evidence
+            else max(
+                0.0,
+                _finite_evidence_number(
+                    evidence.get("sample_size", 0) or 0, "sample_size"),
+            )
+        )
         enriched.append({
             **model,
             "pursuit_score": pursuit_score,
