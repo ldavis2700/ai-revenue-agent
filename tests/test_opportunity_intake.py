@@ -665,14 +665,39 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(item["action_mode"], "prepare_only")
 
     def test_autonomous_submit_requires_all_authorization_signals(self):
-        item = candidate(platform_allows_automation=True, authenticated_channel=True,
-                         submission_authorized=True,
-                         **submission_authorization())
+        item = candidate(
+            platform_allows_automation=True,
+            authenticated_channel=True,
+            submission_authorized=True,
+            delivery_cost_cents=0,
+            inference_cost_cents=0,
+            cac_cents=0,
+            **submission_authorization(),
+        )
         accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
         self.assertEqual(accepted["action_mode"], "autonomous_submit")
         item["requires_owner_identity"] = True
         accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
         self.assertEqual(accepted["action_mode"], "prepare_only")
+
+    def test_autonomous_submit_requires_complete_cost_estimates(self):
+        item = candidate(
+            external_id="missing-autonomous-costs",
+            platform_allows_automation=True,
+            authenticated_channel=True,
+            submission_authorized=True,
+            **submission_authorization(external_id="missing-autonomous-costs"),
+        )
+        accepted = opportunity_intake.ingest(
+            [item], now=NOW
+        )["opportunities"][0]
+
+        self.assertFalse(accepted["cost_estimates_complete"])
+        self.assertEqual(accepted["action_mode"], "prepare_only")
+        self.assertEqual(
+            accepted["unit_economics"]["cost_evidence_status"],
+            "incomplete_projected_inputs",
+        )
 
     def test_rejects_string_authorization_and_listing_flags(self):
         fields = [
@@ -698,6 +723,9 @@ class OpportunityIntakeTests(unittest.TestCase):
             platform_allows_automation=True,
             authenticated_channel=True,
             submission_authorized=True,
+            delivery_cost_cents=0,
+            inference_cost_cents=0,
+            cac_cents=0,
             **submission_authorization(),
             application_cost_units=11,
             application_units_balance=150,

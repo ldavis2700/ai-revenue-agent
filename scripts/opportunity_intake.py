@@ -1387,6 +1387,7 @@ def score(opportunity):
 def action_mode(opportunity):
     if (opportunity["platform_allows_automation"] and opportunity["authenticated_channel"]
             and opportunity["submission_authorized"] and not opportunity["requires_owner_identity"]
+            and opportunity["cost_estimates_complete"]
             and (opportunity["application_cost_units"] == 0
                  or opportunity["application_spend_authorized"])
             and opportunity["payment_rail_status"] == "clear"
