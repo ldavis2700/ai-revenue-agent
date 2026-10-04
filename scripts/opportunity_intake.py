@@ -3738,6 +3738,27 @@ def record_realized_unit_economics(
             margin = contribution / net_collected
             revenue_per_hour = net_collected / 100 / hours
             contribution_per_hour = contribution / 100 / hours
+            proposal = connection.execute(
+                """SELECT proposal_id,artifact_json FROM proposal_artifacts
+                   WHERE opportunity_id=? ORDER BY created_at DESC LIMIT 1""",
+                (opportunity_id,)).fetchone()
+            if proposal:
+                proposal_artifact = json.loads(proposal[1])
+                projected = proposal_artifact.get(
+                    "proposal_unit_economics") or {}
+                if projected.get("evidence_status") == "projected_not_collected":
+                    evidence["proposal_projection_comparison"] = {
+                        "proposal_id": proposal[0],
+                        "projected_contribution_cents": projected[
+                            "projected_contribution_cents"],
+                        "realized_contribution_cents": contribution,
+                        "contribution_variance_cents": (
+                            contribution
+                            - projected["projected_contribution_cents"]),
+                        "projected_contribution_margin": projected[
+                            "projected_contribution_margin"],
+                        "realized_contribution_margin": round(margin, 6),
+                    }
             normalized = {
                 "opportunity_id": opportunity_id,
                 "payment_receipt_id": payment_receipt_id,

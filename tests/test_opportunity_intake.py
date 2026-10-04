@@ -2361,7 +2361,14 @@ class OpportunityIntakeTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "opportunities.db")
-            opportunity_id, payment_id = self.advance_to_collected(path)
+            opportunity_id, payment_id = self.advance_to_collected(
+                path,
+                candidate_overrides={
+                    "delivery_cost_cents": 20000,
+                    "inference_cost_cents": 2000,
+                    "cac_cents": 5000,
+                },
+            )
             first = opportunity_intake.record_realized_unit_economics(
                 path, opportunity_id, payment_id, economics,
                 now=NOW + timedelta(minutes=5))
@@ -2386,6 +2393,12 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(first["contribution_margin"], 0.721649)
         self.assertEqual(first["revenue_per_human_hour"], 485.0)
         self.assertEqual(first["contribution_per_human_hour"], 350.0)
+        comparison = first["evidence"]["proposal_projection_comparison"]
+        self.assertEqual(comparison["projected_contribution_cents"], 73000)
+        self.assertEqual(comparison["realized_contribution_cents"], 70000)
+        self.assertEqual(comparison["contribution_variance_cents"], -3000)
+        self.assertEqual(comparison["projected_contribution_margin"], 0.73)
+        self.assertEqual(comparison["realized_contribution_margin"], 0.721649)
         self.assertEqual(row, (
             97000, 70000, 0.721649, 485.0, 350.0, "USD", 64))
         self.assertEqual(state, "collected")
