@@ -2566,6 +2566,60 @@ class OpportunityIntakeTests(unittest.TestCase):
                     connection, realized["economics_id"])
             connection.close()
 
+    def test_forecast_accuracy_uses_only_reverified_settled_economics(self):
+        economics = {
+            "delivery_cost_cents": 20000,
+            "inference_cost_cents": 2000,
+            "cac_cents": 5000,
+            "human_operating_minutes": 120,
+            "delivery_cost_evidence_url":
+                "https://example.com/costs/delivery",
+            "inference_cost_evidence_url":
+                "https://example.com/costs/inference",
+            "cac_evidence_url": "https://example.com/costs/cac",
+            "human_time_evidence_url": "https://example.com/time/ledger",
+            "measured_at": (NOW + timedelta(minutes=5)).isoformat(),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, payment_id = self.advance_to_collected(
+                path,
+                candidate_overrides={
+                    "delivery_cost_cents": 20000,
+                    "inference_cost_cents": 2000,
+                    "cac_cents": 5000,
+                },
+            )
+            opportunity_intake.record_realized_unit_economics(
+                path, opportunity_id, payment_id, economics,
+                now=NOW + timedelta(minutes=5))
+            summary = opportunity_intake.summarize_verified_forecast_accuracy(
+                path)
+            connection = sqlite3.connect(path)
+            connection.execute(
+                "UPDATE payment_receipts SET net_amount_cents=? "
+                "WHERE receipt_id=?",
+                (99999999, payment_id),
+            )
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                    ValueError, "realized_economics_unverified"):
+                opportunity_intake.summarize_verified_forecast_accuracy(path)
+        self.assertEqual(summary, {
+            "verified_comparison_count": 1,
+            "by_currency": {
+                "USD": {
+                    "comparison_count": 1,
+                    "projected_contribution_cents": 73000,
+                    "realized_contribution_cents": 70000,
+                    "net_variance_cents": -3000,
+                    "mean_absolute_error_cents": 3000.0,
+                },
+            },
+            "status": "verified_settled_forecast_accuracy",
+        })
+
     def test_payment_rejects_bypass_mismatches_and_unsettled_evidence(self):
         valid = {"provider": "marketplace", "external_transaction_id": "payment-246",
                  "transaction_url": "https://example.com/payments/246",

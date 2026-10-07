@@ -3992,6 +3992,60 @@ def _verified_realized_economics(connection, economics_id, *, recurring=False):
     }
 
 
+def summarize_verified_forecast_accuracy(path):
+    """Aggregate proposal forecast accuracy from reverified settled economics."""
+    connection = open_ledger(path)
+    try:
+        economics_ids = [
+            row[0] for row in connection.execute(
+                """SELECT economics_id FROM realized_unit_economics
+                   ORDER BY measured_at,economics_id"""
+            ).fetchall()
+        ]
+        by_currency = {}
+        verified_count = 0
+        for economics_id in economics_ids:
+            _verified_realized_economics(connection, economics_id)
+            row = connection.execute(
+                """SELECT currency,evidence_json
+                   FROM realized_unit_economics WHERE economics_id=?""",
+                (economics_id,),
+            ).fetchone()
+            evidence = json.loads(row[1])
+            comparison = evidence.get("proposal_projection_comparison")
+            if comparison is None:
+                continue
+            verified_count += 1
+            bucket = by_currency.setdefault(row[0], {
+                "comparison_count": 0,
+                "projected_contribution_cents": 0,
+                "realized_contribution_cents": 0,
+                "net_variance_cents": 0,
+                "absolute_error_cents": 0,
+            })
+            variance = comparison["contribution_variance_cents"]
+            bucket["comparison_count"] += 1
+            bucket["projected_contribution_cents"] += (
+                comparison["projected_contribution_cents"])
+            bucket["realized_contribution_cents"] += (
+                comparison["realized_contribution_cents"])
+            bucket["net_variance_cents"] += variance
+            bucket["absolute_error_cents"] += abs(variance)
+        for bucket in by_currency.values():
+            bucket["mean_absolute_error_cents"] = round(
+                bucket.pop("absolute_error_cents")
+                / bucket["comparison_count"],
+                2,
+            )
+        return {
+            "verified_comparison_count": verified_count,
+            "by_currency": by_currency,
+            "status": "verified_settled_forecast_accuracy",
+        }
+    finally:
+        connection.close()
+
+
 def record_recurring_withdrawable_balance(
         path, opportunity_id, recurring_payment_receipt_id, evidence, *, now=None):
     """Record provider evidence that settled recurring net is withdrawable."""
