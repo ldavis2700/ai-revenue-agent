@@ -16,6 +16,7 @@ from portfolio_competition import compare_candidates
 from opportunity_intake import (
     _verified_realized_economics,
     _verified_recurring_growth_evidence,
+    _verified_reusable_ip_maturity,
     _verified_reusable_ip_reuse_evidence,
 )
 import experiment_queue
@@ -186,6 +187,14 @@ def ledger_business_model_evidence(conn):
                    p.net_amount_cents, e.contribution_cents,
                    (e.delivery_cost_cents + e.inference_cost_cents + e.cac_cents)
                      AS realized_cost_cents,
+                   (SELECT a.asset_id FROM reusable_ip_assets a
+                    WHERE a.opportunity_id=g.opportunity_id
+                    ORDER BY CASE a.maturity
+                      WHEN 'productize_candidate' THEN 4
+                      WHEN 'scale_candidate' THEN 3
+                      WHEN 'repeatable_positive_margin' THEN 2
+                      WHEN 'paid_validated' THEN 1
+                      ELSE 0 END DESC LIMIT 1) AS mastery_asset_id,
                    (SELECT a.maturity FROM reusable_ip_assets a
                     WHERE a.opportunity_id=g.opportunity_id
                     ORDER BY CASE a.maturity
@@ -210,6 +219,10 @@ def ledger_business_model_evidence(conn):
     for row in rows:
         _verified_recurring_growth_evidence(
             conn, row['growth_receipt_id'])
+        verified_maturity = 'learned'
+        if row['mastery_asset_id']:
+            verified_maturity = _verified_reusable_ip_maturity(
+                conn, row['mastery_asset_id'])['maturity']
         try:
             payload = json.loads(row['payload_json'])
         except (TypeError, ValueError):
@@ -249,7 +262,7 @@ def ledger_business_model_evidence(conn):
             item['expanded_value_delta_cents'] += max(
                 0, (row['expanded_value_cents'] or 0)
                 - (row['baseline_value_cents'] or 0))
-        maturity = row['mastery'] or 'learned'
+        maturity = verified_maturity
         if MASTERY_ORDER.get(maturity, 0) > MASTERY_ORDER[item['mastery']]:
             item['mastery'] = maturity
         item['receipt_lineage'].append({
@@ -266,7 +279,8 @@ def ledger_business_model_evidence(conn):
     try:
         reuse_rows = conn.execute('''
             SELECT r.receipt_id AS reuse_receipt_id,
-                   r.source_opportunity_id, r.reused_opportunity_id,
+                   r.source_asset_id, r.source_opportunity_id,
+                   r.reused_opportunity_id,
                    r.economics_kind, r.economics_id, r.occurred_at,
                    source_o.payload_json, source_a.maturity,
                    CASE r.economics_kind
@@ -305,6 +319,8 @@ def ledger_business_model_evidence(conn):
     for row in reuse_rows:
         _verified_reusable_ip_reuse_evidence(
             conn, row['reuse_receipt_id'])
+        verified_maturity = _verified_reusable_ip_maturity(
+            conn, row['source_asset_id'])['maturity']
         try:
             payload = json.loads(row['payload_json'])
         except (TypeError, ValueError):
@@ -331,7 +347,7 @@ def ledger_business_model_evidence(conn):
         })
         item['verified_reuse_receipts'] += 1
         item['_reused_opportunities'].add(row['reused_opportunity_id'])
-        maturity = row['maturity'] or 'learned'
+        maturity = verified_maturity
         if MASTERY_ORDER.get(maturity, 0) > MASTERY_ORDER[item['mastery']]:
             item['mastery'] = maturity
         item['reuse_receipt_lineage'].append({

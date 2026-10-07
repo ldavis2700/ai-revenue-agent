@@ -3377,6 +3377,30 @@ class OpportunityIntakeTests(unittest.TestCase):
             connection.close()
 
             connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE reusable_ip_reuse_receipts
+                   SET evidence_url=? WHERE receipt_id=?""",
+                ("https://example.com/deliveries/reuse-client-2",
+                 reuse["receipt_id"]))
+            verified_maturity = (
+                opportunity_intake._verified_reusable_ip_maturity(
+                    connection, asset_id))
+            original_hash = connection.execute(
+                """SELECT evidence_hash FROM reusable_ip_promotions
+                   WHERE asset_id=? AND to_maturity='productize_candidate'""",
+                (asset_id,)).fetchone()[0]
+            connection.execute(
+                """UPDATE reusable_ip_promotions SET evidence_hash='forged'
+                   WHERE asset_id=? AND to_maturity='productize_candidate'""",
+                (asset_id,))
+            with self.assertRaisesRegex(
+                    ValueError, "reusable_ip_maturity_unverified"):
+                opportunity_intake._verified_reusable_ip_maturity(
+                    connection, asset_id)
+            connection.execute(
+                """UPDATE reusable_ip_promotions SET evidence_hash=?
+                   WHERE asset_id=? AND to_maturity='productize_candidate'""",
+                (original_hash, asset_id))
             maturity = connection.execute(
                 "SELECT maturity FROM reusable_ip_assets WHERE asset_id=?",
                 (asset_id,)).fetchone()[0]
@@ -3395,6 +3419,9 @@ class OpportunityIntakeTests(unittest.TestCase):
             len(repeatable["evidence"]["one_time_economics_receipts"]), 2)
         self.assertTrue(scale["changed"])
         self.assertTrue(productized["changed"])
+        self.assertEqual(
+            verified_maturity["maturity"], "productize_candidate")
+        self.assertEqual(verified_maturity["promotion_count"], 4)
         self.assertEqual(
             verified_reuse["reused_opportunity_id"], reused_opportunity_id)
         self.assertFalse(duplicate["changed"])

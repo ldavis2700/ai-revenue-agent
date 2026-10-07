@@ -4854,6 +4854,117 @@ def _verified_reusable_ip_reuse_evidence(connection, receipt_id):
     return normalized
 
 
+def _verified_reusable_ip_maturity(connection, asset_id):
+    """Rebuild an asset's earned-mastery chain from immutable ledger receipts."""
+    asset = connection.execute(
+        """SELECT opportunity_id,maturity,evidence_json,evidence_hash
+           FROM reusable_ip_assets WHERE asset_id=?""", (asset_id,)).fetchone()
+    if asset is None:
+        raise ValueError("reusable_ip_maturity_unverified")
+    opportunity_id, claimed_maturity, asset_evidence, asset_hash = asset
+    if claimed_maturity not in REUSABLE_IP_MATURITY:
+        raise ValueError("reusable_ip_maturity_unverified")
+    promotions = connection.execute(
+        """SELECT promotion_id,from_maturity,to_maturity,evidence_json,
+                  evidence_hash
+           FROM reusable_ip_promotions WHERE asset_id=?
+           ORDER BY rowid""", (asset_id,)).fetchall()
+    expected_count = REUSABLE_IP_MATURITY[claimed_maturity]
+    if len(promotions) != expected_count:
+        raise ValueError("reusable_ip_maturity_unverified")
+
+    current = "learned"
+    last_json = last_hash = None
+    for promotion in promotions:
+        promotion_id, from_maturity, to_maturity, evidence_json, evidence_hash = promotion
+        if (
+            from_maturity != current
+            or REUSABLE_IP_MATURITY.get(to_maturity) != REUSABLE_IP_MATURITY[current] + 1
+        ):
+            raise ValueError("reusable_ip_maturity_unverified")
+        try:
+            evidence = json.loads(evidence_json)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("reusable_ip_maturity_unverified") from exc
+        canonical = json.dumps(evidence, sort_keys=True, separators=(",", ":"))
+        expected_hash = hashlib.sha256(canonical.encode()).hexdigest()
+        if (
+            canonical != evidence_json
+            or evidence_hash != expected_hash
+            or promotion_id != "ipp_" + expected_hash[:24]
+            or evidence.get("asset_id") != asset_id
+            or evidence.get("opportunity_id") != opportunity_id
+            or evidence.get("from_maturity") != from_maturity
+            or evidence.get("to_maturity") != to_maturity
+        ):
+            raise ValueError("reusable_ip_maturity_unverified")
+
+        try:
+            if to_maturity == "paid_validated":
+                if evidence.get("payment_receipt_id"):
+                    receipt = _verified_payment_receipt(
+                        connection, evidence["payment_receipt_id"])
+                else:
+                    receipt = _verified_recurring_payment_receipt(
+                        connection, evidence["recurring_payment_receipt_id"])
+                if receipt[0] != opportunity_id:
+                    raise ValueError("promotion_evidence_opportunity_mismatch")
+            elif to_maturity == "repeatable_positive_margin":
+                entries = evidence.get("one_time_economics_receipts")
+                recurring = False
+                if entries is None:
+                    entries = evidence.get("recurring_economics_receipts")
+                    recurring = True
+                if not isinstance(entries, list) or len(entries) < 2:
+                    raise ValueError("repeatability_receipts_missing")
+                for entry in entries:
+                    verified = _verified_realized_economics(
+                        connection, entry["economics_id"], recurring=recurring)
+                    expected_payment = entry[
+                        "recurring_payment_receipt_id" if recurring
+                        else "payment_receipt_id"]
+                    if verified["payment_receipt_id"] != expected_payment:
+                        raise ValueError("repeatability_receipt_mismatch")
+            else:
+                growth_id = (evidence.get("growth_receipt_id")
+                             or evidence.get("recurring_growth_receipt_id"))
+                if evidence.get("recurring_growth_receipt_id"):
+                    growth = _verified_recurring_growth_evidence(
+                        connection, growth_id)
+                else:
+                    growth = _verified_growth_evidence(connection, growth_id)
+                if growth["opportunity_id"] != opportunity_id:
+                    raise ValueError("promotion_evidence_opportunity_mismatch")
+                expected_kind = (
+                    "retention" if to_maturity == "scale_candidate"
+                    else "expansion")
+                if growth["kind"] != expected_kind:
+                    raise ValueError("promotion_growth_kind_mismatch")
+                if to_maturity == "productize_candidate":
+                    reuse = _verified_reusable_ip_reuse_evidence(
+                        connection, evidence["reuse_receipt_id"])
+                    if (
+                        reuse["source_asset_id"] != asset_id
+                        or reuse["source_opportunity_id"] != opportunity_id
+                    ):
+                        raise ValueError("promotion_reuse_source_mismatch")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("reusable_ip_maturity_unverified") from exc
+        current = to_maturity
+        last_json, last_hash = evidence_json, evidence_hash
+
+    if current != claimed_maturity:
+        raise ValueError("reusable_ip_maturity_unverified")
+    if promotions and (asset_evidence != last_json or asset_hash != last_hash):
+        raise ValueError("reusable_ip_maturity_unverified")
+    return {
+        "asset_id": asset_id,
+        "opportunity_id": opportunity_id,
+        "maturity": claimed_maturity,
+        "promotion_count": len(promotions),
+    }
+
+
 def promote_reusable_ip_asset(
         path, opportunity_id, asset_id, target_maturity, evidence, *, now=None):
     """Promote reusable IP only through evidence resolved from the ledger."""
