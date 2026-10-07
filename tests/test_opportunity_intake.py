@@ -4135,6 +4135,28 @@ class OpportunityIntakeTests(unittest.TestCase):
                             "https://example.com/evidence/human-time",
                         "measured_at": NOW.isoformat(),
                     }, now=NOW))
+            connection = sqlite3.connect(path)
+            connection.execute(
+                "UPDATE recurring_payment_receipts SET net_amount_cents=? "
+                "WHERE receipt_id=?",
+                (99999999, settled["receipt_id"]),
+            )
+            connection.commit()
+            with self.assertRaisesRegex(
+                    ValueError, "realized_economics_unverified"):
+                opportunity_intake._verified_realized_economics(
+                    connection, realized["economics_id"], recurring=True)
+            connection.execute(
+                "UPDATE recurring_payment_receipts SET net_amount_cents=? "
+                "WHERE receipt_id=?",
+                (recurring_payment["net_amount_cents"],
+                 settled["receipt_id"]),
+            )
+            connection.commit()
+            verified_recurring = (
+                opportunity_intake._verified_realized_economics(
+                    connection, realized["economics_id"], recurring=True))
+            connection.close()
             second_now = NOW + timedelta(days=30)
             second_payment = dict(
                 recurring_payment,
@@ -4326,6 +4348,10 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertFalse(bank_duplicate["changed"])
         self.assertTrue(realized["changed"])
         self.assertFalse(realized_duplicate["changed"])
+        self.assertEqual(
+            verified_recurring["payment_receipt_id"],
+            settled["receipt_id"],
+        )
         self.assertEqual(realized["net_collected_cents"], 14500)
         self.assertEqual(realized["contribution_cents"], 12750)
         self.assertEqual(realized["contribution_margin"], 0.87931)
