@@ -16,6 +16,7 @@ from portfolio_competition import compare_candidates
 from opportunity_intake import (
     _verified_realized_economics,
     _verified_recurring_growth_evidence,
+    _verified_reusable_ip_reuse_evidence,
 )
 import experiment_queue
 
@@ -302,6 +303,8 @@ def ledger_business_model_evidence(conn):
         reuse_rows = []
 
     for row in reuse_rows:
+        _verified_reusable_ip_reuse_evidence(
+            conn, row['reuse_receipt_id'])
         try:
             payload = json.loads(row['payload_json'])
         except (TypeError, ValueError):

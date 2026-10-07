@@ -262,7 +262,9 @@ class MissionControlTests(unittest.TestCase):
         conn.commit()
 
         with patch.object(
-                mission_control, '_verified_recurring_growth_evidence'):
+                mission_control, '_verified_recurring_growth_evidence'), \
+             patch.object(
+                mission_control, '_verified_reusable_ip_reuse_evidence'):
             evidence = mission_control.ledger_business_model_evidence(conn)
             snapshot = mission_control.business_model_snapshot(conn)
         conn.close()

@@ -4750,6 +4750,69 @@ def record_reusable_ip_reuse_evidence(
         connection.close()
 
 
+def _verified_reusable_ip_reuse_evidence(connection, receipt_id):
+    """Rebuild a reuse receipt and reverify its settled economics lineage."""
+    row = connection.execute(
+        """SELECT source_asset_id,source_opportunity_id,reused_asset_id,
+                  reused_opportunity_id,economics_kind,economics_id,provider,
+                  external_event_id,evidence_url,occurred_at,receipt_hash
+           FROM reusable_ip_reuse_receipts WHERE receipt_id=?""",
+        (receipt_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("reusable_ip_reuse_receipt_not_found")
+    if row[4] not in {"one_time", "recurring"}:
+        raise ValueError("reusable_ip_reuse_evidence_unverified")
+    source = connection.execute(
+        """SELECT opportunity_id,name,asset_type
+           FROM reusable_ip_assets WHERE asset_id=?""",
+        (row[0],),
+    ).fetchone()
+    reused = connection.execute(
+        """SELECT opportunity_id,name,asset_type
+           FROM reusable_ip_assets WHERE asset_id=?""",
+        (row[2],),
+    ).fetchone()
+    try:
+        economics = _verified_realized_economics(
+            connection, row[5], recurring=row[4] == "recurring")
+    except ValueError as exc:
+        raise ValueError("reusable_ip_reuse_evidence_unverified") from exc
+    if (
+        source is None
+        or reused is None
+        or source[0] != row[1]
+        or reused[0] != row[3]
+        or row[1] == row[3]
+        or source[1].casefold() != reused[1].casefold()
+        or source[2] != reused[2]
+        or economics["opportunity_id"] != row[3]
+        or economics["contribution_cents"] <= 0
+        or parse_time(row[9], "reuse_occurred_at")
+           < parse_time(economics["measured_at"], "reuse_economics_measured_at")
+    ):
+        raise ValueError("reusable_ip_reuse_evidence_unverified")
+    normalized = {
+        "source_asset_id": row[0],
+        "source_opportunity_id": row[1],
+        "reused_asset_id": row[2],
+        "reused_opportunity_id": row[3],
+        "economics_kind": row[4],
+        "economics_id": row[5],
+        "settled_payment_receipt_id": economics["payment_receipt_id"],
+        "provider": row[6],
+        "external_event_id": row[7],
+        "evidence_url": row[8],
+        "occurred_at": row[9],
+    }
+    serialized = json.dumps(
+        normalized, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    if row[10] != expected_hash or receipt_id != "ipr_" + expected_hash[:24]:
+        raise ValueError("reusable_ip_reuse_evidence_unverified")
+    return normalized
+
+
 def promote_reusable_ip_asset(
         path, opportunity_id, asset_id, target_maturity, evidence, *, now=None):
     """Promote reusable IP only through evidence resolved from the ledger."""
