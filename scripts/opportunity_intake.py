@@ -3905,6 +3905,36 @@ def _verified_realized_economics(connection, economics_id, *, recurring=False):
     prefix = "rruec_" if recurring else "ruec_"
     if row[13] != expected_hash or economics_id != prefix + expected_hash[:24]:
         raise ValueError("realized_economics_unverified")
+    try:
+        payment = (
+            _verified_recurring_payment_receipt(connection, row[1])
+            if recurring else _verified_payment_receipt(connection, row[1])
+        )
+    except ValueError as exc:
+        raise ValueError("realized_economics_unverified") from exc
+    payment_net_index = 10 if recurring else 7
+    payment_currency_index = 11 if recurring else 8
+    payment_settled_index = 16 if recurring else 10
+    if (
+        payment[0] != row[0]
+        or payment[payment_net_index] != row[2]
+        or payment[payment_currency_index] != row[11]
+        or parse_time(row[14], "economics_measured_at")
+        < parse_time(payment[payment_settled_index], "payment_settled_at")
+        or row[2] <= 0
+        or row[6] <= 0
+    ):
+        raise ValueError("realized_economics_unverified")
+    expected_contribution = row[2] - row[3] - row[4] - row[5]
+    hours = row[6] / 60
+    derived = (
+        expected_contribution,
+        round(expected_contribution / row[2], 6),
+        round(row[2] / 100 / hours, 2),
+        round(expected_contribution / 100 / hours, 2),
+    )
+    if derived != (row[7], row[8], row[9], row[10]):
+        raise ValueError("realized_economics_unverified")
     return {
         "opportunity_id": row[0],
         "payment_receipt_id": row[1],
