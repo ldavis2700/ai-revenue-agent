@@ -3,6 +3,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from scripts import mission_control
 
@@ -286,6 +287,53 @@ class MissionControlTests(unittest.TestCase):
             'ai_agent_implementation']
         self.assertEqual(verified['observed_revenue'], 145)
         self.assertEqual(verified['verified_reuse_receipts'], 1)
+
+    def test_verified_one_time_forecasts_feed_model_calibration(self):
+        conn = mission_control.connect(self.path)
+        conn.execute('''CREATE TABLE opportunities (
+            id TEXT PRIMARY KEY, payload_json TEXT NOT NULL
+        )''')
+        conn.execute('''CREATE TABLE payment_receipts (
+            receipt_id TEXT PRIMARY KEY, opportunity_id TEXT NOT NULL,
+            net_amount_cents INTEGER NOT NULL
+        )''')
+        conn.execute('''CREATE TABLE realized_unit_economics (
+            economics_id TEXT PRIMARY KEY, opportunity_id TEXT NOT NULL,
+            payment_receipt_id TEXT NOT NULL,
+            delivery_cost_cents INTEGER NOT NULL,
+            inference_cost_cents INTEGER NOT NULL,
+            cac_cents INTEGER NOT NULL,
+            measured_at TEXT NOT NULL, evidence_json TEXT NOT NULL
+        )''')
+        conn.execute(
+            "INSERT INTO opportunities VALUES (?,?)",
+            ('opp_1', json.dumps({
+                'offer_family': 'multi_system_operational_integration'})))
+        conn.execute(
+            "INSERT INTO payment_receipts VALUES (?,?,?)",
+            ('pay_1', 'opp_1', 70000))
+        conn.execute(
+            "INSERT INTO realized_unit_economics VALUES (?,?,?,?,?,?,?,?)",
+            ('econ_1', 'opp_1', 'pay_1', 20000, 2000, 5000,
+             '2026-09-27T00:00:00+00:00', json.dumps({
+                 'proposal_projection_comparison': {
+                     'projected_contribution_cents': 73000,
+                     'contribution_variance_cents': -3000,
+                 }})))
+        conn.commit()
+        with patch.object(
+                mission_control, '_verified_realized_economics') as verify:
+            evidence = mission_control.ledger_business_model_evidence(conn)
+        conn.close()
+        verify.assert_called_once_with(conn, 'econ_1')
+        model = evidence['ai_agent_implementation']
+        self.assertEqual(model['verified_forecast_comparisons'], 1)
+        self.assertEqual(model['forecast_mean_absolute_error_cents'], 3000)
+        self.assertEqual(
+            model['forecast_mean_projected_contribution_cents'], 73000)
+        self.assertEqual(model['observed_revenue'], 700)
+        self.assertEqual(model['observed_cost'], 270)
+        self.assertTrue(model['_ledger_verified'])
 
     def test_nonfinite_evidence_cannot_insert_or_replace_measurements(self):
         conn = mission_control.connect(self.path)

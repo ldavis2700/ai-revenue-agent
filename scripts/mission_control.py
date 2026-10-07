@@ -13,6 +13,7 @@ if SCRIPT_DIR not in sys.path:
 
 from business_model_intelligence import load_catalog, pursuit_plan, rank_models
 from portfolio_competition import compare_candidates
+from opportunity_intake import _verified_realized_economics
 import experiment_queue
 
 DB_PATH = os.getenv('REVENUE_DB_PATH', '/files/data/revenue_agent.db')
@@ -42,6 +43,8 @@ LEDGER_EVIDENCE_KEYS = {
     'realized_recurring_contribution_cents', 'realized_recurring_cost_cents',
     'mastery', 'receipt_lineage', 'verified_reuse_receipts',
     'verified_reused_opportunities', 'reuse_receipt_lineage',
+    'verified_forecast_comparisons', 'forecast_mean_absolute_error_cents',
+    'forecast_mean_projected_contribution_cents',
 }
 
 
@@ -197,7 +200,7 @@ def ledger_business_model_evidence(conn):
             ORDER BY g.occurred_at, g.receipt_id
         ''').fetchall()
     except sqlite3.OperationalError:
-        return {}
+        rows = []
 
     aggregated = {}
     for row in rows:
@@ -332,21 +335,103 @@ def ledger_business_model_evidence(conn):
             'occurred_at': row['occurred_at'],
         })
 
+    try:
+        forecast_ids = [row[0] for row in conn.execute(
+            "SELECT economics_id FROM realized_unit_economics "
+            "ORDER BY measured_at,economics_id").fetchall()]
+    except sqlite3.OperationalError:
+        forecast_ids = []
+    for economics_id in forecast_ids:
+        # Rebuild payment/proposal lineage before any forecast result can alter
+        # model priority. A changed receipt or proposal fails the whole snapshot.
+        _verified_realized_economics(conn, economics_id)
+        row = conn.execute('''
+            SELECT e.opportunity_id, e.delivery_cost_cents,
+                   e.inference_cost_cents, e.cac_cents, e.measured_at,
+                   e.evidence_json, o.payload_json, p.net_amount_cents
+            FROM realized_unit_economics e
+            JOIN opportunities o ON o.id=e.opportunity_id
+            JOIN payment_receipts p
+              ON p.receipt_id=e.payment_receipt_id
+             AND p.opportunity_id=e.opportunity_id
+            WHERE e.economics_id=?
+        ''', (economics_id,)).fetchone()
+        if row is None:
+            raise ValueError('realized_economics_unverified')
+        try:
+            evidence = json.loads(row['evidence_json'])
+            payload = json.loads(row['payload_json'])
+        except (TypeError, ValueError) as exc:
+            raise ValueError('realized_economics_unverified') from exc
+        comparison = evidence.get('proposal_projection_comparison')
+        model_id = OFFER_FAMILY_MODEL_MAP.get(payload.get('offer_family'))
+        if not isinstance(comparison, dict) or not model_id:
+            continue
+        projected = comparison.get('projected_contribution_cents')
+        variance = comparison.get('contribution_variance_cents')
+        if not isinstance(projected, int) or not isinstance(variance, int):
+            raise ValueError('realized_economics_unverified')
+        item = aggregated.setdefault(model_id, {
+            '_ledger_verified': True,
+            'verified_retention_receipts': 0,
+            'verified_expansion_receipts': 0,
+            'retained_recurring_value_cents': 0,
+            'expanded_value_delta_cents': 0,
+            'realized_recurring_net_cents': 0,
+            'realized_recurring_contribution_cents': 0,
+            'realized_recurring_cost_cents': 0,
+            'mastery': 'learned',
+            'receipt_lineage': [],
+            'verified_reuse_receipts': 0,
+            'verified_reused_opportunities': 0,
+            'reuse_receipt_lineage': [],
+            '_counted_payments': set(),
+            '_reused_opportunities': set(),
+        })
+        item.setdefault('_forecast_count', 0)
+        item.setdefault('_forecast_projected_total', 0)
+        item.setdefault('_forecast_absolute_error_total', 0)
+        item.setdefault('_forecast_observed_at', [])
+        item.setdefault('_one_time_net_cents', 0)
+        item.setdefault('_one_time_cost_cents', 0)
+        item['_forecast_count'] += 1
+        item['_forecast_projected_total'] += projected
+        item['_forecast_absolute_error_total'] += abs(variance)
+        item['_forecast_observed_at'].append(row['measured_at'])
+        item['_one_time_net_cents'] += row['net_amount_cents']
+        item['_one_time_cost_cents'] += (
+            row['delivery_cost_cents'] + row['inference_cost_cents']
+            + row['cac_cents'])
+
     for item in aggregated.values():
         payment_sample = len(item.pop('_counted_payments'))
         reused_opportunities = len(item.pop('_reused_opportunities'))
         item['verified_reused_opportunities'] = reused_opportunities
-        sample_size = max(payment_sample, reused_opportunities)
+        forecast_count = item.pop('_forecast_count', 0)
+        projected_total = item.pop('_forecast_projected_total', 0)
+        absolute_error_total = item.pop('_forecast_absolute_error_total', 0)
+        forecast_timestamps = item.pop('_forecast_observed_at', [])
+        one_time_net = item.pop('_one_time_net_cents', 0)
+        one_time_cost = item.pop('_one_time_cost_cents', 0)
+        item['verified_forecast_comparisons'] = forecast_count
+        item['forecast_mean_absolute_error_cents'] = (
+            round(absolute_error_total / forecast_count, 2)
+            if forecast_count else 0)
+        item['forecast_mean_projected_contribution_cents'] = (
+            round(projected_total / forecast_count, 2)
+            if forecast_count else 0)
+        sample_size = max(payment_sample, reused_opportunities, forecast_count)
         retained = item['verified_retention_receipts']
         timestamps = [
             line['occurred_at'] for line in item['receipt_lineage']]
         timestamps.extend(
             line['occurred_at'] for line in item['reuse_receipt_lineage'])
+        timestamps.extend(forecast_timestamps)
         item.update({
             'observed_revenue':
-                item['realized_recurring_net_cents'] / 100.0,
+                (item['realized_recurring_net_cents'] + one_time_net) / 100.0,
             'observed_cost':
-                item['realized_recurring_cost_cents'] / 100.0,
+                (item['realized_recurring_cost_cents'] + one_time_cost) / 100.0,
             'conversion_rate': min(1.0, retained / max(sample_size, 1)),
             'evidence_quality': 1.0,
             'sample_size': sample_size,
