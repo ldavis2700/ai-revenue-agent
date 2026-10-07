@@ -3679,6 +3679,37 @@ def _verified_payment_receipt(connection, payment_receipt_id):
     return payment
 
 
+def _verified_linked_proposal_for_payment(connection, payment):
+    """Resolve and verify the proposal bound to a settled payment's delivery."""
+    proposal = connection.execute(
+        """SELECT p.proposal_id,p.opportunity_id,p.artifact_hash,
+                  p.artifact_json
+           FROM invoice_receipts i
+           JOIN delivery_receipts d ON d.receipt_id=i.delivery_receipt_id
+           JOIN qa_reports q ON q.report_id=d.qa_report_id
+           JOIN execution_plans e ON e.plan_id=q.execution_plan_id
+           JOIN contract_receipts c ON c.receipt_id=e.contract_receipt_id
+           JOIN proposal_artifacts p ON p.proposal_id=c.proposal_id
+           WHERE i.receipt_id=?""",
+        (payment[1],),
+    ).fetchone()
+    if proposal is None or proposal[1] != payment[0]:
+        raise ValueError("payment_proposal_lineage_unverified")
+    try:
+        artifact = json.loads(proposal[3])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("payment_proposal_lineage_unverified") from exc
+    expected_hash = hashlib.sha256(proposal[3].encode()).hexdigest()
+    if (
+        not isinstance(artifact, dict)
+        or artifact.get("opportunity_id") != payment[0]
+        or proposal[2] != expected_hash
+        or proposal[0] != "prop_" + expected_hash[:24]
+    ):
+        raise ValueError("payment_proposal_lineage_unverified")
+    return proposal[0], artifact
+
+
 def record_realized_unit_economics(
         path, opportunity_id, payment_receipt_id, economics, *, now=None):
     """Record realized economics derived from one settled payment receipt."""
@@ -3738,51 +3769,22 @@ def record_realized_unit_economics(
             margin = contribution / net_collected
             revenue_per_hour = net_collected / 100 / hours
             contribution_per_hour = contribution / 100 / hours
-            proposal = connection.execute(
-                """SELECT p.proposal_id,p.opportunity_id,p.artifact_hash,
-                          p.artifact_json
-                   FROM invoice_receipts i
-                   JOIN delivery_receipts d
-                     ON d.receipt_id=i.delivery_receipt_id
-                   JOIN qa_reports q ON q.report_id=d.qa_report_id
-                   JOIN execution_plans e ON e.plan_id=q.execution_plan_id
-                   JOIN contract_receipts c
-                     ON c.receipt_id=e.contract_receipt_id
-                   JOIN proposal_artifacts p
-                     ON p.proposal_id=c.proposal_id
-                   WHERE i.receipt_id=?""",
-                (payment[1],)).fetchone()
-            if proposal is None or proposal[1] != opportunity_id:
-                raise ValueError("payment_proposal_lineage_unverified")
-            try:
-                proposal_artifact = json.loads(proposal[3])
-            except (TypeError, json.JSONDecodeError) as exc:
-                raise ValueError("payment_proposal_lineage_unverified") from exc
-            expected_artifact_hash = hashlib.sha256(
-                proposal[3].encode()).hexdigest()
-            if (
-                not isinstance(proposal_artifact, dict)
-                or proposal_artifact.get("opportunity_id") != opportunity_id
-                or proposal[2] != expected_artifact_hash
-                or proposal[0] != "prop_" + expected_artifact_hash[:24]
-            ):
-                raise ValueError("payment_proposal_lineage_unverified")
-            if proposal:
-                projected = proposal_artifact.get(
-                    "proposal_unit_economics") or {}
-                if projected.get("evidence_status") == "projected_not_collected":
-                    evidence["proposal_projection_comparison"] = {
-                        "proposal_id": proposal[0],
-                        "projected_contribution_cents": projected[
-                            "projected_contribution_cents"],
-                        "realized_contribution_cents": contribution,
-                        "contribution_variance_cents": (
-                            contribution
-                            - projected["projected_contribution_cents"]),
-                        "projected_contribution_margin": projected[
-                            "projected_contribution_margin"],
-                        "realized_contribution_margin": round(margin, 6),
-                    }
+            proposal_id, proposal_artifact = (
+                _verified_linked_proposal_for_payment(connection, payment))
+            projected = proposal_artifact.get("proposal_unit_economics") or {}
+            if projected.get("evidence_status") == "projected_not_collected":
+                evidence["proposal_projection_comparison"] = {
+                    "proposal_id": proposal_id,
+                    "projected_contribution_cents": projected[
+                        "projected_contribution_cents"],
+                    "realized_contribution_cents": contribution,
+                    "contribution_variance_cents": (
+                        contribution
+                        - projected["projected_contribution_cents"]),
+                    "projected_contribution_margin": projected[
+                        "projected_contribution_margin"],
+                    "realized_contribution_margin": round(margin, 6),
+                }
             normalized = {
                 "opportunity_id": opportunity_id,
                 "payment_receipt_id": payment_receipt_id,
@@ -3959,6 +3961,29 @@ def _verified_realized_economics(connection, economics_id, *, recurring=False):
     )
     if derived != (row[7], row[8], row[9], row[10]):
         raise ValueError("realized_economics_unverified")
+    if not recurring:
+        try:
+            proposal_id, proposal = _verified_linked_proposal_for_payment(
+                connection, payment)
+        except ValueError as exc:
+            raise ValueError("realized_economics_unverified") from exc
+        projected = proposal.get("proposal_unit_economics") or {}
+        comparison = evidence.get("proposal_projection_comparison")
+        expected_comparison = None
+        if projected.get("evidence_status") == "projected_not_collected":
+            expected_comparison = {
+                "proposal_id": proposal_id,
+                "projected_contribution_cents":
+                    projected["projected_contribution_cents"],
+                "realized_contribution_cents": row[7],
+                "contribution_variance_cents": (
+                    row[7] - projected["projected_contribution_cents"]),
+                "projected_contribution_margin":
+                    projected["projected_contribution_margin"],
+                "realized_contribution_margin": row[8],
+            }
+        if comparison != expected_comparison:
+            raise ValueError("realized_economics_unverified")
     return {
         "opportunity_id": row[0],
         "payment_receipt_id": row[1],

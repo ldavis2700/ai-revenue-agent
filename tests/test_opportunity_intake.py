@@ -2495,6 +2495,9 @@ class OpportunityIntakeTests(unittest.TestCase):
                     "cac_cents": 5000,
                 },
             )
+            realized = opportunity_intake.record_realized_unit_economics(
+                path, opportunity_id, payment_id, economics,
+                now=NOW + timedelta(minutes=5))
             connection = sqlite3.connect(path)
             proposal_id = connection.execute(
                 """SELECT c.proposal_id
@@ -2525,11 +2528,12 @@ class OpportunityIntakeTests(unittest.TestCase):
             )
             connection.commit()
             connection.close()
+            verification_connection = sqlite3.connect(path)
             with self.assertRaisesRegex(
-                    ValueError, "payment_proposal_lineage_unverified"):
-                opportunity_intake.record_realized_unit_economics(
-                    path, opportunity_id, payment_id, economics,
-                    now=NOW + timedelta(minutes=5))
+                    ValueError, "realized_economics_unverified"):
+                opportunity_intake._verified_realized_economics(
+                    verification_connection, realized["economics_id"])
+            verification_connection.close()
 
     def test_realized_economics_verifier_revalidates_payment_lineage(self):
         economics = {
