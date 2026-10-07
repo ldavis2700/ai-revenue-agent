@@ -118,6 +118,12 @@ def snapshot(conn):
     recurring_bank_received = scalar(
         conn, """SELECT COALESCE(SUM(amount_cents),0) / 100.0
                  FROM recurring_bank_receipts""")
+    one_time_withdrawable = scalar(
+        conn, """SELECT COALESCE(SUM(amount_cents),0) / 100.0
+                 FROM payout_availability_receipts""")
+    one_time_bank_received = scalar(
+        conn, """SELECT COALESCE(SUM(amount_cents),0) / 100.0
+                 FROM bank_receipts""")
     opportunity_gross = one_time_gross + recurring_gross
     opportunity_fees = one_time_fees + recurring_fees
     opportunity_net = one_time_net + recurring_net
@@ -140,6 +146,12 @@ def snapshot(conn):
         'verified_recurring_net_revenue': recurring_net,
         'verified_recurring_withdrawable_balance': recurring_withdrawable,
         'verified_recurring_money_received': recurring_bank_received,
+        'verified_one_time_withdrawable_balance': one_time_withdrawable,
+        'verified_one_time_money_received': one_time_bank_received,
+        'verified_withdrawable_balance':
+            one_time_withdrawable + recurring_withdrawable,
+        'verified_money_received':
+            one_time_bank_received + recurring_bank_received,
         'verified_opportunity_gross_revenue': opportunity_gross,
         'verified_opportunity_fees': opportunity_fees,
         'verified_opportunity_net_revenue': opportunity_net,
