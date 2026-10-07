@@ -45,6 +45,8 @@ LEDGER_ONLY_EVIDENCE_KEYS = frozenset({
     "realized_recurring_contribution_cents", "realized_recurring_cost_cents",
     "mastery", "receipt_lineage", "verified_reuse_receipts",
     "verified_reused_opportunities", "reuse_receipt_lineage",
+    "verified_forecast_comparisons", "forecast_mean_absolute_error_cents",
+    "forecast_mean_projected_contribution_cents",
 })
 
 
@@ -213,6 +215,40 @@ def experiment_state(profit: float, conversion: float, effective_quality: float,
     return "validate"
 
 
+def verified_forecast_calibration(evidence: dict[str, Any],
+                                  ledger_verified: bool) -> dict[str, Any]:
+    """Return a bounded decision signal from receipt-verified forecast results."""
+    if not ledger_verified:
+        return {
+            "comparison_count": 0,
+            "relative_error": None,
+            "confidence": 0.0,
+        }
+    count = max(0, int(_finite_evidence_number(
+        evidence.get("verified_forecast_comparisons", 0) or 0,
+        "verified_forecast_comparisons")))
+    absolute_error = max(0.0, _finite_evidence_number(
+        evidence.get("forecast_mean_absolute_error_cents", 0) or 0,
+        "forecast_mean_absolute_error_cents"))
+    projected = max(0.0, _finite_evidence_number(
+        evidence.get("forecast_mean_projected_contribution_cents", 0) or 0,
+        "forecast_mean_projected_contribution_cents"))
+    if count == 0 or projected <= 0:
+        return {
+            "comparison_count": count,
+            "relative_error": None,
+            "confidence": 0.0,
+        }
+    relative_error = absolute_error / projected
+    calibration = max(0.0, 1.0 - min(1.0, relative_error))
+    sample_reliability = min(1.0, count / 10.0)
+    return {
+        "comparison_count": count,
+        "relative_error": round(relative_error, 4),
+        "confidence": round(calibration * sample_reliability, 4),
+    }
+
+
 def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]] | None = None,
                  pursue_limit: int = 3, now: datetime | None = None,
                  evidence_half_life_days: float = 30.0) -> dict[str, Any]:
@@ -295,15 +331,20 @@ def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]]
         mastery = (
             str(evidence.get("mastery") or "learned")
             if ledger_verified else "learned")
+        forecast_calibration = verified_forecast_calibration(
+            evidence, ledger_verified)
         evidence_bonus = effective_quality * min(
             8.0, max(-8.0, profit / 100.0 + conversion * 5.0))
         recurring_growth_bonus = effective_quality * min(
             3.0, retention_receipts * 0.5 + expansion_receipts * 0.75)
         verified_reuse_bonus = effective_quality * min(
             2.0, reuse_receipts * 0.5 + reused_opportunities * 0.75)
+        forecast_calibration_bonus = (
+            effective_quality * forecast_calibration["confidence"]
+            if ledger_verified and profit > 0 else 0.0)
         pursuit_score = round(
             model["apex_score"] + evidence_bonus + recurring_growth_bonus
-            + verified_reuse_bonus, 2)
+            + verified_reuse_bonus + forecast_calibration_bonus, 2)
         sample_size = (
             None
             if "sample_size" not in evidence
@@ -334,6 +375,9 @@ def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]]
             "retained_recurring_value_cents": retained_value_cents,
             "expanded_value_delta_cents": expanded_value_delta_cents,
             "mastery": mastery,
+            "verified_forecast_calibration": forecast_calibration,
+            "forecast_calibration_bonus": round(
+                forecast_calibration_bonus, 4),
             "experiment_state": experiment_state(
                 profit, conversion, effective_quality, sample_size,
                 ledger_verified),

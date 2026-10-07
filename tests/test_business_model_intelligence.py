@@ -147,6 +147,9 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
                 "mastery": "productize_candidate",
                 "receipt_lineage": ["forged"],
                 "reuse_receipt_lineage": ["forged"],
+                "verified_forecast_comparisons": 100,
+                "forecast_mean_absolute_error_cents": 0,
+                "forecast_mean_projected_contribution_cents": 100000,
             }
         }
         sanitized = module.sanitize_public_evidence(forged)
@@ -166,6 +169,59 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
         self.assertEqual(directory["mastery"], "learned")
         self.assertEqual(directory["verified_retention_receipts"], 0)
         self.assertEqual(directory["verified_reuse_receipts"], 0)
+        self.assertEqual(
+            directory["verified_forecast_calibration"]["comparison_count"], 0)
+        self.assertEqual(directory["forecast_calibration_bonus"], 0)
+
+    def test_verified_forecast_accuracy_is_a_bounded_positive_economics_signal(self):
+        ranked = [{
+            "id": "directory",
+            "category": "platforms",
+            "name": "Niche paid directory",
+            "revenue_type": "listing_subscription_sponsorship",
+            "eligible": True,
+            "apex_score": 75.0,
+            "constraint_reasons": [],
+            "execution_gate": "candidate_only",
+        }]
+        common = {
+            "_ledger_verified": True,
+            "observed_revenue": 1000,
+            "observed_cost": 200,
+            "conversion_rate": 0.25,
+            "evidence_quality": 1,
+            "sample_size": 20,
+            "verified_forecast_comparisons": 10,
+            "forecast_mean_projected_contribution_cents": 10000,
+        }
+        calibrated = module.pursuit_plan(ranked, {"directory": {
+            **common, "forecast_mean_absolute_error_cents": 1000,
+        }}, 200)
+        inaccurate = module.pursuit_plan(ranked, {"directory": {
+            **common, "forecast_mean_absolute_error_cents": 20000,
+        }}, 200)
+        calibrated_model = next(
+            item for item in calibrated["pursue"] if item["id"] == "directory")
+        inaccurate_model = next(
+            item for item in inaccurate["pursue"] if item["id"] == "directory")
+        self.assertEqual(calibrated_model["verified_forecast_calibration"], {
+            "comparison_count": 10,
+            "relative_error": 0.1,
+            "confidence": 0.9,
+        })
+        self.assertEqual(inaccurate_model["forecast_calibration_bonus"], 0)
+        self.assertGreater(
+            calibrated_model["pursuit_score"], inaccurate_model["pursuit_score"])
+
+        losing = module.pursuit_plan(ranked, {"directory": {
+            **common,
+            "observed_revenue": 100,
+            "observed_cost": 200,
+            "forecast_mean_absolute_error_cents": 0,
+        }}, 200)
+        losing_model = next(
+            item for item in losing["pursue"] if item["id"] == "directory")
+        self.assertEqual(losing_model["forecast_calibration_bonus"], 0)
 
     def test_public_evidence_requires_model_objects(self):
         for payload in ([], {"directory": "forged"}):
