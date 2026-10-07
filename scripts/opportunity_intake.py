@@ -4514,6 +4514,47 @@ def record_growth_evidence(
         connection.close()
 
 
+def _verified_growth_evidence(connection, receipt_id):
+    """Rebuild one-time growth evidence and its settled-payment lineage."""
+    row = connection.execute(
+        """SELECT opportunity_id,payment_receipt_id,kind,provider,
+                  external_event_id,evidence_url,occurred_at,receipt_hash
+           FROM growth_evidence_receipts WHERE receipt_id=?""",
+        (receipt_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("growth_evidence_receipt_not_found")
+    normalized = {
+        "opportunity_id": row[0],
+        "payment_receipt_id": row[1],
+        "kind": row[2],
+        "provider": row[3],
+        "external_event_id": row[4],
+        "evidence_url": row[5],
+        "occurred_at": row[6],
+    }
+    serialized = json.dumps(
+        normalized, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    if (
+        row[2] not in {"retention", "expansion"}
+        or row[7] != expected_hash
+        or receipt_id != "grow_" + expected_hash[:24]
+    ):
+        raise ValueError("growth_evidence_unverified")
+    try:
+        payment = _verified_payment_receipt(connection, row[1])
+    except ValueError as exc:
+        raise ValueError("growth_evidence_unverified") from exc
+    if (
+        payment[0] != row[0]
+        or parse_time(row[6], "growth_occurred_at")
+           < parse_time(payment[10], "payment_settled_at")
+    ):
+        raise ValueError("growth_evidence_unverified")
+    return normalized
+
+
 def record_recurring_growth_evidence(
         path, opportunity_id, recurring_payment_receipt_id, kind, evidence,
         *, now=None):
@@ -5000,27 +5041,26 @@ def promote_reusable_ip_asset(
                     reference = _proposal_text(
                         recurring_reference,
                         "recurring_growth_receipt_id", 160)
-                    row = connection.execute(
-                        """SELECT opportunity_id,kind
-                           FROM recurring_growth_evidence_receipts
-                           WHERE receipt_id=?""", (reference,)).fetchone()
-                    missing_error = (
-                        "recurring_growth_evidence_receipt_not_found")
+                    try:
+                        row = _verified_recurring_growth_evidence(
+                            connection, reference)
+                    except ValueError as exc:
+                        raise ValueError(
+                            "growth_evidence_receipt_unverified") from exc
                     resolved_key = "recurring_growth_receipt_id"
                 else:
                     reference = _proposal_text(
                         growth_reference, "growth_receipt_id", 160)
-                    row = connection.execute(
-                        """SELECT opportunity_id,kind
-                           FROM growth_evidence_receipts WHERE receipt_id=?""",
-                        (reference,)).fetchone()
-                    missing_error = "growth_evidence_receipt_not_found"
+                    try:
+                        row = _verified_growth_evidence(
+                            connection, reference)
+                    except ValueError as exc:
+                        raise ValueError(
+                            "growth_evidence_receipt_unverified") from exc
                     resolved_key = "growth_receipt_id"
-                if row is None:
-                    raise ValueError(missing_error)
-                if row[0] != opportunity_id:
+                if row["opportunity_id"] != opportunity_id:
                     raise ValueError("promotion_evidence_opportunity_mismatch")
-                if row[1] != expected_kind:
+                if row["kind"] != expected_kind:
                     raise ValueError(f"{expected_kind}_evidence_required")
                 resolved = {
                     resolved_key: reference,

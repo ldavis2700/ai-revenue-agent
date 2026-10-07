@@ -3281,6 +3281,28 @@ class OpportunityIntakeTests(unittest.TestCase):
                         reused_economics["economics_id"],
                     ],
                 }, now=NOW + timedelta(minutes=8))
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE growth_evidence_receipts
+                   SET evidence_url='https://example.com/forged-growth'
+                   WHERE receipt_id=?""",
+                (retention["receipt_id"],))
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                    ValueError, "growth_evidence_receipt_unverified"):
+                opportunity_intake.promote_reusable_ip_asset(
+                    path, opportunity_id, asset_id, "scale_candidate",
+                    {"growth_receipt_id": retention["receipt_id"]},
+                    now=NOW + timedelta(minutes=8))
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE growth_evidence_receipts SET evidence_url=?
+                   WHERE receipt_id=?""",
+                ("https://example.com/contracts/renewal-1",
+                 retention["receipt_id"]))
+            connection.commit()
+            connection.close()
             scale = opportunity_intake.promote_reusable_ip_asset(
                 path, opportunity_id, asset_id, "scale_candidate",
                 {"growth_receipt_id": retention["receipt_id"]},
