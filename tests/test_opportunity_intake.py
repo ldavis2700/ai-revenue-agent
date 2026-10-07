@@ -3301,6 +3301,30 @@ class OpportunityIntakeTests(unittest.TestCase):
                     "occurred_at":
                         (NOW + timedelta(minutes=8)).isoformat(),
                 }, now=NOW + timedelta(minutes=8))
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE reusable_ip_reuse_receipts
+                   SET evidence_url='https://example.com/forged-before-promotion'
+                   WHERE receipt_id=?""",
+                (reuse["receipt_id"],))
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                    ValueError, "reuse_evidence_receipt_unverified"):
+                opportunity_intake.promote_reusable_ip_asset(
+                    path, opportunity_id, asset_id,
+                    "productize_candidate", {
+                        "growth_receipt_id": expansion["receipt_id"],
+                        "reuse_receipt_id": reuse["receipt_id"],
+                    }, now=NOW + timedelta(minutes=8))
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE reusable_ip_reuse_receipts
+                   SET evidence_url=? WHERE receipt_id=?""",
+                ("https://example.com/deliveries/reuse-client-2",
+                 reuse["receipt_id"]))
+            connection.commit()
+            connection.close()
             productized = opportunity_intake.promote_reusable_ip_asset(
                 path, opportunity_id, asset_id, "productize_candidate", {
                     "growth_receipt_id": expansion["receipt_id"],

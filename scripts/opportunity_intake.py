@@ -5030,25 +5030,26 @@ def promote_reusable_ip_asset(
                     reuse_reference = _proposal_text(
                         evidence.get("reuse_receipt_id"),
                         "reuse_receipt_id", 160)
-                    reuse = connection.execute(
-                        """SELECT source_asset_id,source_opportunity_id,
-                                  reused_opportunity_id,economics_kind,
-                                  economics_id
-                           FROM reusable_ip_reuse_receipts
-                           WHERE receipt_id=?""",
-                        (reuse_reference,)).fetchone()
-                    if reuse is None:
-                        raise ValueError("reuse_evidence_receipt_not_found")
-                    if reuse[0] != asset_id or reuse[1] != opportunity_id:
+                    try:
+                        reuse = _verified_reusable_ip_reuse_evidence(
+                            connection, reuse_reference)
+                    except ValueError as exc:
+                        raise ValueError(
+                            "reuse_evidence_receipt_unverified") from exc
+                    if (
+                        reuse["source_asset_id"] != asset_id
+                        or reuse["source_opportunity_id"] != opportunity_id
+                    ):
                         raise ValueError(
                             "promotion_reuse_evidence_source_mismatch")
-                    if reuse[2] == opportunity_id:
+                    if reuse["reused_opportunity_id"] == opportunity_id:
                         raise ValueError("cross_opportunity_reuse_required")
                     resolved.update({
                         "reuse_receipt_id": reuse_reference,
-                        "reused_opportunity_id": reuse[2],
-                        "reuse_economics_kind": reuse[3],
-                        "reuse_economics_id": reuse[4],
+                        "reused_opportunity_id":
+                            reuse["reused_opportunity_id"],
+                        "reuse_economics_kind": reuse["economics_kind"],
+                        "reuse_economics_id": reuse["economics_id"],
                     })
 
             normalized = {
