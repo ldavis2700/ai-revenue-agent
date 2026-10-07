@@ -61,7 +61,7 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
             ranked,
             {"directory": {"observed_revenue": 1000, "observed_cost": 50,
                            "conversion_rate": 0.25, "evidence_quality": 1}},
-            10,
+            40,
         )
         pursue_order = [m["id"] for m in plan["pursue"]]
         directory = next(m for m in plan["pursue"] if m["id"] == "directory")
@@ -340,7 +340,8 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
         )
         directory = next(m for m in plan["pursue"] if m["id"] == "directory")
         templates = next(m for m in plan["pursue"] if m["id"] == "digital_templates")
-        self.assertEqual(directory["experiment_state"], "scale_candidate")
+        self.assertEqual(directory["experiment_state"], "validate")
+        self.assertFalse(directory["economics_verified"])
         self.assertEqual(templates["experiment_state"], "validate")
         self.assertGreater(directory["evidence_reliability"], templates["evidence_reliability"])
 

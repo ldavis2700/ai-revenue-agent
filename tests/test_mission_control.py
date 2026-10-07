@@ -171,7 +171,7 @@ class MissionControlTests(unittest.TestCase):
         self.assertEqual(measured['observed_profit'], 0)
         self.assertEqual(measured['claimed_observed_revenue'], 1200)
         competition = result['business_model_intelligence']['portfolio_competition']
-        self.assertIsNotNone(competition.get('champion'))
+        self.assertIsNone(competition.get('champion'))
         self.assertIsNotNone(competition.get('challenger'))
 
     def test_recurring_growth_and_cross_opportunity_reuse_feed_model_evidence(self):
