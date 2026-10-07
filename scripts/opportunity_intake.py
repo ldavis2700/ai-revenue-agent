@@ -4046,6 +4046,68 @@ def summarize_verified_forecast_accuracy(path):
         connection.close()
 
 
+def _verified_recurring_growth_evidence(connection, receipt_id):
+    """Rebuild a recurring growth receipt and its settled economics lineage."""
+    row = connection.execute(
+        """SELECT opportunity_id,recurring_payment_receipt_id,
+                  recurring_economics_id,kind,provider,external_event_id,
+                  evidence_url,prior_recurring_payment_receipt_id,
+                  baseline_scope,expanded_scope,baseline_value_cents,
+                  expanded_value_cents,occurred_at,receipt_hash
+           FROM recurring_growth_evidence_receipts WHERE receipt_id=?""",
+        (receipt_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("recurring_growth_evidence_receipt_not_found")
+    normalized = {
+        "opportunity_id": row[0],
+        "recurring_payment_receipt_id": row[1],
+        "kind": row[3],
+        "provider": row[4],
+        "external_event_id": row[5],
+        "evidence_url": row[6],
+        "occurred_at": row[12],
+        "recurring_economics_id": row[2],
+    }
+    if row[3] == "retention":
+        normalized["prior_recurring_payment_receipt_id"] = row[7]
+    elif row[3] == "expansion":
+        normalized.update({
+            "baseline_scope": row[8],
+            "expanded_scope": row[9],
+            "baseline_value_cents": row[10],
+            "expanded_value_cents": row[11],
+        })
+    else:
+        raise ValueError("recurring_growth_evidence_unverified")
+    serialized = json.dumps(
+        normalized, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    if row[13] != expected_hash or receipt_id != (
+            "rgrow_" + expected_hash[:24]):
+        raise ValueError("recurring_growth_evidence_unverified")
+    try:
+        payment = _verified_recurring_payment_receipt(connection, row[1])
+        economics = _verified_realized_economics(
+            connection, row[2], recurring=True)
+        prior = (
+            _verified_recurring_payment_receipt(connection, row[7])
+            if row[3] == "retention" else None)
+    except ValueError as exc:
+        raise ValueError("recurring_growth_evidence_unverified") from exc
+    if (
+        payment[0] != row[0]
+        or economics["opportunity_id"] != row[0]
+        or economics["payment_receipt_id"] != row[1]
+        or economics["contribution_cents"] <= 0
+        or parse_time(row[12], "growth_occurred_at")
+           < parse_time(payment[16], "recurring_settled_at")
+        or (prior is not None and prior[0] != row[0])
+    ):
+        raise ValueError("recurring_growth_evidence_unverified")
+    return normalized
+
+
 def record_recurring_withdrawable_balance(
         path, opportunity_id, recurring_payment_receipt_id, evidence, *, now=None):
     """Record provider evidence that settled recurring net is withdrawable."""

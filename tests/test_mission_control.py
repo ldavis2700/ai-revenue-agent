@@ -261,8 +261,10 @@ class MissionControlTests(unittest.TestCase):
             ])
         conn.commit()
 
-        evidence = mission_control.ledger_business_model_evidence(conn)
-        snapshot = mission_control.business_model_snapshot(conn)
+        with patch.object(
+                mission_control, '_verified_recurring_growth_evidence'):
+            evidence = mission_control.ledger_business_model_evidence(conn)
+            snapshot = mission_control.business_model_snapshot(conn)
         conn.close()
 
         model = evidence['ai_agent_implementation']

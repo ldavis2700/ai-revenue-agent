@@ -13,7 +13,10 @@ if SCRIPT_DIR not in sys.path:
 
 from business_model_intelligence import load_catalog, pursuit_plan, rank_models
 from portfolio_competition import compare_candidates
-from opportunity_intake import _verified_realized_economics
+from opportunity_intake import (
+    _verified_realized_economics,
+    _verified_recurring_growth_evidence,
+)
 import experiment_queue
 
 DB_PATH = os.getenv('REVENUE_DB_PATH', '/files/data/revenue_agent.db')
@@ -204,6 +207,8 @@ def ledger_business_model_evidence(conn):
 
     aggregated = {}
     for row in rows:
+        _verified_recurring_growth_evidence(
+            conn, row['growth_receipt_id'])
         try:
             payload = json.loads(row['payload_json'])
         except (TypeError, ValueError):
