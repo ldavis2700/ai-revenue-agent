@@ -3739,11 +3739,35 @@ def record_realized_unit_economics(
             revenue_per_hour = net_collected / 100 / hours
             contribution_per_hour = contribution / 100 / hours
             proposal = connection.execute(
-                """SELECT proposal_id,artifact_json FROM proposal_artifacts
-                   WHERE opportunity_id=? ORDER BY created_at DESC LIMIT 1""",
-                (opportunity_id,)).fetchone()
+                """SELECT p.proposal_id,p.opportunity_id,p.artifact_hash,
+                          p.artifact_json
+                   FROM invoice_receipts i
+                   JOIN delivery_receipts d
+                     ON d.receipt_id=i.delivery_receipt_id
+                   JOIN qa_reports q ON q.report_id=d.qa_report_id
+                   JOIN execution_plans e ON e.plan_id=q.execution_plan_id
+                   JOIN contract_receipts c
+                     ON c.receipt_id=e.contract_receipt_id
+                   JOIN proposal_artifacts p
+                     ON p.proposal_id=c.proposal_id
+                   WHERE i.receipt_id=?""",
+                (payment[1],)).fetchone()
+            if proposal is None or proposal[1] != opportunity_id:
+                raise ValueError("payment_proposal_lineage_unverified")
+            try:
+                proposal_artifact = json.loads(proposal[3])
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise ValueError("payment_proposal_lineage_unverified") from exc
+            expected_artifact_hash = hashlib.sha256(
+                proposal[3].encode()).hexdigest()
+            if (
+                not isinstance(proposal_artifact, dict)
+                or proposal_artifact.get("opportunity_id") != opportunity_id
+                or proposal[2] != expected_artifact_hash
+                or proposal[0] != "prop_" + expected_artifact_hash[:24]
+            ):
+                raise ValueError("payment_proposal_lineage_unverified")
             if proposal:
-                proposal_artifact = json.loads(proposal[1])
                 projected = proposal_artifact.get(
                     "proposal_unit_economics") or {}
                 if projected.get("evidence_status") == "projected_not_collected":

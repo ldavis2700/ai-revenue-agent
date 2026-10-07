@@ -2471,6 +2471,66 @@ class OpportunityIntakeTests(unittest.TestCase):
                     connection, realized["economics_id"])
             connection.close()
 
+    def test_realized_economics_rejects_tampered_linked_proposal(self):
+        economics = {
+            "delivery_cost_cents": 20000,
+            "inference_cost_cents": 2000,
+            "cac_cents": 5000,
+            "human_operating_minutes": 120,
+            "delivery_cost_evidence_url":
+                "https://example.com/costs/delivery",
+            "inference_cost_evidence_url":
+                "https://example.com/costs/inference",
+            "cac_evidence_url": "https://example.com/costs/cac",
+            "human_time_evidence_url": "https://example.com/time/ledger",
+            "measured_at": (NOW + timedelta(minutes=5)).isoformat(),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, payment_id = self.advance_to_collected(
+                path,
+                candidate_overrides={
+                    "delivery_cost_cents": 20000,
+                    "inference_cost_cents": 2000,
+                    "cac_cents": 5000,
+                },
+            )
+            connection = sqlite3.connect(path)
+            proposal_id = connection.execute(
+                """SELECT c.proposal_id
+                   FROM payment_receipts p
+                   JOIN invoice_receipts i
+                     ON i.receipt_id=p.invoice_receipt_id
+                   JOIN delivery_receipts d
+                     ON d.receipt_id=i.delivery_receipt_id
+                   JOIN qa_reports q ON q.report_id=d.qa_report_id
+                   JOIN execution_plans e ON e.plan_id=q.execution_plan_id
+                   JOIN contract_receipts c
+                     ON c.receipt_id=e.contract_receipt_id
+                   WHERE p.receipt_id=?""",
+                (payment_id,),
+            ).fetchone()[0]
+            artifact = json.loads(connection.execute(
+                "SELECT artifact_json FROM proposal_artifacts "
+                "WHERE proposal_id=?",
+                (proposal_id,),
+            ).fetchone()[0])
+            artifact["proposal_unit_economics"][
+                "projected_contribution_cents"] = 99999999
+            connection.execute(
+                "UPDATE proposal_artifacts SET artifact_json=? "
+                "WHERE proposal_id=?",
+                (json.dumps(artifact, sort_keys=True, separators=(",", ":")),
+                 proposal_id),
+            )
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                    ValueError, "payment_proposal_lineage_unverified"):
+                opportunity_intake.record_realized_unit_economics(
+                    path, opportunity_id, payment_id, economics,
+                    now=NOW + timedelta(minutes=5))
+
     def test_realized_economics_verifier_revalidates_payment_lineage(self):
         economics = {
             "delivery_cost_cents": 20000,
