@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Create one auditable, safety-gated operating plan for AI Revenue Agent."""
 import json
+import hashlib
 import math
 import os
 import sqlite3
@@ -13,6 +14,12 @@ if SCRIPT_DIR not in sys.path:
 
 from business_model_intelligence import load_catalog, pursuit_plan, rank_models
 from portfolio_competition import compare_candidates
+from opportunity_intake import (
+    _verified_realized_economics,
+    _verified_recurring_growth_evidence,
+    _verified_reusable_ip_maturity,
+    _verified_reusable_ip_reuse_evidence,
+)
 import experiment_queue
 
 DB_PATH = os.getenv('REVENUE_DB_PATH', '/files/data/revenue_agent.db')
@@ -42,6 +49,8 @@ LEDGER_EVIDENCE_KEYS = {
     'realized_recurring_contribution_cents', 'realized_recurring_cost_cents',
     'mastery', 'receipt_lineage', 'verified_reuse_receipts',
     'verified_reused_opportunities', 'reuse_receipt_lineage',
+    'verified_forecast_comparisons', 'forecast_mean_absolute_error_cents',
+    'forecast_mean_projected_contribution_cents',
 }
 
 
@@ -79,37 +88,127 @@ def scalar(conn, sql, params=()):
         return 0
 
 
+RECEIPT_SPECS = {
+    'payment_receipts': (
+        'payr_',
+        ('opportunity_id', 'invoice_receipt_id', 'provider',
+         'external_transaction_id', 'transaction_url', 'gross_amount_cents',
+         'fee_amount_cents', 'net_amount_cents', 'currency', 'paid_at',
+         'settled_at'),
+    ),
+    'recurring_payment_receipts': (
+        'recurpay_',
+        ('opportunity_id', 'contract_receipt_id', 'term_id', 'provider',
+         'external_invoice_id', 'invoice_url', 'external_transaction_id',
+         'transaction_url', 'gross_amount_cents', 'fee_amount_cents',
+         'net_amount_cents', 'currency', 'service_period_start',
+         'service_period_end', 'invoiced_at', 'paid_at', 'settled_at'),
+    ),
+    'payout_availability_receipts': (
+        'pavr_',
+        ('opportunity_id', 'payment_receipt_id', 'provider',
+         'external_balance_id', 'evidence_url', 'amount_cents', 'currency',
+         'available_at'),
+    ),
+    'recurring_payout_availability_receipts': (
+        'recuravail_',
+        ('opportunity_id', 'recurring_payment_receipt_id', 'provider',
+         'external_balance_id', 'evidence_url', 'amount_cents', 'currency',
+         'available_at'),
+    ),
+    'bank_receipts': (
+        'bankr_',
+        ('opportunity_id', 'payout_availability_receipt_id',
+         'financial_institution', 'external_transfer_id', 'evidence_url',
+         'amount_cents', 'currency', 'received_at'),
+    ),
+    'recurring_bank_receipts': (
+        'recurbank_',
+        ('opportunity_id', 'recurring_payout_receipt_id',
+         'financial_institution', 'external_transfer_id', 'evidence_url',
+         'amount_cents', 'currency', 'received_at'),
+    ),
+}
+
+
+def verified_receipt_rows(conn, table):
+    """Return only hash-consistent rows from a production receipt table.
+
+    Legacy schemas without receipt_hash remain readable for historical/local
+    compatibility. Once a table has immutable receipt columns, invalid rows
+    fail closed and cannot contribute to verified mission metrics.
+    """
+    try:
+        columns = {
+            row[1] for row in conn.execute(f'PRAGMA table_info({table})').fetchall()
+        }
+    except sqlite3.OperationalError:
+        return []
+    if not columns:
+        return []
+    prefix, snapshot_columns = RECEIPT_SPECS[table]
+    if 'receipt_hash' not in columns:
+        cursor = conn.execute(f'SELECT * FROM {table}')
+        names = [item[0] for item in cursor.description]
+        return [dict(zip(names, row)) for row in cursor.fetchall()]
+    required = {'receipt_id', 'receipt_hash', *snapshot_columns}
+    if not required.issubset(columns):
+        return []
+    selected = ('receipt_id', *snapshot_columns, 'receipt_hash')
+    rows = conn.execute(
+        f"SELECT {','.join(selected)} FROM {table}"
+    ).fetchall()
+    verified = []
+    for row in rows:
+        item = dict(zip(selected, row))
+        snapshot = {key: item[key] for key in snapshot_columns}
+        serialized = json.dumps(snapshot, sort_keys=True, separators=(',', ':'))
+        expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        if (item['receipt_hash'] == expected_hash
+                and item['receipt_id'] == prefix + expected_hash[:24]):
+            verified.append(item)
+    return verified
+
+
+def receipt_totals(conn, table, amount_columns):
+    rows = verified_receipt_rows(conn, table)
+    return len(rows), {
+        column: sum((row.get(column) or 0) for row in rows) / 100.0
+        for column in amount_columns
+    }
+
+
 def snapshot(conn):
     sent = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='sent'")
     replies = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='reply'")
     interested = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='interested'")
-    event_sales = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='sale'")
-    event_gross = scalar(conn, "SELECT COALESCE(SUM(value),0) FROM events WHERE event_type='sale'")
-    refunds = scalar(conn, "SELECT COALESCE(SUM(value),0) FROM events WHERE event_type='refund'")
-    collected_payments = scalar(conn, "SELECT COUNT(*) FROM payment_receipts")
-    recurring_payments = scalar(
-        conn, "SELECT COUNT(*) FROM recurring_payment_receipts")
-    one_time_gross = scalar(
-        conn, "SELECT COALESCE(SUM(gross_amount_cents),0) / 100.0 FROM payment_receipts")
-    one_time_fees = scalar(
-        conn, "SELECT COALESCE(SUM(fee_amount_cents),0) / 100.0 FROM payment_receipts")
-    one_time_net = scalar(
-        conn, "SELECT COALESCE(SUM(net_amount_cents),0) / 100.0 FROM payment_receipts")
-    recurring_gross = scalar(
-        conn, """SELECT COALESCE(SUM(gross_amount_cents),0) / 100.0
-                 FROM recurring_payment_receipts""")
-    recurring_fees = scalar(
-        conn, """SELECT COALESCE(SUM(fee_amount_cents),0) / 100.0
-                 FROM recurring_payment_receipts""")
-    recurring_net = scalar(
-        conn, """SELECT COALESCE(SUM(net_amount_cents),0) / 100.0
-                 FROM recurring_payment_receipts""")
-    recurring_withdrawable = scalar(
-        conn, """SELECT COALESCE(SUM(amount_cents),0) / 100.0
-                 FROM recurring_payout_availability_receipts""")
-    recurring_bank_received = scalar(
-        conn, """SELECT COALESCE(SUM(amount_cents),0) / 100.0
-                 FROM recurring_bank_receipts""")
+    claimed_sales = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='sale'")
+    claimed_sale_value = scalar(conn, "SELECT COALESCE(SUM(value),0) FROM events WHERE event_type='sale'")
+    claimed_refund_value = scalar(conn, "SELECT COALESCE(SUM(value),0) FROM events WHERE event_type='refund'")
+    collected_payments, one_time = receipt_totals(
+        conn, 'payment_receipts',
+        ('gross_amount_cents', 'fee_amount_cents', 'net_amount_cents'))
+    recurring_payments, recurring = receipt_totals(
+        conn, 'recurring_payment_receipts',
+        ('gross_amount_cents', 'fee_amount_cents', 'net_amount_cents'))
+    _, recurring_payout = receipt_totals(
+        conn, 'recurring_payout_availability_receipts', ('amount_cents',))
+    _, recurring_bank = receipt_totals(
+        conn, 'recurring_bank_receipts', ('amount_cents',))
+    _, one_time_payout = receipt_totals(
+        conn, 'payout_availability_receipts', ('amount_cents',))
+    _, one_time_bank = receipt_totals(
+        conn, 'bank_receipts', ('amount_cents',))
+    one_time_gross = one_time['gross_amount_cents']
+    one_time_fees = one_time['fee_amount_cents']
+    one_time_net = one_time['net_amount_cents']
+    recurring_gross = recurring['gross_amount_cents']
+    recurring_fees = recurring['fee_amount_cents']
+    recurring_net = recurring['net_amount_cents']
+    recurring_withdrawable = recurring_payout['amount_cents']
+    recurring_bank_received = recurring_bank['amount_cents']
+    one_time_withdrawable = one_time_payout['amount_cents']
+    one_time_bank_received = one_time_bank['amount_cents']
     opportunity_gross = one_time_gross + recurring_gross
     opportunity_fees = one_time_fees + recurring_fees
     opportunity_net = one_time_net + recurring_net
@@ -118,7 +217,11 @@ def snapshot(conn):
     return {
         'eligible_leads': eligible, 'sent': sent, 'replies': replies,
         'interested': interested,
-        'sales': event_sales + collected_payments + recurring_payments,
+        'sales': collected_payments + recurring_payments,
+        'claimed_sale_events': claimed_sales,
+        'claimed_sale_value': claimed_sale_value,
+        'claimed_refund_value': claimed_refund_value,
+        'claimed_sale_status': 'unverified_not_collected_revenue',
         'verified_collected_payments':
             collected_payments + recurring_payments,
         'verified_one_time_payment_receipts': collected_payments,
@@ -128,11 +231,17 @@ def snapshot(conn):
         'verified_recurring_net_revenue': recurring_net,
         'verified_recurring_withdrawable_balance': recurring_withdrawable,
         'verified_recurring_money_received': recurring_bank_received,
+        'verified_one_time_withdrawable_balance': one_time_withdrawable,
+        'verified_one_time_money_received': one_time_bank_received,
+        'verified_withdrawable_balance':
+            one_time_withdrawable + recurring_withdrawable,
+        'verified_money_received':
+            one_time_bank_received + recurring_bank_received,
         'verified_opportunity_gross_revenue': opportunity_gross,
         'verified_opportunity_fees': opportunity_fees,
         'verified_opportunity_net_revenue': opportunity_net,
-        'verified_gross_revenue': event_gross + opportunity_gross, 'refunds': refunds,
-        'verified_net_revenue': event_gross - refunds + opportunity_net,
+        'verified_gross_revenue': opportunity_gross,
+        'verified_net_revenue': opportunity_net,
     }
 
 
@@ -175,6 +284,14 @@ def ledger_business_model_evidence(conn):
                    p.net_amount_cents, e.contribution_cents,
                    (e.delivery_cost_cents + e.inference_cost_cents + e.cac_cents)
                      AS realized_cost_cents,
+                   (SELECT a.asset_id FROM reusable_ip_assets a
+                    WHERE a.opportunity_id=g.opportunity_id
+                    ORDER BY CASE a.maturity
+                      WHEN 'productize_candidate' THEN 4
+                      WHEN 'scale_candidate' THEN 3
+                      WHEN 'repeatable_positive_margin' THEN 2
+                      WHEN 'paid_validated' THEN 1
+                      ELSE 0 END DESC LIMIT 1) AS mastery_asset_id,
                    (SELECT a.maturity FROM reusable_ip_assets a
                     WHERE a.opportunity_id=g.opportunity_id
                     ORDER BY CASE a.maturity
@@ -193,10 +310,16 @@ def ledger_business_model_evidence(conn):
             ORDER BY g.occurred_at, g.receipt_id
         ''').fetchall()
     except sqlite3.OperationalError:
-        return {}
+        rows = []
 
     aggregated = {}
     for row in rows:
+        _verified_recurring_growth_evidence(
+            conn, row['growth_receipt_id'])
+        verified_maturity = 'learned'
+        if row['mastery_asset_id']:
+            verified_maturity = _verified_reusable_ip_maturity(
+                conn, row['mastery_asset_id'])['maturity']
         try:
             payload = json.loads(row['payload_json'])
         except (TypeError, ValueError):
@@ -236,7 +359,7 @@ def ledger_business_model_evidence(conn):
             item['expanded_value_delta_cents'] += max(
                 0, (row['expanded_value_cents'] or 0)
                 - (row['baseline_value_cents'] or 0))
-        maturity = row['mastery'] or 'learned'
+        maturity = verified_maturity
         if MASTERY_ORDER.get(maturity, 0) > MASTERY_ORDER[item['mastery']]:
             item['mastery'] = maturity
         item['receipt_lineage'].append({
@@ -253,7 +376,8 @@ def ledger_business_model_evidence(conn):
     try:
         reuse_rows = conn.execute('''
             SELECT r.receipt_id AS reuse_receipt_id,
-                   r.source_opportunity_id, r.reused_opportunity_id,
+                   r.source_asset_id, r.source_opportunity_id,
+                   r.reused_opportunity_id,
                    r.economics_kind, r.economics_id, r.occurred_at,
                    source_o.payload_json, source_a.maturity,
                    CASE r.economics_kind
@@ -290,6 +414,10 @@ def ledger_business_model_evidence(conn):
         reuse_rows = []
 
     for row in reuse_rows:
+        _verified_reusable_ip_reuse_evidence(
+            conn, row['reuse_receipt_id'])
+        verified_maturity = _verified_reusable_ip_maturity(
+            conn, row['source_asset_id'])['maturity']
         try:
             payload = json.loads(row['payload_json'])
         except (TypeError, ValueError):
@@ -316,7 +444,7 @@ def ledger_business_model_evidence(conn):
         })
         item['verified_reuse_receipts'] += 1
         item['_reused_opportunities'].add(row['reused_opportunity_id'])
-        maturity = row['maturity'] or 'learned'
+        maturity = verified_maturity
         if MASTERY_ORDER.get(maturity, 0) > MASTERY_ORDER[item['mastery']]:
             item['mastery'] = maturity
         item['reuse_receipt_lineage'].append({
@@ -328,21 +456,103 @@ def ledger_business_model_evidence(conn):
             'occurred_at': row['occurred_at'],
         })
 
+    try:
+        forecast_ids = [row[0] for row in conn.execute(
+            "SELECT economics_id FROM realized_unit_economics "
+            "ORDER BY measured_at,economics_id").fetchall()]
+    except sqlite3.OperationalError:
+        forecast_ids = []
+    for economics_id in forecast_ids:
+        # Rebuild payment/proposal lineage before any forecast result can alter
+        # model priority. A changed receipt or proposal fails the whole snapshot.
+        _verified_realized_economics(conn, economics_id)
+        row = conn.execute('''
+            SELECT e.opportunity_id, e.delivery_cost_cents,
+                   e.inference_cost_cents, e.cac_cents, e.measured_at,
+                   e.evidence_json, o.payload_json, p.net_amount_cents
+            FROM realized_unit_economics e
+            JOIN opportunities o ON o.id=e.opportunity_id
+            JOIN payment_receipts p
+              ON p.receipt_id=e.payment_receipt_id
+             AND p.opportunity_id=e.opportunity_id
+            WHERE e.economics_id=?
+        ''', (economics_id,)).fetchone()
+        if row is None:
+            raise ValueError('realized_economics_unverified')
+        try:
+            evidence = json.loads(row['evidence_json'])
+            payload = json.loads(row['payload_json'])
+        except (TypeError, ValueError) as exc:
+            raise ValueError('realized_economics_unverified') from exc
+        comparison = evidence.get('proposal_projection_comparison')
+        model_id = OFFER_FAMILY_MODEL_MAP.get(payload.get('offer_family'))
+        if not isinstance(comparison, dict) or not model_id:
+            continue
+        projected = comparison.get('projected_contribution_cents')
+        variance = comparison.get('contribution_variance_cents')
+        if not isinstance(projected, int) or not isinstance(variance, int):
+            raise ValueError('realized_economics_unverified')
+        item = aggregated.setdefault(model_id, {
+            '_ledger_verified': True,
+            'verified_retention_receipts': 0,
+            'verified_expansion_receipts': 0,
+            'retained_recurring_value_cents': 0,
+            'expanded_value_delta_cents': 0,
+            'realized_recurring_net_cents': 0,
+            'realized_recurring_contribution_cents': 0,
+            'realized_recurring_cost_cents': 0,
+            'mastery': 'learned',
+            'receipt_lineage': [],
+            'verified_reuse_receipts': 0,
+            'verified_reused_opportunities': 0,
+            'reuse_receipt_lineage': [],
+            '_counted_payments': set(),
+            '_reused_opportunities': set(),
+        })
+        item.setdefault('_forecast_count', 0)
+        item.setdefault('_forecast_projected_total', 0)
+        item.setdefault('_forecast_absolute_error_total', 0)
+        item.setdefault('_forecast_observed_at', [])
+        item.setdefault('_one_time_net_cents', 0)
+        item.setdefault('_one_time_cost_cents', 0)
+        item['_forecast_count'] += 1
+        item['_forecast_projected_total'] += projected
+        item['_forecast_absolute_error_total'] += abs(variance)
+        item['_forecast_observed_at'].append(row['measured_at'])
+        item['_one_time_net_cents'] += row['net_amount_cents']
+        item['_one_time_cost_cents'] += (
+            row['delivery_cost_cents'] + row['inference_cost_cents']
+            + row['cac_cents'])
+
     for item in aggregated.values():
         payment_sample = len(item.pop('_counted_payments'))
         reused_opportunities = len(item.pop('_reused_opportunities'))
         item['verified_reused_opportunities'] = reused_opportunities
-        sample_size = max(payment_sample, reused_opportunities)
+        forecast_count = item.pop('_forecast_count', 0)
+        projected_total = item.pop('_forecast_projected_total', 0)
+        absolute_error_total = item.pop('_forecast_absolute_error_total', 0)
+        forecast_timestamps = item.pop('_forecast_observed_at', [])
+        one_time_net = item.pop('_one_time_net_cents', 0)
+        one_time_cost = item.pop('_one_time_cost_cents', 0)
+        item['verified_forecast_comparisons'] = forecast_count
+        item['forecast_mean_absolute_error_cents'] = (
+            round(absolute_error_total / forecast_count, 2)
+            if forecast_count else 0)
+        item['forecast_mean_projected_contribution_cents'] = (
+            round(projected_total / forecast_count, 2)
+            if forecast_count else 0)
+        sample_size = max(payment_sample, reused_opportunities, forecast_count)
         retained = item['verified_retention_receipts']
         timestamps = [
             line['occurred_at'] for line in item['receipt_lineage']]
         timestamps.extend(
             line['occurred_at'] for line in item['reuse_receipt_lineage'])
+        timestamps.extend(forecast_timestamps)
         item.update({
             'observed_revenue':
-                item['realized_recurring_net_cents'] / 100.0,
+                (item['realized_recurring_net_cents'] + one_time_net) / 100.0,
             'observed_cost':
-                item['realized_recurring_cost_cents'] / 100.0,
+                (item['realized_recurring_cost_cents'] + one_time_cost) / 100.0,
             'conversion_rate': min(1.0, retained / max(sample_size, 1)),
             'evidence_quality': 1.0,
             'sample_size': sample_size,

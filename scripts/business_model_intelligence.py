@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +34,20 @@ REQUIRED_FIELDS = {
     "id", "category", "name", "revenue_type", "speed_to_revenue", "margin",
     "startup_cost", "automation", "scalability", "owner_effort", "compliance_risk",
 }
+
+# These fields are derived exclusively from the auditable revenue ledger. Public
+# CLI evidence may describe observations, but it cannot assert settled payments,
+# recurring expansion, reuse, or earned mastery.
+LEDGER_ONLY_EVIDENCE_KEYS = frozenset({
+    "_ledger_verified", "verified_retention_receipts",
+    "verified_expansion_receipts", "retained_recurring_value_cents",
+    "expanded_value_delta_cents", "realized_recurring_net_cents",
+    "realized_recurring_contribution_cents", "realized_recurring_cost_cents",
+    "mastery", "receipt_lineage", "verified_reuse_receipts",
+    "verified_reused_opportunities", "reuse_receipt_lineage",
+    "verified_forecast_comparisons", "forecast_mean_absolute_error_cents",
+    "forecast_mean_projected_contribution_cents",
+})
 
 
 def load_catalog(path: str | os.PathLike[str] = DEFAULT_CATALOG) -> dict[str, Any]:
@@ -125,6 +140,19 @@ def portfolio(ranked: list[dict[str, Any]], limit: int = 10) -> dict[str, Any]:
         "automatic_production_deploy": False, "automatic_unsolicited_outreach": False}}
 
 
+def _finite_evidence_number(value: Any, field: str) -> float:
+    """Reject booleans, NaN, and infinity before they can alter rankings."""
+    if isinstance(value, bool):
+        raise ValueError(f"{field} must be a finite number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{field} must be a finite number") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{field} must be a finite number")
+    return number
+
+
 def _parse_observed_at(value: Any) -> datetime | None:
     if not value:
         return None
@@ -151,7 +179,8 @@ def evidence_freshness(evidence: dict[str, Any], now: datetime | None = None,
     if observed_at > now:
         return 0.0
     age_days = (now - observed_at).total_seconds() / 86400.0
-    half_life_days = max(1.0, float(half_life_days))
+    half_life_days = max(
+        1.0, _finite_evidence_number(half_life_days, "evidence_half_life_days"))
     return round(0.5 ** (age_days / half_life_days), 4)
 
 
@@ -159,21 +188,65 @@ def evidence_reliability(evidence: dict[str, Any]) -> float:
     """Temper small samples while keeping backward compatibility for uncounted legacy evidence."""
     if "sample_size" not in evidence:
         return 1.0
-    sample_size = max(0.0, float(evidence.get("sample_size", 0) or 0))
+    sample_size = max(
+        0.0,
+        _finite_evidence_number(
+            evidence.get("sample_size", 0) or 0, "sample_size"),
+    )
     return round(min(1.0, sample_size / 20.0), 4)
 
 
 def experiment_state(profit: float, conversion: float, effective_quality: float,
-                     sample_size: float | None) -> str:
+                     sample_size: float | None, economics_verified: bool) -> str:
     if effective_quality < 0.2:
         return "validate"
-    if profit < 0 and effective_quality >= 0.5:
+    if economics_verified and profit < 0 and effective_quality >= 0.5:
         return "deprioritize"
-    if profit > 0 and conversion > 0 and effective_quality >= 0.7 and (sample_size is None or sample_size >= 10):
+    if (
+        economics_verified
+        and profit > 0
+        and conversion > 0
+        and effective_quality >= 0.7
+        and (sample_size is None or sample_size >= 10)
+    ):
         return "scale_candidate"
-    if profit > 0:
+    if economics_verified and profit > 0:
         return "continue_validation"
     return "validate"
+
+
+def verified_forecast_calibration(evidence: dict[str, Any],
+                                  ledger_verified: bool) -> dict[str, Any]:
+    """Return a bounded decision signal from receipt-verified forecast results."""
+    if not ledger_verified:
+        return {
+            "comparison_count": 0,
+            "relative_error": None,
+            "confidence": 0.0,
+        }
+    count = max(0, int(_finite_evidence_number(
+        evidence.get("verified_forecast_comparisons", 0) or 0,
+        "verified_forecast_comparisons")))
+    absolute_error = max(0.0, _finite_evidence_number(
+        evidence.get("forecast_mean_absolute_error_cents", 0) or 0,
+        "forecast_mean_absolute_error_cents"))
+    projected = max(0.0, _finite_evidence_number(
+        evidence.get("forecast_mean_projected_contribution_cents", 0) or 0,
+        "forecast_mean_projected_contribution_cents"))
+    if count == 0 or projected <= 0:
+        return {
+            "comparison_count": count,
+            "relative_error": None,
+            "confidence": 0.0,
+        }
+    relative_error = absolute_error / projected
+    calibration = max(0.0, 1.0 - min(1.0, relative_error))
+    sample_reliability = min(1.0, count / 10.0)
+    return {
+        "comparison_count": count,
+        "relative_error": round(relative_error, 4),
+        "confidence": round(calibration * sample_reliability, 4),
+    }
 
 
 def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]] | None = None,
@@ -181,9 +254,11 @@ def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]]
                  evidence_half_life_days: float = 30.0) -> dict[str, Any]:
     """Turn rankings into a standing, evidence-driven pursuit posture.
 
-    Observed economics can promote/demote models without changing hard safety gates.
-    Supported evidence keys: observed_revenue, observed_cost, conversion_rate,
-    evidence_quality (0..1), observed_at (ISO-8601), and sample_size. Mission
+    Market observations can reprioritize validation without changing hard safety
+    gates, but only receipt-backed ledger economics may produce profit or scale
+    states. Supported evidence keys: observed_revenue, observed_cost,
+    conversion_rate, evidence_quality (0..1), observed_at (ISO-8601), and
+    sample_size. Unverified revenue/cost remain explicitly labeled claims. Mission
     Control may also add receipt-backed recurring retention, expansion, realized
     contribution, cross-opportunity reusable-IP reuse, and mastery fields marked
     with its private ledger-verification flag; unverified callers receive no
@@ -193,15 +268,47 @@ def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]]
     enriched = []
     for model in ranked:
         evidence = active.get(model["id"], {})
-        revenue = max(0.0, float(evidence.get("observed_revenue", 0) or 0))
-        cost = max(0.0, float(evidence.get("observed_cost", 0) or 0))
-        conversion = min(1.0, max(0.0, float(evidence.get("conversion_rate", 0) or 0)))
-        quality = min(1.0, max(0.0, float(evidence.get("evidence_quality", 0) or 0)))
+        claimed_revenue = max(
+            0.0,
+            _finite_evidence_number(
+                evidence.get("observed_revenue", 0) or 0,
+                "observed_revenue",
+            ),
+        )
+        claimed_cost = max(
+            0.0,
+            _finite_evidence_number(
+                evidence.get("observed_cost", 0) or 0,
+                "observed_cost",
+            ),
+        )
+        conversion = min(
+            1.0,
+            max(
+                0.0,
+                _finite_evidence_number(
+                    evidence.get("conversion_rate", 0) or 0,
+                    "conversion_rate",
+                ),
+            ),
+        )
+        quality = min(
+            1.0,
+            max(
+                0.0,
+                _finite_evidence_number(
+                    evidence.get("evidence_quality", 0) or 0,
+                    "evidence_quality",
+                ),
+            ),
+        )
         freshness = evidence_freshness(evidence, now, evidence_half_life_days)
         reliability = evidence_reliability(evidence)
         effective_quality = round(quality * freshness * reliability, 4)
-        profit = revenue - cost
         ledger_verified = evidence.get("_ledger_verified") is True
+        revenue = claimed_revenue if ledger_verified else 0.0
+        cost = claimed_cost if ledger_verified else 0.0
+        profit = revenue - cost
         retention_receipts = (
             max(0, int(evidence.get("verified_retention_receipts", 0) or 0))
             if ledger_verified else 0)
@@ -224,20 +331,36 @@ def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]]
         mastery = (
             str(evidence.get("mastery") or "learned")
             if ledger_verified else "learned")
+        forecast_calibration = verified_forecast_calibration(
+            evidence, ledger_verified)
         evidence_bonus = effective_quality * min(
             8.0, max(-8.0, profit / 100.0 + conversion * 5.0))
         recurring_growth_bonus = effective_quality * min(
             3.0, retention_receipts * 0.5 + expansion_receipts * 0.75)
         verified_reuse_bonus = effective_quality * min(
             2.0, reuse_receipts * 0.5 + reused_opportunities * 0.75)
+        forecast_calibration_bonus = (
+            effective_quality * forecast_calibration["confidence"]
+            if ledger_verified and profit > 0 else 0.0)
         pursuit_score = round(
             model["apex_score"] + evidence_bonus + recurring_growth_bonus
-            + verified_reuse_bonus, 2)
-        sample_size = None if "sample_size" not in evidence else max(0.0, float(evidence.get("sample_size", 0) or 0))
+            + verified_reuse_bonus + forecast_calibration_bonus, 2)
+        sample_size = (
+            None
+            if "sample_size" not in evidence
+            else max(
+                0.0,
+                _finite_evidence_number(
+                    evidence.get("sample_size", 0) or 0, "sample_size"),
+            )
+        )
         enriched.append({
             **model,
             "pursuit_score": pursuit_score,
             "observed_profit": round(profit, 2),
+            "claimed_observed_revenue": round(claimed_revenue, 2),
+            "claimed_observed_cost": round(claimed_cost, 2),
+            "economics_verified": ledger_verified,
             "evidence_quality": quality,
             "evidence_freshness": freshness,
             "evidence_reliability": reliability,
@@ -252,7 +375,12 @@ def pursuit_plan(ranked: list[dict[str, Any]], active: dict[str, dict[str, Any]]
             "retained_recurring_value_cents": retained_value_cents,
             "expanded_value_delta_cents": expanded_value_delta_cents,
             "mastery": mastery,
-            "experiment_state": experiment_state(profit, conversion, effective_quality, sample_size),
+            "verified_forecast_calibration": forecast_calibration,
+            "forecast_calibration_bonus": round(
+                forecast_calibration_bonus, 4),
+            "experiment_state": experiment_state(
+                profit, conversion, effective_quality, sample_size,
+                ledger_verified),
         })
     enriched.sort(key=lambda item: (item["eligible"], item["pursuit_score"]), reverse=True)
     pursue = [m for m in enriched if m["eligible"]][:max(1, pursue_limit)]
@@ -279,6 +407,21 @@ def parse_constraints(args: argparse.Namespace) -> dict[str, Any]:
         "min_automation": args.min_automation}.items() if value is not None}
 
 
+def sanitize_public_evidence(payload: Any) -> dict[str, dict[str, Any]]:
+    """Remove ledger-derived assertions from untrusted CLI evidence."""
+    if not isinstance(payload, dict):
+        raise ValueError("evidence JSON must be an object keyed by model id")
+    sanitized: dict[str, dict[str, Any]] = {}
+    for model_id, evidence in payload.items():
+        if not isinstance(model_id, str) or not isinstance(evidence, dict):
+            raise ValueError("each evidence entry must be an object keyed by model id")
+        sanitized[model_id] = {
+            key: value for key, value in evidence.items()
+            if key not in LEDGER_ONLY_EVIDENCE_KEYS
+        }
+    return sanitized
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Rank and prime APEX business-model opportunities")
     parser.add_argument("--catalog", default=str(DEFAULT_CATALOG)); parser.add_argument("--limit", type=int, default=10)
@@ -289,7 +432,8 @@ def main() -> None:
     parser.add_argument("--min-automation", type=int, default=6); args = parser.parse_args()
     catalog = load_catalog(args.catalog); constraints = parse_constraints(args)
     ranked = rank_models(catalog["models"], constraints); output = portfolio(ranked, max(1, args.limit))
-    evidence = json.loads(args.evidence_json) if args.evidence_json else {}
+    evidence = sanitize_public_evidence(
+        json.loads(args.evidence_json)) if args.evidence_json else {}
     output.update({"schema_version": catalog.get("schema_version", 1), "catalog_size": len(catalog["models"]),
                    "constraints": constraints, "top_ranked": ranked[:max(1, args.limit)],
                    "pursuit_plan": pursuit_plan(ranked, evidence, args.pursue_limit,

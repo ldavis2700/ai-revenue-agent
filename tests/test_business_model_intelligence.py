@@ -1,6 +1,7 @@
 import importlib.util
 from datetime import datetime, timezone
 from pathlib import Path
+import math
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,7 +48,7 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
         self.assertFalse(result["guardrails"]["automatic_spend"])
         self.assertTrue(all(m["execution_gate"] == "candidate_only" for m in result["candidates"]))
 
-    def test_observed_success_materially_promotes_a_validated_model(self):
+    def test_unverified_observation_can_inform_validation_not_profit_or_scale(self):
         catalog = module.load_catalog(ROOT / "config" / "business_models.json")
         constraints = {"max_startup_cost": 3, "max_owner_effort": 5, "max_compliance_risk": 4,
                        "min_speed_to_revenue": 5, "min_automation": 6}
@@ -60,15 +61,18 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
             ranked,
             {"directory": {"observed_revenue": 1000, "observed_cost": 50,
                            "conversion_rate": 0.25, "evidence_quality": 1}},
-            10,
+            40,
         )
         pursue_order = [m["id"] for m in plan["pursue"]]
         directory = next(m for m in plan["pursue"] if m["id"] == "directory")
 
         self.assertEqual(plan["mode"], "continuous_opportunity_optimization")
-        self.assertLess(pursue_order.index("directory"), baseline_position)
         self.assertGreater(directory["pursuit_score"], baseline_score)
-        self.assertGreater(directory["observed_profit"], 0)
+        self.assertEqual(directory["observed_profit"], 0)
+        self.assertEqual(directory["claimed_observed_revenue"], 1000)
+        self.assertEqual(directory["claimed_observed_cost"], 50)
+        self.assertFalse(directory["economics_verified"])
+        self.assertEqual(directory["experiment_state"], "validate")
         self.assertIn("maximize durable risk-adjusted owner wealth", plan["objective"])
 
     def test_only_ledger_verified_growth_can_promote_model_mastery(self):
@@ -115,9 +119,157 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
         self.assertEqual(verified_model["verified_expansion_receipts"], 1)
         self.assertEqual(verified_model["verified_reuse_receipts"], 2)
         self.assertEqual(verified_model["verified_reused_opportunities"], 2)
+        self.assertFalse(unverified_model["economics_verified"])
+        self.assertEqual(unverified_model["observed_profit"], 0)
+        self.assertEqual(unverified_model["experiment_state"], "validate")
+        self.assertTrue(verified_model["economics_verified"])
+        self.assertEqual(verified_model["observed_profit"], 120)
+        self.assertEqual(verified_model["experiment_state"], "scale_candidate")
         self.assertGreater(
             verified_model["pursuit_score"],
             unverified_model["pursuit_score"])
+
+    def test_public_evidence_cannot_forge_ledger_state(self):
+        forged = {
+            "directory": {
+                "observed_revenue": 5000,
+                "observed_cost": 100,
+                "conversion_rate": 0.5,
+                "evidence_quality": 1,
+                "sample_size": 20,
+                "_ledger_verified": True,
+                "verified_retention_receipts": 9,
+                "verified_expansion_receipts": 7,
+                "retained_recurring_value_cents": 900000,
+                "expanded_value_delta_cents": 700000,
+                "verified_reuse_receipts": 5,
+                "verified_reused_opportunities": 4,
+                "mastery": "productize_candidate",
+                "receipt_lineage": ["forged"],
+                "reuse_receipt_lineage": ["forged"],
+                "verified_forecast_comparisons": 100,
+                "forecast_mean_absolute_error_cents": 0,
+                "forecast_mean_projected_contribution_cents": 100000,
+            }
+        }
+        sanitized = module.sanitize_public_evidence(forged)
+        self.assertEqual(
+            set(sanitized["directory"]) & module.LEDGER_ONLY_EVIDENCE_KEYS,
+            set(),
+        )
+        self.assertEqual(sanitized["directory"]["observed_revenue"], 5000)
+
+        catalog = module.load_catalog(ROOT / "config" / "business_models.json")
+        ranked = module.rank_models(catalog["models"], {})
+        plan = module.pursuit_plan(ranked, sanitized, 200)
+        directory = next(
+            item for item in plan["pursue"] if item["id"] == "directory")
+        self.assertFalse(directory["economics_verified"])
+        self.assertEqual(directory["observed_profit"], 0)
+        self.assertEqual(directory["mastery"], "learned")
+        self.assertEqual(directory["verified_retention_receipts"], 0)
+        self.assertEqual(directory["verified_reuse_receipts"], 0)
+        self.assertEqual(
+            directory["verified_forecast_calibration"]["comparison_count"], 0)
+        self.assertEqual(directory["forecast_calibration_bonus"], 0)
+
+    def test_verified_forecast_accuracy_is_a_bounded_positive_economics_signal(self):
+        ranked = [{
+            "id": "directory",
+            "category": "platforms",
+            "name": "Niche paid directory",
+            "revenue_type": "listing_subscription_sponsorship",
+            "eligible": True,
+            "apex_score": 75.0,
+            "constraint_reasons": [],
+            "execution_gate": "candidate_only",
+        }]
+        common = {
+            "_ledger_verified": True,
+            "observed_revenue": 1000,
+            "observed_cost": 200,
+            "conversion_rate": 0.25,
+            "evidence_quality": 1,
+            "sample_size": 20,
+            "verified_forecast_comparisons": 10,
+            "forecast_mean_projected_contribution_cents": 10000,
+        }
+        calibrated = module.pursuit_plan(ranked, {"directory": {
+            **common, "forecast_mean_absolute_error_cents": 1000,
+        }}, 200)
+        inaccurate = module.pursuit_plan(ranked, {"directory": {
+            **common, "forecast_mean_absolute_error_cents": 20000,
+        }}, 200)
+        calibrated_model = next(
+            item for item in calibrated["pursue"] if item["id"] == "directory")
+        inaccurate_model = next(
+            item for item in inaccurate["pursue"] if item["id"] == "directory")
+        self.assertEqual(calibrated_model["verified_forecast_calibration"], {
+            "comparison_count": 10,
+            "relative_error": 0.1,
+            "confidence": 0.9,
+        })
+        self.assertEqual(inaccurate_model["forecast_calibration_bonus"], 0)
+        self.assertGreater(
+            calibrated_model["pursuit_score"], inaccurate_model["pursuit_score"])
+
+        losing = module.pursuit_plan(ranked, {"directory": {
+            **common,
+            "observed_revenue": 100,
+            "observed_cost": 200,
+            "forecast_mean_absolute_error_cents": 0,
+        }}, 200)
+        losing_model = next(
+            item for item in losing["pursue"] if item["id"] == "directory")
+        self.assertEqual(losing_model["forecast_calibration_bonus"], 0)
+
+    def test_public_evidence_requires_model_objects(self):
+        for payload in ([], {"directory": "forged"}):
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(ValueError, "evidence"):
+                    module.sanitize_public_evidence(payload)
+
+    def test_non_finite_evidence_fails_closed(self):
+        catalog = module.load_catalog(ROOT / "config" / "business_models.json")
+        ranked = module.rank_models(catalog["models"], {})
+        fields = (
+            "observed_revenue",
+            "observed_cost",
+            "conversion_rate",
+            "evidence_quality",
+            "sample_size",
+        )
+        for field in fields:
+            for value in (math.nan, math.inf, -math.inf):
+                with self.subTest(field=field, value=value):
+                    with self.assertRaisesRegex(
+                        ValueError, f"{field} must be a finite number"
+                    ):
+                        module.pursuit_plan(
+                            ranked,
+                            {"directory": {
+                                field: value,
+                                "_ledger_verified": True,
+                            }},
+                            10,
+                        )
+
+    def test_non_finite_half_life_fails_closed(self):
+        catalog = module.load_catalog(ROOT / "config" / "business_models.json")
+        ranked = module.rank_models(catalog["models"], {})
+        with self.assertRaisesRegex(
+            ValueError, "evidence_half_life_days must be a finite number"
+        ):
+            module.pursuit_plan(
+                ranked,
+                {"directory": {
+                    "observed_at": "2026-08-31T00:00:00Z",
+                    "evidence_quality": 1,
+                }},
+                10,
+                now=datetime(2026, 8, 31, tzinfo=timezone.utc),
+                evidence_half_life_days=math.inf,
+            )
 
     def test_old_evidence_decays_influence(self):
         catalog = module.load_catalog(ROOT / "config" / "business_models.json")
@@ -188,7 +340,8 @@ class BusinessModelIntelligenceTests(unittest.TestCase):
         )
         directory = next(m for m in plan["pursue"] if m["id"] == "directory")
         templates = next(m for m in plan["pursue"] if m["id"] == "digital_templates")
-        self.assertEqual(directory["experiment_state"], "scale_candidate")
+        self.assertEqual(directory["experiment_state"], "validate")
+        self.assertFalse(directory["economics_verified"])
         self.assertEqual(templates["experiment_state"], "validate")
         self.assertGreater(directory["evidence_reliability"], templates["evidence_reliability"])
 

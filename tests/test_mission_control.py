@@ -1,8 +1,10 @@
 import json
+import hashlib
 import os
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from scripts import mission_control
 
@@ -26,17 +28,26 @@ class MissionControlTests(unittest.TestCase):
         self.assertFalse(result['execution_gate']['external_actions_allowed'])
         self.assertFalse(result['execution_gate']['spending_allowed'])
 
-    def test_verified_revenue_drives_score_and_plan(self):
+    def test_unverified_sale_claim_does_not_drive_score_or_plan(self):
         conn = sqlite3.connect(self.path)
         conn.execute("INSERT INTO leads VALUES ('l1', 80, 1)")
         conn.executemany('INSERT INTO events VALUES (?,?,?)', [
-            ('l1', 'sent', 0), ('l1', 'reply', 0), ('l1', 'interested', 0), ('l1', 'sale', 100)])
+            ('l1', 'sent', 0), ('l1', 'reply', 0),
+            ('l1', 'interested', 0), ('l1', 'sale', 100)])
         conn.commit()
         conn.close()
         result = mission_control.run(self.path)
-        self.assertEqual(result['metrics']['verified_net_revenue'], 100)
-        self.assertGreater(result['objective_score'], 100)
-        self.assertEqual(result['plan'][0]['action'], 'replicate_verified_winning_segment')
+        metrics = result['metrics']
+        self.assertEqual(metrics['claimed_sale_events'], 1)
+        self.assertEqual(metrics['claimed_sale_value'], 100)
+        self.assertEqual(
+            metrics['claimed_sale_status'],
+            'unverified_not_collected_revenue')
+        self.assertEqual(metrics['verified_collected_payments'], 0)
+        self.assertEqual(metrics['verified_net_revenue'], 0)
+        self.assertEqual(result['objective_score'], 25)
+        self.assertNotEqual(
+            result['plan'][0]['action'], 'replicate_verified_winning_segment')
 
     def test_settled_opportunity_payments_feed_mission_metrics_without_double_refunds(self):
         conn = sqlite3.connect(self.path)
@@ -60,6 +71,14 @@ class MissionControlTests(unittest.TestCase):
             receipt_id TEXT PRIMARY KEY,
             amount_cents INTEGER NOT NULL
         )''')
+        conn.execute('''CREATE TABLE payout_availability_receipts (
+            receipt_id TEXT PRIMARY KEY,
+            amount_cents INTEGER NOT NULL
+        )''')
+        conn.execute('''CREATE TABLE bank_receipts (
+            receipt_id TEXT PRIMARY KEY,
+            amount_cents INTEGER NOT NULL
+        )''')
         conn.executemany('INSERT INTO events VALUES (?,?,?)', [
             ('l1', 'sent', 0), ('l1', 'sale', 100), ('l1', 'refund', 20)])
         conn.execute(
@@ -73,10 +92,18 @@ class MissionControlTests(unittest.TestCase):
         conn.execute(
             "INSERT INTO recurring_bank_receipts "
             "VALUES ('recurbank_1',14500)")
+        conn.execute(
+            "INSERT INTO payout_availability_receipts "
+            "VALUES ('avail_1',47500)")
+        conn.execute(
+            "INSERT INTO bank_receipts VALUES ('bank_1',47500)")
         conn.commit()
         metrics = mission_control.snapshot(conn)
         conn.close()
-        self.assertEqual(metrics['sales'], 3)
+        self.assertEqual(metrics['sales'], 2)
+        self.assertEqual(metrics['claimed_sale_events'], 1)
+        self.assertEqual(metrics['claimed_sale_value'], 100)
+        self.assertEqual(metrics['claimed_refund_value'], 20)
         self.assertEqual(metrics['verified_collected_payments'], 2)
         self.assertEqual(metrics['verified_one_time_payment_receipts'], 1)
         self.assertEqual(metrics['verified_recurring_payment_receipts'], 1)
@@ -86,12 +113,17 @@ class MissionControlTests(unittest.TestCase):
         self.assertEqual(
             metrics['verified_recurring_withdrawable_balance'], 145)
         self.assertEqual(metrics['verified_recurring_money_received'], 145)
+        self.assertEqual(
+            metrics['verified_one_time_withdrawable_balance'], 475)
+        self.assertEqual(metrics['verified_one_time_money_received'], 475)
+        self.assertEqual(metrics['verified_withdrawable_balance'], 620)
+        self.assertEqual(metrics['verified_money_received'], 620)
         self.assertEqual(metrics['verified_opportunity_gross_revenue'], 650)
         self.assertEqual(metrics['verified_opportunity_fees'], 30)
         self.assertEqual(metrics['verified_opportunity_net_revenue'], 620)
-        self.assertEqual(metrics['verified_gross_revenue'], 750)
-        self.assertEqual(metrics['verified_net_revenue'], 700)
-        self.assertEqual(mission_control.objective_score(metrics), 850)
+        self.assertEqual(metrics['verified_gross_revenue'], 650)
+        self.assertEqual(metrics['verified_net_revenue'], 620)
+        self.assertEqual(mission_control.objective_score(metrics), 720)
 
     def test_missing_payment_table_remains_backward_compatible(self):
         conn = sqlite3.connect(self.path)
@@ -102,7 +134,56 @@ class MissionControlTests(unittest.TestCase):
         self.assertEqual(metrics['verified_recurring_net_revenue'], 0)
         self.assertEqual(metrics['verified_recurring_withdrawable_balance'], 0)
         self.assertEqual(metrics['verified_recurring_money_received'], 0)
+        self.assertEqual(metrics['verified_one_time_withdrawable_balance'], 0)
+        self.assertEqual(metrics['verified_one_time_money_received'], 0)
+        self.assertEqual(metrics['verified_withdrawable_balance'], 0)
+        self.assertEqual(metrics['verified_money_received'], 0)
         self.assertEqual(metrics['verified_opportunity_net_revenue'], 0)
+
+    def test_tampered_production_receipt_cannot_inflate_verified_metrics(self):
+        conn = sqlite3.connect(self.path)
+        conn.execute('''CREATE TABLE payment_receipts (
+            receipt_id TEXT PRIMARY KEY, opportunity_id TEXT,
+            invoice_receipt_id TEXT, provider TEXT,
+            external_transaction_id TEXT, transaction_url TEXT,
+            gross_amount_cents INTEGER, fee_amount_cents INTEGER,
+            net_amount_cents INTEGER, currency TEXT, paid_at TEXT,
+            settled_at TEXT, receipt_hash TEXT
+        )''')
+
+        # Insert explicitly to keep the SQL column order obvious.
+        valid = {
+            'opportunity_id': 'opp_1', 'invoice_receipt_id': 'invr_1',
+            'provider': 'stripe', 'external_transaction_id': 'txn_valid',
+            'transaction_url': 'https://example.com/txn_valid',
+            'gross_amount_cents': 10000, 'fee_amount_cents': 500,
+            'net_amount_cents': 9500, 'currency': 'USD',
+            'paid_at': '2026-10-07T00:00:00+00:00',
+            'settled_at': '2026-10-08T00:00:00+00:00',
+        }
+        serialized = json.dumps(valid, sort_keys=True, separators=(',', ':'))
+        valid_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        conn.execute(
+            'INSERT INTO payment_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            ('payr_' + valid_hash[:24], *valid.values(), valid_hash))
+
+        forged = dict(valid)
+        forged['external_transaction_id'] = 'txn_tampered'
+        forged['transaction_url'] = 'https://example.com/txn_tampered'
+        serialized = json.dumps(forged, sort_keys=True, separators=(',', ':'))
+        forged_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        forged_values = list(forged.values())
+        forged_values[7] = 99999999  # Alter net after the receipt was sealed.
+        conn.execute(
+            'INSERT INTO payment_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            ('payr_' + forged_hash[:24], *forged_values, forged_hash))
+        conn.commit()
+
+        metrics = mission_control.snapshot(conn)
+        conn.close()
+        self.assertEqual(metrics['verified_collected_payments'], 1)
+        self.assertEqual(metrics['verified_gross_revenue'], 100)
+        self.assertEqual(metrics['verified_net_revenue'], 95)
 
     def test_no_leads_prioritizes_approved_source(self):
         result = mission_control.run(self.path)
@@ -153,9 +234,12 @@ class MissionControlTests(unittest.TestCase):
         candidates = result['business_model_intelligence']['top_candidates']
         self.assertTrue(any(candidate['id'] == seed['id'] for candidate in candidates))
         measured = next(candidate for candidate in candidates if candidate['id'] == seed['id'])
-        self.assertIn(measured['experiment_state'], {'continue_validation', 'scale_candidate'})
+        self.assertEqual(measured['experiment_state'], 'validate')
+        self.assertFalse(measured['economics_verified'])
+        self.assertEqual(measured['observed_profit'], 0)
+        self.assertEqual(measured['claimed_observed_revenue'], 1200)
         competition = result['business_model_intelligence']['portfolio_competition']
-        self.assertIsNotNone(competition.get('champion'))
+        self.assertIsNone(competition.get('champion'))
         self.assertIsNotNone(competition.get('challenger'))
 
     def test_recurring_growth_and_cross_opportunity_reuse_feed_model_evidence(self):
@@ -245,8 +329,15 @@ class MissionControlTests(unittest.TestCase):
             ])
         conn.commit()
 
-        evidence = mission_control.ledger_business_model_evidence(conn)
-        snapshot = mission_control.business_model_snapshot(conn)
+        with patch.object(
+                mission_control, '_verified_recurring_growth_evidence'), \
+             patch.object(
+                mission_control, '_verified_reusable_ip_reuse_evidence'), \
+             patch.object(
+                mission_control, '_verified_reusable_ip_maturity',
+                return_value={'maturity': 'productize_candidate'}):
+            evidence = mission_control.ledger_business_model_evidence(conn)
+            snapshot = mission_control.business_model_snapshot(conn)
         conn.close()
 
         model = evidence['ai_agent_implementation']
@@ -271,6 +362,53 @@ class MissionControlTests(unittest.TestCase):
             'ai_agent_implementation']
         self.assertEqual(verified['observed_revenue'], 145)
         self.assertEqual(verified['verified_reuse_receipts'], 1)
+
+    def test_verified_one_time_forecasts_feed_model_calibration(self):
+        conn = mission_control.connect(self.path)
+        conn.execute('''CREATE TABLE opportunities (
+            id TEXT PRIMARY KEY, payload_json TEXT NOT NULL
+        )''')
+        conn.execute('''CREATE TABLE payment_receipts (
+            receipt_id TEXT PRIMARY KEY, opportunity_id TEXT NOT NULL,
+            net_amount_cents INTEGER NOT NULL
+        )''')
+        conn.execute('''CREATE TABLE realized_unit_economics (
+            economics_id TEXT PRIMARY KEY, opportunity_id TEXT NOT NULL,
+            payment_receipt_id TEXT NOT NULL,
+            delivery_cost_cents INTEGER NOT NULL,
+            inference_cost_cents INTEGER NOT NULL,
+            cac_cents INTEGER NOT NULL,
+            measured_at TEXT NOT NULL, evidence_json TEXT NOT NULL
+        )''')
+        conn.execute(
+            "INSERT INTO opportunities VALUES (?,?)",
+            ('opp_1', json.dumps({
+                'offer_family': 'multi_system_operational_integration'})))
+        conn.execute(
+            "INSERT INTO payment_receipts VALUES (?,?,?)",
+            ('pay_1', 'opp_1', 70000))
+        conn.execute(
+            "INSERT INTO realized_unit_economics VALUES (?,?,?,?,?,?,?,?)",
+            ('econ_1', 'opp_1', 'pay_1', 20000, 2000, 5000,
+             '2026-09-27T00:00:00+00:00', json.dumps({
+                 'proposal_projection_comparison': {
+                     'projected_contribution_cents': 73000,
+                     'contribution_variance_cents': -3000,
+                 }})))
+        conn.commit()
+        with patch.object(
+                mission_control, '_verified_realized_economics') as verify:
+            evidence = mission_control.ledger_business_model_evidence(conn)
+        conn.close()
+        verify.assert_called_once_with(conn, 'econ_1')
+        model = evidence['ai_agent_implementation']
+        self.assertEqual(model['verified_forecast_comparisons'], 1)
+        self.assertEqual(model['forecast_mean_absolute_error_cents'], 3000)
+        self.assertEqual(
+            model['forecast_mean_projected_contribution_cents'], 73000)
+        self.assertEqual(model['observed_revenue'], 700)
+        self.assertEqual(model['observed_cost'], 270)
+        self.assertTrue(model['_ledger_verified'])
 
     def test_nonfinite_evidence_cannot_insert_or_replace_measurements(self):
         conn = mission_control.connect(self.path)

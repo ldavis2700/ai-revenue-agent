@@ -31,10 +31,21 @@ BUYER_STAGE_SCORES = {
     "prospect": 0.0,
     "qualified": 0.15,
     "proposal": 0.30,
+    "invitation": 0.55,
     "buyer_reply": 0.55,
     "interview": 0.70,
     "offer": 0.90,
     "contract": 1.0,
+}
+BUYER_STAGE_PRIORITY = {
+    "prospect": 0,
+    "qualified": 1,
+    "proposal": 2,
+    "invitation": 3,
+    "buyer_reply": 3,
+    "interview": 4,
+    "offer": 5,
+    "contract": 6,
 }
 OFFER_PHASES = {
     "diagnostic", "pilot", "implementation", "managed_recurring",
@@ -788,11 +799,20 @@ def projected_unit_economics(opportunity):
         "delivery_cost_cents": opportunity["delivery_cost_cents"],
         "inference_cost_cents": opportunity["inference_cost_cents"],
         "cac_cents": opportunity["cac_cents"],
+        "cost_estimates_complete": opportunity["cost_estimates_complete"],
+        "cost_evidence_status": (
+            "complete_projected_inputs"
+            if opportunity["cost_estimates_complete"]
+            else "incomplete_projected_inputs"
+        ),
         "projected_contribution_cents": contribution,
         "projected_contribution_margin": round(margin, 6),
         "human_operating_hours": opportunity["human_operating_hours"],
         "projected_revenue_per_human_hour": round(
             contract_value / 100 / opportunity["human_operating_hours"], 2
+        ),
+        "projected_contribution_per_human_hour": round(
+            contribution / 100 / opportunity["human_operating_hours"], 2
         ),
         "evidence_status": "projected_not_collected",
     }
@@ -876,6 +896,10 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
     inference_cost_cents = finite_number(
         payload, "inference_cost_cents", minimum=0, required=False)
     cac_cents = finite_number(payload, "cac_cents", minimum=0, required=False)
+    cost_estimates_complete = all(
+        value is not None
+        for value in (delivery_cost_cents, inference_cost_cents, cac_cents)
+    )
     human_operating_hours = finite_number(
         payload, "human_operating_hours", minimum=0.01, maximum=10000,
         required=False)
@@ -892,6 +916,19 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
     buyer_stage = str(payload.get("buyer_stage") or "prospect").strip().lower()
     if buyer_stage not in BUYER_STAGE_SCORES:
         raise ValueError("buyer_stage_invalid")
+    buyer_stage_evidence_url = canonical_url(
+        payload.get("buyer_stage_evidence_url"))
+    buyer_stage_evidence_at = None
+    if buyer_stage != "prospect":
+        if not buyer_stage_evidence_url:
+            raise ValueError("buyer_stage_evidence_url_required")
+        buyer_stage_evidence_at = parse_time(
+            payload.get("buyer_stage_evidence_at"),
+            "buyer_stage_evidence_at")
+        if buyer_stage_evidence_at > now + MAX_FUTURE_SKEW:
+            raise ValueError("buyer_stage_evidence_at_future")
+        if buyer_stage_evidence_at < now - timedelta(days=max_age_days):
+            raise ValueError("buyer_stage_evidence_stale")
     offer_phases = enum_list(payload, "offer_phases", OFFER_PHASES)
     offer_evidence = offer_evidence_map(payload, offer_phases)
     ip_assets = reusable_ip_assets(payload)
@@ -1064,6 +1101,11 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         "time_to_cash_days": time_to_cash_days,
         "buyer_stage": buyer_stage,
         "buyer_stage_score": BUYER_STAGE_SCORES[buyer_stage],
+        "buyer_stage_evidence_url": (
+            buyer_stage_evidence_url if buyer_stage != "prospect" else None),
+        "buyer_stage_evidence_at": (
+            buyer_stage_evidence_at.isoformat()
+            if buyer_stage_evidence_at is not None else None),
         "offer_family": family_selection["id"],
         "offer_family_selection": family_selection,
         "payment_history_score": finite_number(
@@ -1073,6 +1115,7 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         "delivery_cost_cents": int(delivery_cost_cents or 0),
         "inference_cost_cents": int(inference_cost_cents or 0),
         "cac_cents": int(cac_cents or 0),
+        "cost_estimates_complete": cost_estimates_complete,
         "human_operating_hours": human_operating_hours or effort_hours,
         "measurable_outcome": boolean_flag(payload, "measurable_outcome"),
         "automation_potential": finite_number(
@@ -1265,12 +1308,26 @@ def score(opportunity):
         / max(opportunity["contract_value_cents"] * 3, 1)
     )
     economic_value_score = min(value_to_fee, 1)
-    leverage_score = min(
-        opportunity["unit_economics"]["projected_revenue_per_human_hour"] / 1000,
-        1,
+    # Effective leverage must reflect contribution after delivery, API, and
+    # acquisition costs; gross revenue per hour can reward loss-making offers.
+    cost_estimates_complete = opportunity["cost_estimates_complete"]
+    leverage_score = (
+        max(0, min(
+            opportunity["unit_economics"][
+                "projected_contribution_per_human_hour"] / 1000,
+            1,
+        ))
+        if cost_estimates_complete else 0
     )
-    margin_score = max(
-        0, min(opportunity["unit_economics"]["projected_contribution_margin"], 1)
+    margin_score = (
+        max(
+            0,
+            min(
+                opportunity["unit_economics"]["projected_contribution_margin"],
+                1,
+            ),
+        )
+        if cost_estimates_complete else 0
     )
     remaining_positions = None
     if (opportunity["positions_to_hire"] is not None
@@ -1330,6 +1387,7 @@ def score(opportunity):
 def action_mode(opportunity):
     if (opportunity["platform_allows_automation"] and opportunity["authenticated_channel"]
             and opportunity["submission_authorized"] and not opportunity["requires_owner_identity"]
+            and opportunity["cost_estimates_complete"]
             and (opportunity["application_cost_units"] == 0
                  or opportunity["application_spend_authorized"])
             and opportunity["payment_rail_status"] == "clear"
@@ -1387,6 +1445,8 @@ def ingest(payloads, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
             continue
         try:
             item["score"], item["score_components"] = score(item)
+            item["buyer_priority_rank"] = BUYER_STAGE_PRIORITY[
+                item["buyer_stage"]]
             item["action_mode"] = action_mode(item)
             item["pipeline_state"] = ("payment_rail_blocked"
                                       if item["payment_rail_status"] == "temporarily_unavailable"
@@ -1396,7 +1456,9 @@ def ingest(payloads, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
         except ValueError as exc:
             rejection_by_index[record["index"]] = {
                 "index": record["index"], "reason": str(exc)}
-    accepted.sort(key=lambda item: (-item["score"], item["time_to_cash_days"], item["id"]))
+    accepted.sort(key=lambda item: (
+        -item["buyer_priority_rank"], -item["score"],
+        item["time_to_cash_days"], item["id"]))
     rejected = [rejection_by_index[index] for index in sorted(rejection_by_index)]
     for rejection in rejected:
         rejection.setdefault("payload_hash", payload_hash(payloads[rejection["index"]]))
@@ -2024,6 +2086,42 @@ def prepare_proposal(path, opportunity_id, proposal, *, now=None):
             if row is None:
                 raise ValueError("opportunity_not_found")
             opportunity = json.loads(row[1])
+            proposal_economics = {
+                "basis": "proposal_price",
+                "evidence_status": "cost_estimates_incomplete",
+                "price_cents": int(price_cents),
+            }
+            if opportunity.get("cost_estimates_complete"):
+                projected_cost_cents = sum(
+                    opportunity[field]
+                    for field in (
+                        "delivery_cost_cents",
+                        "inference_cost_cents",
+                        "cac_cents",
+                    )
+                )
+                projected_contribution_cents = (
+                    int(price_cents) - projected_cost_cents
+                )
+                if projected_contribution_cents <= 0:
+                    raise ValueError(
+                        "proposal_non_positive_projected_contribution"
+                    )
+                effort_hours = opportunity["effort_hours"]
+                proposal_economics.update({
+                    "evidence_status": "projected_not_collected",
+                    "delivery_cost_cents": opportunity["delivery_cost_cents"],
+                    "inference_cost_cents": opportunity["inference_cost_cents"],
+                    "cac_cents": opportunity["cac_cents"],
+                    "total_cost_cents": projected_cost_cents,
+                    "projected_contribution_cents": projected_contribution_cents,
+                    "projected_contribution_margin": round(
+                        projected_contribution_cents / int(price_cents), 6),
+                    "required_human_hours": effort_hours,
+                    "projected_contribution_per_human_hour_cents": round(
+                        projected_contribution_cents / effort_hours, 2),
+                })
+            artifact["proposal_unit_economics"] = proposal_economics
             selection = opportunity.get("offer_family_selection") or {}
             artifact["offer_family"] = ({
                 "id": selection.get("id"),
@@ -3581,6 +3679,37 @@ def _verified_payment_receipt(connection, payment_receipt_id):
     return payment
 
 
+def _verified_linked_proposal_for_payment(connection, payment):
+    """Resolve and verify the proposal bound to a settled payment's delivery."""
+    proposal = connection.execute(
+        """SELECT p.proposal_id,p.opportunity_id,p.artifact_hash,
+                  p.artifact_json
+           FROM invoice_receipts i
+           JOIN delivery_receipts d ON d.receipt_id=i.delivery_receipt_id
+           JOIN qa_reports q ON q.report_id=d.qa_report_id
+           JOIN execution_plans e ON e.plan_id=q.execution_plan_id
+           JOIN contract_receipts c ON c.receipt_id=e.contract_receipt_id
+           JOIN proposal_artifacts p ON p.proposal_id=c.proposal_id
+           WHERE i.receipt_id=?""",
+        (payment[1],),
+    ).fetchone()
+    if proposal is None or proposal[1] != payment[0]:
+        raise ValueError("payment_proposal_lineage_unverified")
+    try:
+        artifact = json.loads(proposal[3])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("payment_proposal_lineage_unverified") from exc
+    expected_hash = hashlib.sha256(proposal[3].encode()).hexdigest()
+    if (
+        not isinstance(artifact, dict)
+        or artifact.get("opportunity_id") != payment[0]
+        or proposal[2] != expected_hash
+        or proposal[0] != "prop_" + expected_hash[:24]
+    ):
+        raise ValueError("payment_proposal_lineage_unverified")
+    return proposal[0], artifact
+
+
 def record_realized_unit_economics(
         path, opportunity_id, payment_receipt_id, economics, *, now=None):
     """Record realized economics derived from one settled payment receipt."""
@@ -3640,6 +3769,22 @@ def record_realized_unit_economics(
             margin = contribution / net_collected
             revenue_per_hour = net_collected / 100 / hours
             contribution_per_hour = contribution / 100 / hours
+            proposal_id, proposal_artifact = (
+                _verified_linked_proposal_for_payment(connection, payment))
+            projected = proposal_artifact.get("proposal_unit_economics") or {}
+            if projected.get("evidence_status") == "projected_not_collected":
+                evidence["proposal_projection_comparison"] = {
+                    "proposal_id": proposal_id,
+                    "projected_contribution_cents": projected[
+                        "projected_contribution_cents"],
+                    "realized_contribution_cents": contribution,
+                    "contribution_variance_cents": (
+                        contribution
+                        - projected["projected_contribution_cents"]),
+                    "projected_contribution_margin": projected[
+                        "projected_contribution_margin"],
+                    "realized_contribution_margin": round(margin, 6),
+                }
             normalized = {
                 "opportunity_id": opportunity_id,
                 "payment_receipt_id": payment_receipt_id,
@@ -3727,6 +3872,240 @@ def _verified_recurring_payment_receipt(
             "recurpay_" + expected_hash[:24]):
         raise ValueError("recurring_payment_receipt_unverified")
     return payment
+
+
+def _verified_realized_economics(connection, economics_id, *, recurring=False):
+    """Rebuild and verify an immutable realized-economics snapshot."""
+    table = (
+        "recurring_realized_unit_economics"
+        if recurring else "realized_unit_economics"
+    )
+    receipt_column = (
+        "recurring_payment_receipt_id" if recurring else "payment_receipt_id"
+    )
+    row = connection.execute(
+        f"""SELECT opportunity_id,{receipt_column},net_collected_cents,
+                   delivery_cost_cents,inference_cost_cents,cac_cents,
+                   human_operating_minutes,contribution_cents,
+                   contribution_margin,revenue_per_human_hour,
+                   contribution_per_human_hour,currency,evidence_json,
+                   evidence_hash,measured_at
+            FROM {table} WHERE economics_id=?""",
+        (economics_id,),
+    ).fetchone()
+    missing = (
+        "recurring_realized_economics_not_found"
+        if recurring else "realized_economics_not_found"
+    )
+    if row is None:
+        raise ValueError(missing)
+    try:
+        evidence = json.loads(row[12])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("realized_economics_unverified") from exc
+    if not isinstance(evidence, dict):
+        raise ValueError("realized_economics_unverified")
+    normalized = {
+        "opportunity_id": row[0],
+        receipt_column: row[1],
+        "net_collected_cents": row[2],
+        "delivery_cost_cents": row[3],
+        "inference_cost_cents": row[4],
+        "cac_cents": row[5],
+        "human_operating_minutes": row[6],
+        "contribution_cents": row[7],
+        "contribution_margin": row[8],
+        "revenue_per_human_hour": row[9],
+        "contribution_per_human_hour": row[10],
+        "currency": row[11],
+        "evidence": evidence,
+        "measured_at": row[14],
+        "evidence_status": (
+            "realized_from_settled_recurring_payment"
+            if recurring else "realized_from_settled_payment"
+        ),
+    }
+    serialized = json.dumps(
+        normalized, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    prefix = "rruec_" if recurring else "ruec_"
+    if row[13] != expected_hash or economics_id != prefix + expected_hash[:24]:
+        raise ValueError("realized_economics_unverified")
+    try:
+        payment = (
+            _verified_recurring_payment_receipt(connection, row[1])
+            if recurring else _verified_payment_receipt(connection, row[1])
+        )
+    except ValueError as exc:
+        raise ValueError("realized_economics_unverified") from exc
+    payment_net_index = 10 if recurring else 7
+    payment_currency_index = 11 if recurring else 8
+    payment_settled_index = 16 if recurring else 10
+    if (
+        payment[0] != row[0]
+        or payment[payment_net_index] != row[2]
+        or payment[payment_currency_index] != row[11]
+        or parse_time(row[14], "economics_measured_at")
+        < parse_time(payment[payment_settled_index], "payment_settled_at")
+        or row[2] <= 0
+        or row[6] <= 0
+    ):
+        raise ValueError("realized_economics_unverified")
+    expected_contribution = row[2] - row[3] - row[4] - row[5]
+    hours = row[6] / 60
+    derived = (
+        expected_contribution,
+        round(expected_contribution / row[2], 6),
+        round(row[2] / 100 / hours, 2),
+        round(expected_contribution / 100 / hours, 2),
+    )
+    if derived != (row[7], row[8], row[9], row[10]):
+        raise ValueError("realized_economics_unverified")
+    if not recurring:
+        try:
+            proposal_id, proposal = _verified_linked_proposal_for_payment(
+                connection, payment)
+        except ValueError as exc:
+            raise ValueError("realized_economics_unverified") from exc
+        projected = proposal.get("proposal_unit_economics") or {}
+        comparison = evidence.get("proposal_projection_comparison")
+        expected_comparison = None
+        if projected.get("evidence_status") == "projected_not_collected":
+            expected_comparison = {
+                "proposal_id": proposal_id,
+                "projected_contribution_cents":
+                    projected["projected_contribution_cents"],
+                "realized_contribution_cents": row[7],
+                "contribution_variance_cents": (
+                    row[7] - projected["projected_contribution_cents"]),
+                "projected_contribution_margin":
+                    projected["projected_contribution_margin"],
+                "realized_contribution_margin": row[8],
+            }
+        if comparison != expected_comparison:
+            raise ValueError("realized_economics_unverified")
+    return {
+        "opportunity_id": row[0],
+        "payment_receipt_id": row[1],
+        "contribution_cents": row[7],
+        "measured_at": row[14],
+    }
+
+
+def summarize_verified_forecast_accuracy(path):
+    """Aggregate proposal forecast accuracy from reverified settled economics."""
+    connection = open_ledger(path)
+    try:
+        economics_ids = [
+            row[0] for row in connection.execute(
+                """SELECT economics_id FROM realized_unit_economics
+                   ORDER BY measured_at,economics_id"""
+            ).fetchall()
+        ]
+        by_currency = {}
+        verified_count = 0
+        for economics_id in economics_ids:
+            _verified_realized_economics(connection, economics_id)
+            row = connection.execute(
+                """SELECT currency,evidence_json
+                   FROM realized_unit_economics WHERE economics_id=?""",
+                (economics_id,),
+            ).fetchone()
+            evidence = json.loads(row[1])
+            comparison = evidence.get("proposal_projection_comparison")
+            if comparison is None:
+                continue
+            verified_count += 1
+            bucket = by_currency.setdefault(row[0], {
+                "comparison_count": 0,
+                "projected_contribution_cents": 0,
+                "realized_contribution_cents": 0,
+                "net_variance_cents": 0,
+                "absolute_error_cents": 0,
+            })
+            variance = comparison["contribution_variance_cents"]
+            bucket["comparison_count"] += 1
+            bucket["projected_contribution_cents"] += (
+                comparison["projected_contribution_cents"])
+            bucket["realized_contribution_cents"] += (
+                comparison["realized_contribution_cents"])
+            bucket["net_variance_cents"] += variance
+            bucket["absolute_error_cents"] += abs(variance)
+        for bucket in by_currency.values():
+            bucket["mean_absolute_error_cents"] = round(
+                bucket.pop("absolute_error_cents")
+                / bucket["comparison_count"],
+                2,
+            )
+        return {
+            "verified_comparison_count": verified_count,
+            "by_currency": by_currency,
+            "status": "verified_settled_forecast_accuracy",
+        }
+    finally:
+        connection.close()
+
+
+def _verified_recurring_growth_evidence(connection, receipt_id):
+    """Rebuild a recurring growth receipt and its settled economics lineage."""
+    row = connection.execute(
+        """SELECT opportunity_id,recurring_payment_receipt_id,
+                  recurring_economics_id,kind,provider,external_event_id,
+                  evidence_url,prior_recurring_payment_receipt_id,
+                  baseline_scope,expanded_scope,baseline_value_cents,
+                  expanded_value_cents,occurred_at,receipt_hash
+           FROM recurring_growth_evidence_receipts WHERE receipt_id=?""",
+        (receipt_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("recurring_growth_evidence_receipt_not_found")
+    normalized = {
+        "opportunity_id": row[0],
+        "recurring_payment_receipt_id": row[1],
+        "kind": row[3],
+        "provider": row[4],
+        "external_event_id": row[5],
+        "evidence_url": row[6],
+        "occurred_at": row[12],
+        "recurring_economics_id": row[2],
+    }
+    if row[3] == "retention":
+        normalized["prior_recurring_payment_receipt_id"] = row[7]
+    elif row[3] == "expansion":
+        normalized.update({
+            "baseline_scope": row[8],
+            "expanded_scope": row[9],
+            "baseline_value_cents": row[10],
+            "expanded_value_cents": row[11],
+        })
+    else:
+        raise ValueError("recurring_growth_evidence_unverified")
+    serialized = json.dumps(
+        normalized, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    if row[13] != expected_hash or receipt_id != (
+            "rgrow_" + expected_hash[:24]):
+        raise ValueError("recurring_growth_evidence_unverified")
+    try:
+        payment = _verified_recurring_payment_receipt(connection, row[1])
+        economics = _verified_realized_economics(
+            connection, row[2], recurring=True)
+        prior = (
+            _verified_recurring_payment_receipt(connection, row[7])
+            if row[3] == "retention" else None)
+    except ValueError as exc:
+        raise ValueError("recurring_growth_evidence_unverified") from exc
+    if (
+        payment[0] != row[0]
+        or economics["opportunity_id"] != row[0]
+        or economics["payment_receipt_id"] != row[1]
+        or economics["contribution_cents"] <= 0
+        or parse_time(row[12], "growth_occurred_at")
+           < parse_time(payment[16], "recurring_settled_at")
+        or (prior is not None and prior[0] != row[0])
+    ):
+        raise ValueError("recurring_growth_evidence_unverified")
+    return normalized
 
 
 def record_recurring_withdrawable_balance(
@@ -4106,14 +4485,13 @@ def record_growth_evidence(
                     "SELECT 1 FROM opportunities WHERE id=?",
                     (opportunity_id,)).fetchone() is None:
                 raise ValueError("opportunity_not_found")
-            payment = connection.execute(
-                """SELECT opportunity_id,settled_at FROM payment_receipts
-                   WHERE receipt_id=?""", (payment_receipt_id,)).fetchone()
-            if payment is None:
-                raise ValueError("payment_receipt_not_found")
+            # Growth claims can promote reusable IP, so derive them only
+            # from the same immutable payment snapshot used for revenue.
+            payment = _verified_payment_receipt(
+                connection, payment_receipt_id)
             if payment[0] != opportunity_id:
                 raise ValueError("growth_evidence_opportunity_mismatch")
-            if occurred_at < parse_time(payment[1], "payment_settled_at"):
+            if occurred_at < parse_time(payment[10], "payment_settled_at"):
                 raise ValueError("growth_evidence_before_settlement")
             existing = connection.execute(
                 """SELECT receipt_id,receipt_hash FROM growth_evidence_receipts
@@ -4134,6 +4512,47 @@ def record_growth_evidence(
             return {"receipt_id": receipt_id, "changed": True, **normalized}
     finally:
         connection.close()
+
+
+def _verified_growth_evidence(connection, receipt_id):
+    """Rebuild one-time growth evidence and its settled-payment lineage."""
+    row = connection.execute(
+        """SELECT opportunity_id,payment_receipt_id,kind,provider,
+                  external_event_id,evidence_url,occurred_at,receipt_hash
+           FROM growth_evidence_receipts WHERE receipt_id=?""",
+        (receipt_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("growth_evidence_receipt_not_found")
+    normalized = {
+        "opportunity_id": row[0],
+        "payment_receipt_id": row[1],
+        "kind": row[2],
+        "provider": row[3],
+        "external_event_id": row[4],
+        "evidence_url": row[5],
+        "occurred_at": row[6],
+    }
+    serialized = json.dumps(
+        normalized, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    if (
+        row[2] not in {"retention", "expansion"}
+        or row[7] != expected_hash
+        or receipt_id != "grow_" + expected_hash[:24]
+    ):
+        raise ValueError("growth_evidence_unverified")
+    try:
+        payment = _verified_payment_receipt(connection, row[1])
+    except ValueError as exc:
+        raise ValueError("growth_evidence_unverified") from exc
+    if (
+        payment[0] != row[0]
+        or parse_time(row[6], "growth_occurred_at")
+           < parse_time(payment[10], "payment_settled_at")
+    ):
+        raise ValueError("growth_evidence_unverified")
+    return normalized
 
 
 def record_recurring_growth_evidence(
@@ -4181,14 +4600,17 @@ def record_recurring_growth_evidence(
                 raise ValueError("growth_evidence_opportunity_mismatch")
             if occurred_at < parse_time(payment[16], "recurring_settled_at"):
                 raise ValueError("growth_evidence_before_settlement")
-            economics = connection.execute(
-                """SELECT economics_id,contribution_cents
-                   FROM recurring_realized_unit_economics
+            economics_row = connection.execute(
+                """SELECT economics_id FROM recurring_realized_unit_economics
                    WHERE recurring_payment_receipt_id=?""",
                 (recurring_payment_receipt_id,)).fetchone()
-            if economics is None or economics[1] <= 0:
+            if economics_row is None:
                 raise ValueError("positive_recurring_contribution_required")
-            normalized["recurring_economics_id"] = economics[0]
+            economics = _verified_realized_economics(
+                connection, economics_row[0], recurring=True)
+            if economics["contribution_cents"] <= 0:
+                raise ValueError("positive_recurring_contribution_required")
+            normalized["recurring_economics_id"] = economics_row[0]
 
             prior_id = None
             baseline_scope = None
@@ -4261,7 +4683,8 @@ def record_recurring_growth_evidence(
                     expanded_value_cents,occurred_at,receipt_hash,recorded_at)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (receipt_id, opportunity_id, recurring_payment_receipt_id,
-                 economics[0], kind, provider, external_event_id, evidence_url,
+                 economics_row[0], kind, provider, external_event_id,
+                 evidence_url,
                  prior_id, baseline_scope, expanded_scope, baseline_value,
                  expanded_value, occurred_at.isoformat(), receipt_hash,
                  recorded.isoformat()))
@@ -4314,26 +4737,17 @@ def record_reusable_ip_reuse_evidence(
             if source[1].casefold() != reused[1].casefold() or source[2] != reused[2]:
                 raise ValueError("reused_asset_identity_mismatch")
             if economics_kind == "recurring":
-                economics = connection.execute(
-                    """SELECT opportunity_id,contribution_cents,measured_at,
-                              recurring_payment_receipt_id
-                       FROM recurring_realized_unit_economics
-                       WHERE economics_id=?""", (economics_id,)).fetchone()
-                missing_error = "recurring_realized_economics_not_found"
+                economics = _verified_realized_economics(
+                    connection, economics_id, recurring=True)
             else:
-                economics = connection.execute(
-                    """SELECT opportunity_id,contribution_cents,measured_at,
-                              payment_receipt_id
-                       FROM realized_unit_economics WHERE economics_id=?""",
-                    (economics_id,)).fetchone()
-                missing_error = "realized_economics_not_found"
-            if economics is None:
-                raise ValueError(missing_error)
-            if economics[0] != reused[0]:
+                economics = _verified_realized_economics(
+                    connection, economics_id)
+            if economics["opportunity_id"] != reused[0]:
                 raise ValueError("reuse_economics_opportunity_mismatch")
-            if economics[1] <= 0:
+            if economics["contribution_cents"] <= 0:
                 raise ValueError("positive_contribution_required")
-            if occurred_at < parse_time(economics[2], "reuse_economics_measured_at"):
+            if occurred_at < parse_time(
+                    economics["measured_at"], "reuse_economics_measured_at"):
                 raise ValueError("reuse_evidence_before_economics")
             normalized = {
                 "source_asset_id": source_asset_id,
@@ -4342,7 +4756,7 @@ def record_reusable_ip_reuse_evidence(
                 "reused_opportunity_id": reused[0],
                 "economics_kind": economics_kind,
                 "economics_id": economics_id,
-                "settled_payment_receipt_id": economics[3],
+                "settled_payment_receipt_id": economics["payment_receipt_id"],
                 "provider": provider,
                 "external_event_id": external_event_id,
                 "evidence_url": evidence_url,
@@ -4375,6 +4789,180 @@ def record_reusable_ip_reuse_evidence(
             return {"receipt_id": receipt_id, "changed": True, **normalized}
     finally:
         connection.close()
+
+
+def _verified_reusable_ip_reuse_evidence(connection, receipt_id):
+    """Rebuild a reuse receipt and reverify its settled economics lineage."""
+    row = connection.execute(
+        """SELECT source_asset_id,source_opportunity_id,reused_asset_id,
+                  reused_opportunity_id,economics_kind,economics_id,provider,
+                  external_event_id,evidence_url,occurred_at,receipt_hash
+           FROM reusable_ip_reuse_receipts WHERE receipt_id=?""",
+        (receipt_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("reusable_ip_reuse_receipt_not_found")
+    if row[4] not in {"one_time", "recurring"}:
+        raise ValueError("reusable_ip_reuse_evidence_unverified")
+    source = connection.execute(
+        """SELECT opportunity_id,name,asset_type
+           FROM reusable_ip_assets WHERE asset_id=?""",
+        (row[0],),
+    ).fetchone()
+    reused = connection.execute(
+        """SELECT opportunity_id,name,asset_type
+           FROM reusable_ip_assets WHERE asset_id=?""",
+        (row[2],),
+    ).fetchone()
+    try:
+        economics = _verified_realized_economics(
+            connection, row[5], recurring=row[4] == "recurring")
+    except ValueError as exc:
+        raise ValueError("reusable_ip_reuse_evidence_unverified") from exc
+    if (
+        source is None
+        or reused is None
+        or source[0] != row[1]
+        or reused[0] != row[3]
+        or row[1] == row[3]
+        or source[1].casefold() != reused[1].casefold()
+        or source[2] != reused[2]
+        or economics["opportunity_id"] != row[3]
+        or economics["contribution_cents"] <= 0
+        or parse_time(row[9], "reuse_occurred_at")
+           < parse_time(economics["measured_at"], "reuse_economics_measured_at")
+    ):
+        raise ValueError("reusable_ip_reuse_evidence_unverified")
+    normalized = {
+        "source_asset_id": row[0],
+        "source_opportunity_id": row[1],
+        "reused_asset_id": row[2],
+        "reused_opportunity_id": row[3],
+        "economics_kind": row[4],
+        "economics_id": row[5],
+        "settled_payment_receipt_id": economics["payment_receipt_id"],
+        "provider": row[6],
+        "external_event_id": row[7],
+        "evidence_url": row[8],
+        "occurred_at": row[9],
+    }
+    serialized = json.dumps(
+        normalized, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    if row[10] != expected_hash or receipt_id != "ipr_" + expected_hash[:24]:
+        raise ValueError("reusable_ip_reuse_evidence_unverified")
+    return normalized
+
+
+def _verified_reusable_ip_maturity(connection, asset_id):
+    """Rebuild an asset's earned-mastery chain from immutable ledger receipts."""
+    asset = connection.execute(
+        """SELECT opportunity_id,maturity,evidence_json,evidence_hash
+           FROM reusable_ip_assets WHERE asset_id=?""", (asset_id,)).fetchone()
+    if asset is None:
+        raise ValueError("reusable_ip_maturity_unverified")
+    opportunity_id, claimed_maturity, asset_evidence, asset_hash = asset
+    if claimed_maturity not in REUSABLE_IP_MATURITY:
+        raise ValueError("reusable_ip_maturity_unverified")
+    promotions = connection.execute(
+        """SELECT promotion_id,from_maturity,to_maturity,evidence_json,
+                  evidence_hash
+           FROM reusable_ip_promotions WHERE asset_id=?
+           ORDER BY rowid""", (asset_id,)).fetchall()
+    expected_count = REUSABLE_IP_MATURITY[claimed_maturity]
+    if len(promotions) != expected_count:
+        raise ValueError("reusable_ip_maturity_unverified")
+
+    current = "learned"
+    last_json = last_hash = None
+    for promotion in promotions:
+        promotion_id, from_maturity, to_maturity, evidence_json, evidence_hash = promotion
+        if (
+            from_maturity != current
+            or REUSABLE_IP_MATURITY.get(to_maturity) != REUSABLE_IP_MATURITY[current] + 1
+        ):
+            raise ValueError("reusable_ip_maturity_unverified")
+        try:
+            evidence = json.loads(evidence_json)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("reusable_ip_maturity_unverified") from exc
+        canonical = json.dumps(evidence, sort_keys=True, separators=(",", ":"))
+        expected_hash = hashlib.sha256(canonical.encode()).hexdigest()
+        if (
+            canonical != evidence_json
+            or evidence_hash != expected_hash
+            or promotion_id != "ipp_" + expected_hash[:24]
+            or evidence.get("asset_id") != asset_id
+            or evidence.get("opportunity_id") != opportunity_id
+            or evidence.get("from_maturity") != from_maturity
+            or evidence.get("to_maturity") != to_maturity
+        ):
+            raise ValueError("reusable_ip_maturity_unverified")
+
+        try:
+            if to_maturity == "paid_validated":
+                if evidence.get("payment_receipt_id"):
+                    receipt = _verified_payment_receipt(
+                        connection, evidence["payment_receipt_id"])
+                else:
+                    receipt = _verified_recurring_payment_receipt(
+                        connection, evidence["recurring_payment_receipt_id"])
+                if receipt[0] != opportunity_id:
+                    raise ValueError("promotion_evidence_opportunity_mismatch")
+            elif to_maturity == "repeatable_positive_margin":
+                entries = evidence.get("one_time_economics_receipts")
+                recurring = False
+                if entries is None:
+                    entries = evidence.get("recurring_economics_receipts")
+                    recurring = True
+                if not isinstance(entries, list) or len(entries) < 2:
+                    raise ValueError("repeatability_receipts_missing")
+                for entry in entries:
+                    verified = _verified_realized_economics(
+                        connection, entry["economics_id"], recurring=recurring)
+                    expected_payment = entry[
+                        "recurring_payment_receipt_id" if recurring
+                        else "payment_receipt_id"]
+                    if verified["payment_receipt_id"] != expected_payment:
+                        raise ValueError("repeatability_receipt_mismatch")
+            else:
+                growth_id = (evidence.get("growth_receipt_id")
+                             or evidence.get("recurring_growth_receipt_id"))
+                if evidence.get("recurring_growth_receipt_id"):
+                    growth = _verified_recurring_growth_evidence(
+                        connection, growth_id)
+                else:
+                    growth = _verified_growth_evidence(connection, growth_id)
+                if growth["opportunity_id"] != opportunity_id:
+                    raise ValueError("promotion_evidence_opportunity_mismatch")
+                expected_kind = (
+                    "retention" if to_maturity == "scale_candidate"
+                    else "expansion")
+                if growth["kind"] != expected_kind:
+                    raise ValueError("promotion_growth_kind_mismatch")
+                if to_maturity == "productize_candidate":
+                    reuse = _verified_reusable_ip_reuse_evidence(
+                        connection, evidence["reuse_receipt_id"])
+                    if (
+                        reuse["source_asset_id"] != asset_id
+                        or reuse["source_opportunity_id"] != opportunity_id
+                    ):
+                        raise ValueError("promotion_reuse_source_mismatch")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("reusable_ip_maturity_unverified") from exc
+        current = to_maturity
+        last_json, last_hash = evidence_json, evidence_hash
+
+    if current != claimed_maturity:
+        raise ValueError("reusable_ip_maturity_unverified")
+    if promotions and (asset_evidence != last_json or asset_hash != last_hash):
+        raise ValueError("reusable_ip_maturity_unverified")
+    return {
+        "asset_id": asset_id,
+        "opportunity_id": opportunity_id,
+        "maturity": claimed_maturity,
+        "promotion_count": len(promotions),
+    }
 
 
 def promote_reusable_ip_asset(
@@ -4477,28 +5065,22 @@ def promote_reusable_ip_asset(
                         if reference in seen_economics:
                             raise ValueError(
                                 "recurring_economics_receipts_must_be_distinct")
-                        row = connection.execute(
-                            """SELECT opportunity_id,contribution_cents,
-                                      recurring_payment_receipt_id
-                               FROM recurring_realized_unit_economics
-                               WHERE economics_id=?""",
-                            (reference,)).fetchone()
-                        if row is None:
-                            raise ValueError(
-                                "recurring_realized_economics_not_found")
-                        if row[0] != opportunity_id:
+                        row = _verified_realized_economics(
+                            connection, reference, recurring=True)
+                        if row["opportunity_id"] != opportunity_id:
                             raise ValueError(
                                 "promotion_evidence_opportunity_mismatch")
-                        if row[1] <= 0:
+                        if row["contribution_cents"] <= 0:
                             raise ValueError("positive_contribution_required")
-                        if row[2] in seen_payments:
+                        if row["payment_receipt_id"] in seen_payments:
                             raise ValueError(
                                 "recurring_payment_receipts_must_be_distinct")
                         seen_economics.add(reference)
-                        seen_payments.add(row[2])
+                        seen_payments.add(row["payment_receipt_id"])
                         normalized_references.append({
                             "economics_id": reference,
-                            "recurring_payment_receipt_id": row[2],
+                            "recurring_payment_receipt_id":
+                                row["payment_receipt_id"],
                         })
                     resolved = {
                         "recurring_economics_receipts":
@@ -4522,36 +5104,31 @@ def promote_reusable_ip_asset(
                         if reference in seen_economics:
                             raise ValueError(
                                 "one_time_economics_receipts_must_be_distinct")
-                        row = connection.execute(
-                            """SELECT opportunity_id,contribution_cents,
-                                      payment_receipt_id
-                               FROM realized_unit_economics
-                               WHERE economics_id=?""",
-                            (reference,)).fetchone()
-                        if row is None:
-                            raise ValueError("realized_economics_not_found")
-                        if row[1] <= 0:
+                        row = _verified_realized_economics(
+                            connection, reference)
+                        if row["contribution_cents"] <= 0:
                             raise ValueError("positive_contribution_required")
-                        if row[2] in seen_payments:
+                        if row["payment_receipt_id"] in seen_payments:
                             raise ValueError(
                                 "one_time_payment_receipts_must_be_distinct")
-                        if row[0] != opportunity_id:
+                        if row["opportunity_id"] != opportunity_id:
                             linked_asset = connection.execute(
                                 """SELECT 1 FROM reusable_ip_assets
                                    WHERE opportunity_id=?
                                      AND lower(name)=lower(?)
                                      AND asset_type=?""",
-                                (row[0], asset[2], asset[3])).fetchone()
+                                (row["opportunity_id"], asset[2],
+                                 asset[3])).fetchone()
                             if linked_asset is None:
                                 raise ValueError(
                                     "repeatability_asset_identity_mismatch")
                         seen_economics.add(reference)
-                        seen_payments.add(row[2])
-                        seen_opportunities.add(row[0])
+                        seen_payments.add(row["payment_receipt_id"])
+                        seen_opportunities.add(row["opportunity_id"])
                         normalized_references.append({
                             "economics_id": reference,
-                            "payment_receipt_id": row[2],
-                            "opportunity_id": row[0],
+                            "payment_receipt_id": row["payment_receipt_id"],
+                            "opportunity_id": row["opportunity_id"],
                         })
                     if opportunity_id not in seen_opportunities:
                         raise ValueError(
@@ -4575,27 +5152,26 @@ def promote_reusable_ip_asset(
                     reference = _proposal_text(
                         recurring_reference,
                         "recurring_growth_receipt_id", 160)
-                    row = connection.execute(
-                        """SELECT opportunity_id,kind
-                           FROM recurring_growth_evidence_receipts
-                           WHERE receipt_id=?""", (reference,)).fetchone()
-                    missing_error = (
-                        "recurring_growth_evidence_receipt_not_found")
+                    try:
+                        row = _verified_recurring_growth_evidence(
+                            connection, reference)
+                    except ValueError as exc:
+                        raise ValueError(
+                            "growth_evidence_receipt_unverified") from exc
                     resolved_key = "recurring_growth_receipt_id"
                 else:
                     reference = _proposal_text(
                         growth_reference, "growth_receipt_id", 160)
-                    row = connection.execute(
-                        """SELECT opportunity_id,kind
-                           FROM growth_evidence_receipts WHERE receipt_id=?""",
-                        (reference,)).fetchone()
-                    missing_error = "growth_evidence_receipt_not_found"
+                    try:
+                        row = _verified_growth_evidence(
+                            connection, reference)
+                    except ValueError as exc:
+                        raise ValueError(
+                            "growth_evidence_receipt_unverified") from exc
                     resolved_key = "growth_receipt_id"
-                if row is None:
-                    raise ValueError(missing_error)
-                if row[0] != opportunity_id:
+                if row["opportunity_id"] != opportunity_id:
                     raise ValueError("promotion_evidence_opportunity_mismatch")
-                if row[1] != expected_kind:
+                if row["kind"] != expected_kind:
                     raise ValueError(f"{expected_kind}_evidence_required")
                 resolved = {
                     resolved_key: reference,
@@ -4605,25 +5181,26 @@ def promote_reusable_ip_asset(
                     reuse_reference = _proposal_text(
                         evidence.get("reuse_receipt_id"),
                         "reuse_receipt_id", 160)
-                    reuse = connection.execute(
-                        """SELECT source_asset_id,source_opportunity_id,
-                                  reused_opportunity_id,economics_kind,
-                                  economics_id
-                           FROM reusable_ip_reuse_receipts
-                           WHERE receipt_id=?""",
-                        (reuse_reference,)).fetchone()
-                    if reuse is None:
-                        raise ValueError("reuse_evidence_receipt_not_found")
-                    if reuse[0] != asset_id or reuse[1] != opportunity_id:
+                    try:
+                        reuse = _verified_reusable_ip_reuse_evidence(
+                            connection, reuse_reference)
+                    except ValueError as exc:
+                        raise ValueError(
+                            "reuse_evidence_receipt_unverified") from exc
+                    if (
+                        reuse["source_asset_id"] != asset_id
+                        or reuse["source_opportunity_id"] != opportunity_id
+                    ):
                         raise ValueError(
                             "promotion_reuse_evidence_source_mismatch")
-                    if reuse[2] == opportunity_id:
+                    if reuse["reused_opportunity_id"] == opportunity_id:
                         raise ValueError("cross_opportunity_reuse_required")
                     resolved.update({
                         "reuse_receipt_id": reuse_reference,
-                        "reused_opportunity_id": reuse[2],
-                        "reuse_economics_kind": reuse[3],
-                        "reuse_economics_id": reuse[4],
+                        "reused_opportunity_id":
+                            reuse["reused_opportunity_id"],
+                        "reuse_economics_kind": reuse["economics_kind"],
+                        "reuse_economics_id": reuse["economics_id"],
                     })
 
             normalized = {

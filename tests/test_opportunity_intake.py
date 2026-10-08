@@ -4,6 +4,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from scripts import opportunity_intake
 
@@ -243,6 +244,8 @@ class OpportunityIntakeTests(unittest.TestCase):
             cac_cents=30000,
             human_operating_hours=5,
             buyer_stage="buyer_reply",
+            buyer_stage_evidence_url="https://example.com/messages/reply-1",
+            buyer_stage_evidence_at=(NOW - timedelta(minutes=30)).isoformat(),
             payment_history_score=0.9,
             measurable_outcome=True,
             automation_potential=0.95,
@@ -255,14 +258,82 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(economics["projected_contribution_cents"], 350000)
         self.assertEqual(economics["projected_contribution_margin"], 0.7)
         self.assertEqual(economics["projected_revenue_per_human_hour"], 1000.0)
+        self.assertEqual(
+            economics["projected_contribution_per_human_hour"], 700.0)
         self.assertEqual(economics["evidence_status"], "projected_not_collected")
+        self.assertTrue(economics["cost_estimates_complete"])
+        self.assertEqual(
+            economics["cost_evidence_status"], "complete_projected_inputs")
         self.assertGreater(item["score_components"]["active_buyer_stage"], 0)
         self.assertGreater(item["score_components"]["effective_leverage"], 0)
+
+    def test_missing_cost_estimates_do_not_earn_margin_or_leverage(self):
+        complete = opportunity_intake.ingest([candidate(
+            external_id="complete-cost-estimates",
+            delivery_cost_cents=0,
+            inference_cost_cents=0,
+            cac_cents=0,
+        )], now=NOW)["opportunities"][0]
+        incomplete = opportunity_intake.ingest([candidate(
+            external_id="missing-cost-estimates",
+        )], now=NOW)["opportunities"][0]
+
+        self.assertTrue(complete["cost_estimates_complete"])
+        self.assertFalse(incomplete["cost_estimates_complete"])
+        self.assertEqual(
+            incomplete["unit_economics"]["cost_evidence_status"],
+            "incomplete_projected_inputs",
+        )
+        self.assertEqual(
+            incomplete["score_components"]["effective_leverage"], 0)
+        self.assertEqual(
+            incomplete["score_components"]["automation_and_margin"],
+            5 * incomplete["automation_potential"],
+        )
+        self.assertGreater(
+            complete["score_components"]["effective_leverage"], 0)
+        self.assertGreater(
+            complete["score_components"]["automation_and_margin"], 0)
+
+    def test_effective_leverage_uses_contribution_not_gross_revenue(self):
+        efficient = opportunity_intake.ingest([candidate(
+            external_id="efficient",
+            contract_value_cents=500000,
+            delivery_cost_cents=50000,
+            inference_cost_cents=0,
+            cac_cents=0,
+            human_operating_hours=5,
+        )], now=NOW)["opportunities"][0]
+        costly = opportunity_intake.ingest([candidate(
+            external_id="costly",
+            contract_value_cents=500000,
+            delivery_cost_cents=450000,
+            inference_cost_cents=0,
+            cac_cents=0,
+            human_operating_hours=5,
+        )], now=NOW)["opportunities"][0]
+
+        self.assertEqual(
+            efficient["unit_economics"]["projected_revenue_per_human_hour"],
+            costly["unit_economics"]["projected_revenue_per_human_hour"],
+        )
+        self.assertGreater(
+            efficient["unit_economics"][
+                "projected_contribution_per_human_hour"],
+            costly["unit_economics"][
+                "projected_contribution_per_human_hour"],
+        )
+        self.assertGreater(
+            efficient["score_components"]["effective_leverage"],
+            costly["score_components"]["effective_leverage"],
+        )
 
     def test_issue_164_buyer_intent_margin_and_reuse_change_ranking(self):
         stronger = candidate(
             external_id="stronger-outcome",
             buyer_stage="interview",
+            buyer_stage_evidence_url="https://example.com/interviews/stronger",
+            buyer_stage_evidence_at=(NOW - timedelta(minutes=20)).isoformat(),
             contract_value_cents=300000,
             economic_value_cents=1200000,
             delivery_cost_cents=60000,
@@ -296,6 +367,73 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertGreater(
             result["opportunities"][0]["score"],
             result["opportunities"][1]["score"])
+
+    def test_issue_164_verified_buyer_stage_outranks_high_score_prospect(self):
+        reply = candidate(
+            external_id="verified-reply",
+            buyer_stage="buyer_reply",
+            buyer_stage_evidence_url="https://example.com/messages/verified-reply",
+            buyer_stage_evidence_at=(NOW - timedelta(minutes=10)).isoformat(),
+            payout_cents=50000,
+            effort_hours=20,
+            buyer_intent=0.2,
+            win_probability=0.2,
+            execution_confidence=0.7,
+            payment_risk=0.5,
+            reuse_value=0.1,
+            recurring_value=0.1,
+        )
+        prospect = candidate(
+            external_id="high-score-prospect",
+            payout_cents=500000,
+            effort_hours=2,
+            buyer_intent=1.0,
+            win_probability=0.95,
+            execution_confidence=1.0,
+            payment_risk=0.0,
+            reuse_value=1.0,
+            recurring_value=1.0,
+            automation_potential=1.0,
+            delivery_risk=0.0,
+            compliance_risk=0.0,
+        )
+        result = opportunity_intake.ingest([prospect, reply], now=NOW)
+        self.assertEqual(
+            result["opportunities"][0]["external_id"], "verified-reply")
+        self.assertLess(
+            result["opportunities"][0]["score"],
+            result["opportunities"][1]["score"])
+        self.assertGreater(
+            result["opportunities"][0]["buyer_priority_rank"],
+            result["opportunities"][1]["buyer_priority_rank"])
+
+    def test_issue_164_non_prospect_buyer_stage_requires_evidence(self):
+        result = opportunity_intake.ingest([
+            candidate(external_id="unsupported-offer", buyer_stage="offer")
+        ], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(
+            result["rejections"][0]["reason"],
+            "buyer_stage_evidence_url_required")
+
+    def test_issue_164_buyer_stage_evidence_must_be_fresh_and_non_future(self):
+        stale = candidate(
+            external_id="stale-buyer-reply",
+            buyer_stage="buyer_reply",
+            buyer_stage_evidence_url="https://example.com/messages/stale",
+            buyer_stage_evidence_at=(NOW - timedelta(days=31)).isoformat(),
+        )
+        future = candidate(
+            external_id="future-offer",
+            buyer_stage="offer",
+            buyer_stage_evidence_url="https://example.com/offers/future",
+            buyer_stage_evidence_at=(NOW + timedelta(minutes=6)).isoformat(),
+        )
+        result = opportunity_intake.ingest([stale, future], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(
+            [rejection["reason"] for rejection in result["rejections"]],
+            ["buyer_stage_evidence_stale", "buyer_stage_evidence_at_future"])
 
     def test_issue_164_outcome_pricing_requires_attribution_caps_and_escalation(self):
         incomplete = candidate(
@@ -528,14 +666,39 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(item["action_mode"], "prepare_only")
 
     def test_autonomous_submit_requires_all_authorization_signals(self):
-        item = candidate(platform_allows_automation=True, authenticated_channel=True,
-                         submission_authorized=True,
-                         **submission_authorization())
+        item = candidate(
+            platform_allows_automation=True,
+            authenticated_channel=True,
+            submission_authorized=True,
+            delivery_cost_cents=0,
+            inference_cost_cents=0,
+            cac_cents=0,
+            **submission_authorization(),
+        )
         accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
         self.assertEqual(accepted["action_mode"], "autonomous_submit")
         item["requires_owner_identity"] = True
         accepted = opportunity_intake.ingest([item], now=NOW)["opportunities"][0]
         self.assertEqual(accepted["action_mode"], "prepare_only")
+
+    def test_autonomous_submit_requires_complete_cost_estimates(self):
+        item = candidate(
+            external_id="missing-autonomous-costs",
+            platform_allows_automation=True,
+            authenticated_channel=True,
+            submission_authorized=True,
+            **submission_authorization(external_id="missing-autonomous-costs"),
+        )
+        accepted = opportunity_intake.ingest(
+            [item], now=NOW
+        )["opportunities"][0]
+
+        self.assertFalse(accepted["cost_estimates_complete"])
+        self.assertEqual(accepted["action_mode"], "prepare_only")
+        self.assertEqual(
+            accepted["unit_economics"]["cost_evidence_status"],
+            "incomplete_projected_inputs",
+        )
 
     def test_rejects_string_authorization_and_listing_flags(self):
         fields = [
@@ -561,6 +724,9 @@ class OpportunityIntakeTests(unittest.TestCase):
             platform_allows_automation=True,
             authenticated_channel=True,
             submission_authorized=True,
+            delivery_cost_cents=0,
+            inference_cost_cents=0,
+            cac_cents=0,
             **submission_authorization(),
             application_cost_units=11,
             application_units_balance=150,
@@ -1321,6 +1487,75 @@ class OpportunityIntakeTests(unittest.TestCase):
             state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
             connection.close()
         self.assertEqual(counts, (0, 0))
+        self.assertEqual(state, "qualified")
+
+    def test_proposal_records_proposal_specific_projected_economics(self):
+        result = opportunity_intake.ingest([candidate(
+            external_id="profitable-proposal",
+            payout_cents=200000,
+            contract_value_cents=200000,
+            delivery_cost_cents=40000,
+            inference_cost_cents=5000,
+            cac_cents=5000,
+            effort_hours=10,
+        )], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        proposal = self.proposal(
+            price_cents=150000,
+            milestones=[{
+                "title": "Validated implementation",
+                "deliverable": "Tested workflow and acceptance evidence.",
+                "amount_cents": 150000,
+                "due_days": 7,
+            }],
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            prepared = opportunity_intake.prepare_proposal(
+                path, opportunity_id, proposal, now=NOW)
+            connection = sqlite3.connect(path)
+            artifact = json.loads(connection.execute(
+                "SELECT artifact_json FROM proposal_artifacts WHERE proposal_id=?",
+                (prepared["proposal_id"],)).fetchone()[0])
+            connection.close()
+        economics = artifact["proposal_unit_economics"]
+        self.assertEqual(economics["basis"], "proposal_price")
+        self.assertEqual(economics["evidence_status"], "projected_not_collected")
+        self.assertEqual(economics["price_cents"], 150000)
+        self.assertEqual(economics["total_cost_cents"], 50000)
+        self.assertEqual(economics["projected_contribution_cents"], 100000)
+        self.assertEqual(economics["projected_contribution_margin"], 0.666667)
+        self.assertEqual(
+            economics["projected_contribution_per_human_hour_cents"], 10000.0)
+
+    def test_proposal_rejects_non_positive_projected_contribution(self):
+        result = opportunity_intake.ingest([candidate(
+            external_id="loss-making-proposal",
+            payout_cents=200000,
+            contract_value_cents=200000,
+            delivery_cost_cents=80000,
+            inference_cost_cents=10000,
+            cac_cents=10000,
+        )], now=NOW)
+        opportunity_id = result["opportunities"][0]["id"]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            with self.assertRaisesRegex(
+                    ValueError,
+                    "proposal_non_positive_projected_contribution"):
+                opportunity_intake.prepare_proposal(
+                    path, opportunity_id, self.proposal(), now=NOW)
+            connection = sqlite3.connect(path)
+            artifact_count = connection.execute(
+                "SELECT COUNT(*) FROM proposal_artifacts"
+            ).fetchone()[0]
+            state = connection.execute(
+                "SELECT pipeline_state FROM opportunities"
+            ).fetchone()[0]
+            connection.close()
+        self.assertEqual(artifact_count, 0)
         self.assertEqual(state, "qualified")
 
     def test_proposal_rolls_back_if_transition_insert_fails(self):
@@ -2127,7 +2362,14 @@ class OpportunityIntakeTests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as directory:
             path = os.path.join(directory, "opportunities.db")
-            opportunity_id, payment_id = self.advance_to_collected(path)
+            opportunity_id, payment_id = self.advance_to_collected(
+                path,
+                candidate_overrides={
+                    "delivery_cost_cents": 20000,
+                    "inference_cost_cents": 2000,
+                    "cac_cents": 5000,
+                },
+            )
             first = opportunity_intake.record_realized_unit_economics(
                 path, opportunity_id, payment_id, economics,
                 now=NOW + timedelta(minutes=5))
@@ -2152,6 +2394,12 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(first["contribution_margin"], 0.721649)
         self.assertEqual(first["revenue_per_human_hour"], 485.0)
         self.assertEqual(first["contribution_per_human_hour"], 350.0)
+        comparison = first["evidence"]["proposal_projection_comparison"]
+        self.assertEqual(comparison["projected_contribution_cents"], 73000)
+        self.assertEqual(comparison["realized_contribution_cents"], 70000)
+        self.assertEqual(comparison["contribution_variance_cents"], -3000)
+        self.assertEqual(comparison["projected_contribution_margin"], 0.73)
+        self.assertEqual(comparison["realized_contribution_margin"], 0.721649)
         self.assertEqual(row, (
             97000, 70000, 0.721649, 485.0, 350.0, "USD", 64))
         self.assertEqual(state, "collected")
@@ -2192,6 +2440,254 @@ class OpportunityIntakeTests(unittest.TestCase):
                 opportunity_intake.record_realized_unit_economics(
                     path, opportunity_id, payment_id, changed,
                     now=NOW + timedelta(minutes=5))
+
+    def test_realized_economics_verifier_rejects_forged_margin(self):
+        economics = {
+            "delivery_cost_cents": 20000,
+            "inference_cost_cents": 2000,
+            "cac_cents": 5000,
+            "human_operating_minutes": 120,
+            "delivery_cost_evidence_url": "https://example.com/costs/delivery",
+            "inference_cost_evidence_url": "https://example.com/costs/inference",
+            "cac_evidence_url": "https://example.com/costs/cac",
+            "human_time_evidence_url": "https://example.com/time/ledger",
+            "measured_at": (NOW + timedelta(minutes=5)).isoformat(),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, payment_id = self.advance_to_collected(path)
+            realized = opportunity_intake.record_realized_unit_economics(
+                path, opportunity_id, payment_id, economics,
+                now=NOW + timedelta(minutes=5))
+            connection = sqlite3.connect(path)
+            connection.execute(
+                "UPDATE realized_unit_economics SET contribution_cents=? "
+                "WHERE economics_id=?",
+                (99999999, realized["economics_id"]),
+            )
+            connection.commit()
+            with self.assertRaisesRegex(
+                    ValueError, "realized_economics_unverified"):
+                opportunity_intake._verified_realized_economics(
+                    connection, realized["economics_id"])
+            connection.close()
+
+    def test_realized_economics_rejects_tampered_linked_proposal(self):
+        economics = {
+            "delivery_cost_cents": 20000,
+            "inference_cost_cents": 2000,
+            "cac_cents": 5000,
+            "human_operating_minutes": 120,
+            "delivery_cost_evidence_url":
+                "https://example.com/costs/delivery",
+            "inference_cost_evidence_url":
+                "https://example.com/costs/inference",
+            "cac_evidence_url": "https://example.com/costs/cac",
+            "human_time_evidence_url": "https://example.com/time/ledger",
+            "measured_at": (NOW + timedelta(minutes=5)).isoformat(),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, payment_id = self.advance_to_collected(
+                path,
+                candidate_overrides={
+                    "delivery_cost_cents": 20000,
+                    "inference_cost_cents": 2000,
+                    "cac_cents": 5000,
+                },
+            )
+            realized = opportunity_intake.record_realized_unit_economics(
+                path, opportunity_id, payment_id, economics,
+                now=NOW + timedelta(minutes=5))
+            connection = sqlite3.connect(path)
+            proposal_id = connection.execute(
+                """SELECT c.proposal_id
+                   FROM payment_receipts p
+                   JOIN invoice_receipts i
+                     ON i.receipt_id=p.invoice_receipt_id
+                   JOIN delivery_receipts d
+                     ON d.receipt_id=i.delivery_receipt_id
+                   JOIN qa_reports q ON q.report_id=d.qa_report_id
+                   JOIN execution_plans e ON e.plan_id=q.execution_plan_id
+                   JOIN contract_receipts c
+                     ON c.receipt_id=e.contract_receipt_id
+                   WHERE p.receipt_id=?""",
+                (payment_id,),
+            ).fetchone()[0]
+            artifact = json.loads(connection.execute(
+                "SELECT artifact_json FROM proposal_artifacts "
+                "WHERE proposal_id=?",
+                (proposal_id,),
+            ).fetchone()[0])
+            artifact["proposal_unit_economics"][
+                "projected_contribution_cents"] = 99999999
+            connection.execute(
+                "UPDATE proposal_artifacts SET artifact_json=? "
+                "WHERE proposal_id=?",
+                (json.dumps(artifact, sort_keys=True, separators=(",", ":")),
+                 proposal_id),
+            )
+            connection.commit()
+            connection.close()
+            verification_connection = sqlite3.connect(path)
+            with self.assertRaisesRegex(
+                    ValueError, "realized_economics_unverified"):
+                opportunity_intake._verified_realized_economics(
+                    verification_connection, realized["economics_id"])
+            verification_connection.close()
+
+    def test_realized_economics_verifier_revalidates_payment_lineage(self):
+        economics = {
+            "delivery_cost_cents": 20000,
+            "inference_cost_cents": 2000,
+            "cac_cents": 5000,
+            "human_operating_minutes": 120,
+            "delivery_cost_evidence_url": "https://example.com/costs/delivery",
+            "inference_cost_evidence_url": "https://example.com/costs/inference",
+            "cac_evidence_url": "https://example.com/costs/cac",
+            "human_time_evidence_url": "https://example.com/time/ledger",
+            "measured_at": (NOW + timedelta(minutes=5)).isoformat(),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, payment_id = self.advance_to_collected(path)
+            realized = opportunity_intake.record_realized_unit_economics(
+                path, opportunity_id, payment_id, economics,
+                now=NOW + timedelta(minutes=5))
+            connection = sqlite3.connect(path)
+            connection.execute(
+                "UPDATE payment_receipts SET net_amount_cents=? "
+                "WHERE receipt_id=?",
+                (99999999, payment_id),
+            )
+            connection.commit()
+            with self.assertRaisesRegex(
+                    ValueError, "realized_economics_unverified"):
+                opportunity_intake._verified_realized_economics(
+                    connection, realized["economics_id"])
+            connection.close()
+
+    def test_forecast_accuracy_uses_only_reverified_settled_economics(self):
+        economics = {
+            "delivery_cost_cents": 20000,
+            "inference_cost_cents": 2000,
+            "cac_cents": 5000,
+            "human_operating_minutes": 120,
+            "delivery_cost_evidence_url":
+                "https://example.com/costs/delivery",
+            "inference_cost_evidence_url":
+                "https://example.com/costs/inference",
+            "cac_evidence_url": "https://example.com/costs/cac",
+            "human_time_evidence_url": "https://example.com/time/ledger",
+            "measured_at": (NOW + timedelta(minutes=5)).isoformat(),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_id, payment_id = self.advance_to_collected(
+                path,
+                candidate_overrides={
+                    "delivery_cost_cents": 20000,
+                    "inference_cost_cents": 2000,
+                    "cac_cents": 5000,
+                },
+            )
+            opportunity_intake.record_realized_unit_economics(
+                path, opportunity_id, payment_id, economics,
+                now=NOW + timedelta(minutes=5))
+            summary = opportunity_intake.summarize_verified_forecast_accuracy(
+                path)
+            connection = sqlite3.connect(path)
+            connection.execute(
+                "UPDATE payment_receipts SET net_amount_cents=? "
+                "WHERE receipt_id=?",
+                (99999999, payment_id),
+            )
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                    ValueError, "realized_economics_unverified"):
+                opportunity_intake.summarize_verified_forecast_accuracy(path)
+        self.assertEqual(summary, {
+            "verified_comparison_count": 1,
+            "by_currency": {
+                "USD": {
+                    "comparison_count": 1,
+                    "projected_contribution_cents": 73000,
+                    "realized_contribution_cents": 70000,
+                    "net_variance_cents": -3000,
+                    "mean_absolute_error_cents": 3000.0,
+                },
+            },
+            "status": "verified_settled_forecast_accuracy",
+        })
+
+    def test_recurring_growth_receipt_reverification_detects_tampering(self):
+        normalized = {
+            "opportunity_id": "opp_1",
+            "recurring_payment_receipt_id": "recur_1",
+            "kind": "expansion",
+            "provider": "marketplace",
+            "external_event_id": "expand_1",
+            "evidence_url": "https://example.com/evidence/expand_1",
+            "occurred_at": NOW.isoformat(),
+            "recurring_economics_id": "econ_1",
+            "baseline_scope": "One workflow",
+            "expanded_scope": "Two workflows",
+            "baseline_value_cents": 50000,
+            "expanded_value_cents": 75000,
+        }
+        serialized = json.dumps(
+            normalized, sort_keys=True, separators=(",", ":"))
+        receipt_hash = opportunity_intake.hashlib.sha256(
+            serialized.encode()).hexdigest()
+        receipt_id = "rgrow_" + receipt_hash[:24]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "growth.db")
+            connection = sqlite3.connect(path)
+            connection.execute('''CREATE TABLE recurring_growth_evidence_receipts (
+                receipt_id TEXT PRIMARY KEY, opportunity_id TEXT,
+                recurring_payment_receipt_id TEXT,
+                recurring_economics_id TEXT, kind TEXT, provider TEXT,
+                external_event_id TEXT, evidence_url TEXT,
+                prior_recurring_payment_receipt_id TEXT,
+                baseline_scope TEXT, expanded_scope TEXT,
+                baseline_value_cents INTEGER, expanded_value_cents INTEGER,
+                occurred_at TEXT, receipt_hash TEXT
+            )''')
+            connection.execute(
+                "INSERT INTO recurring_growth_evidence_receipts VALUES "
+                "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (receipt_id, "opp_1", "recur_1", "econ_1", "expansion",
+                 "marketplace", "expand_1",
+                 "https://example.com/evidence/expand_1", None,
+                 "One workflow", "Two workflows", 50000, 75000,
+                 NOW.isoformat(), receipt_hash))
+            payment = [None] * 18
+            payment[0] = "opp_1"
+            payment[16] = (NOW - timedelta(minutes=1)).isoformat()
+            with patch.object(
+                    opportunity_intake,
+                    "_verified_recurring_payment_receipt",
+                    return_value=payment), patch.object(
+                        opportunity_intake, "_verified_realized_economics",
+                        return_value={
+                            "opportunity_id": "opp_1",
+                            "payment_receipt_id": "recur_1",
+                            "contribution_cents": 25000,
+                        }):
+                self.assertEqual(
+                    opportunity_intake._verified_recurring_growth_evidence(
+                        connection, receipt_id), normalized)
+                connection.execute(
+                    "UPDATE recurring_growth_evidence_receipts "
+                    "SET expanded_value_cents=999999 WHERE receipt_id=?",
+                    (receipt_id,))
+                connection.commit()
+                with self.assertRaisesRegex(
+                        ValueError, "recurring_growth_evidence_unverified"):
+                    opportunity_intake._verified_recurring_growth_evidence(
+                        connection, receipt_id)
+            connection.close()
 
     def test_payment_rejects_bypass_mismatches_and_unsettled_evidence(self):
         valid = {"provider": "marketplace", "external_transaction_id": "payment-246",
@@ -2656,6 +3152,37 @@ class OpportunityIntakeTests(unittest.TestCase):
             economics = opportunity_intake.record_realized_unit_economics(
                 path, opportunity_id, payment_id, economics_evidence,
                 now=NOW + timedelta(minutes=5))
+            connection = sqlite3.connect(path)
+            original_transaction_url = connection.execute(
+                """SELECT transaction_url FROM payment_receipts
+                   WHERE receipt_id=?""", (payment_id,)).fetchone()[0]
+            connection.execute(
+                """UPDATE payment_receipts SET transaction_url=?
+                   WHERE receipt_id=?""",
+                ("https://example.com/payments/substituted", payment_id))
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                    ValueError, "payment_receipt_unverified"):
+                opportunity_intake.record_growth_evidence(
+                    path, opportunity_id, payment_id, "retention", {
+                        "provider": "marketplace",
+                        "external_event_id": "renewal-tampered",
+                        "evidence_url":
+                            "https://example.com/contracts/renewal-tampered",
+                        "occurred_at":
+                            (NOW + timedelta(minutes=6)).isoformat(),
+                    }, now=NOW + timedelta(minutes=6))
+            connection = sqlite3.connect(path)
+            growth_count = connection.execute(
+                "SELECT COUNT(*) FROM growth_evidence_receipts").fetchone()[0]
+            connection.execute(
+                """UPDATE payment_receipts SET transaction_url=?
+                   WHERE receipt_id=?""",
+                (original_transaction_url, payment_id))
+            connection.commit()
+            connection.close()
+            self.assertEqual(growth_count, 0)
             retention = opportunity_intake.record_growth_evidence(
                 path, opportunity_id, payment_id, "retention", {
                     "provider": "marketplace",
@@ -2754,6 +3281,28 @@ class OpportunityIntakeTests(unittest.TestCase):
                         reused_economics["economics_id"],
                     ],
                 }, now=NOW + timedelta(minutes=8))
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE growth_evidence_receipts
+                   SET evidence_url='https://example.com/forged-growth'
+                   WHERE receipt_id=?""",
+                (retention["receipt_id"],))
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                    ValueError, "growth_evidence_receipt_unverified"):
+                opportunity_intake.promote_reusable_ip_asset(
+                    path, opportunity_id, asset_id, "scale_candidate",
+                    {"growth_receipt_id": retention["receipt_id"]},
+                    now=NOW + timedelta(minutes=8))
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE growth_evidence_receipts SET evidence_url=?
+                   WHERE receipt_id=?""",
+                ("https://example.com/contracts/renewal-1",
+                 retention["receipt_id"]))
+            connection.commit()
+            connection.close()
             scale = opportunity_intake.promote_reusable_ip_asset(
                 path, opportunity_id, asset_id, "scale_candidate",
                 {"growth_receipt_id": retention["receipt_id"]},
@@ -2774,6 +3323,30 @@ class OpportunityIntakeTests(unittest.TestCase):
                     "occurred_at":
                         (NOW + timedelta(minutes=8)).isoformat(),
                 }, now=NOW + timedelta(minutes=8))
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE reusable_ip_reuse_receipts
+                   SET evidence_url='https://example.com/forged-before-promotion'
+                   WHERE receipt_id=?""",
+                (reuse["receipt_id"],))
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                    ValueError, "reuse_evidence_receipt_unverified"):
+                opportunity_intake.promote_reusable_ip_asset(
+                    path, opportunity_id, asset_id,
+                    "productize_candidate", {
+                        "growth_receipt_id": expansion["receipt_id"],
+                        "reuse_receipt_id": reuse["receipt_id"],
+                    }, now=NOW + timedelta(minutes=8))
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE reusable_ip_reuse_receipts
+                   SET evidence_url=? WHERE receipt_id=?""",
+                ("https://example.com/deliveries/reuse-client-2",
+                 reuse["receipt_id"]))
+            connection.commit()
+            connection.close()
             productized = opportunity_intake.promote_reusable_ip_asset(
                 path, opportunity_id, asset_id, "productize_candidate", {
                     "growth_receipt_id": expansion["receipt_id"],
@@ -2788,6 +3361,46 @@ class OpportunityIntakeTests(unittest.TestCase):
                 now=NOW + timedelta(minutes=8))
 
             connection = sqlite3.connect(path)
+            verified_reuse = (
+                opportunity_intake._verified_reusable_ip_reuse_evidence(
+                    connection, reuse["receipt_id"]))
+            connection.execute(
+                """UPDATE reusable_ip_reuse_receipts
+                   SET evidence_url='https://example.com/forged'
+                   WHERE receipt_id=?""",
+                (reuse["receipt_id"],))
+            connection.commit()
+            with self.assertRaisesRegex(
+                    ValueError, "reusable_ip_reuse_evidence_unverified"):
+                opportunity_intake._verified_reusable_ip_reuse_evidence(
+                    connection, reuse["receipt_id"])
+            connection.close()
+
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE reusable_ip_reuse_receipts
+                   SET evidence_url=? WHERE receipt_id=?""",
+                ("https://example.com/deliveries/reuse-client-2",
+                 reuse["receipt_id"]))
+            verified_maturity = (
+                opportunity_intake._verified_reusable_ip_maturity(
+                    connection, asset_id))
+            original_hash = connection.execute(
+                """SELECT evidence_hash FROM reusable_ip_promotions
+                   WHERE asset_id=? AND to_maturity='productize_candidate'""",
+                (asset_id,)).fetchone()[0]
+            connection.execute(
+                """UPDATE reusable_ip_promotions SET evidence_hash='forged'
+                   WHERE asset_id=? AND to_maturity='productize_candidate'""",
+                (asset_id,))
+            with self.assertRaisesRegex(
+                    ValueError, "reusable_ip_maturity_unverified"):
+                opportunity_intake._verified_reusable_ip_maturity(
+                    connection, asset_id)
+            connection.execute(
+                """UPDATE reusable_ip_promotions SET evidence_hash=?
+                   WHERE asset_id=? AND to_maturity='productize_candidate'""",
+                (original_hash, asset_id))
             maturity = connection.execute(
                 "SELECT maturity FROM reusable_ip_assets WHERE asset_id=?",
                 (asset_id,)).fetchone()[0]
@@ -2806,6 +3419,11 @@ class OpportunityIntakeTests(unittest.TestCase):
             len(repeatable["evidence"]["one_time_economics_receipts"]), 2)
         self.assertTrue(scale["changed"])
         self.assertTrue(productized["changed"])
+        self.assertEqual(
+            verified_maturity["maturity"], "productize_candidate")
+        self.assertEqual(verified_maturity["promotion_count"], 4)
+        self.assertEqual(
+            verified_reuse["reused_opportunity_id"], reused_opportunity_id)
         self.assertFalse(duplicate["changed"])
         self.assertEqual(maturity, "productize_candidate")
         self.assertEqual(promotions, [
@@ -3795,6 +4413,28 @@ class OpportunityIntakeTests(unittest.TestCase):
                             "https://example.com/evidence/human-time",
                         "measured_at": NOW.isoformat(),
                     }, now=NOW))
+            connection = sqlite3.connect(path)
+            connection.execute(
+                "UPDATE recurring_payment_receipts SET net_amount_cents=? "
+                "WHERE receipt_id=?",
+                (99999999, settled["receipt_id"]),
+            )
+            connection.commit()
+            with self.assertRaisesRegex(
+                    ValueError, "realized_economics_unverified"):
+                opportunity_intake._verified_realized_economics(
+                    connection, realized["economics_id"], recurring=True)
+            connection.execute(
+                "UPDATE recurring_payment_receipts SET net_amount_cents=? "
+                "WHERE receipt_id=?",
+                (recurring_payment["net_amount_cents"],
+                 settled["receipt_id"]),
+            )
+            connection.commit()
+            verified_recurring = (
+                opportunity_intake._verified_realized_economics(
+                    connection, realized["economics_id"], recurring=True))
+            connection.close()
             second_now = NOW + timedelta(days=30)
             second_payment = dict(
                 recurring_payment,
@@ -3986,6 +4626,10 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertFalse(bank_duplicate["changed"])
         self.assertTrue(realized["changed"])
         self.assertFalse(realized_duplicate["changed"])
+        self.assertEqual(
+            verified_recurring["payment_receipt_id"],
+            settled["receipt_id"],
+        )
         self.assertEqual(realized["net_collected_cents"], 14500)
         self.assertEqual(realized["contribution_cents"], 12750)
         self.assertEqual(realized["contribution_margin"], 0.87931)
