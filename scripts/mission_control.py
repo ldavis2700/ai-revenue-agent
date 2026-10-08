@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Create one auditable, safety-gated operating plan for AI Revenue Agent."""
 import json
+import hashlib
 import math
 import os
 import sqlite3
@@ -87,6 +88,96 @@ def scalar(conn, sql, params=()):
         return 0
 
 
+RECEIPT_SPECS = {
+    'payment_receipts': (
+        'payr_',
+        ('opportunity_id', 'invoice_receipt_id', 'provider',
+         'external_transaction_id', 'transaction_url', 'gross_amount_cents',
+         'fee_amount_cents', 'net_amount_cents', 'currency', 'paid_at',
+         'settled_at'),
+    ),
+    'recurring_payment_receipts': (
+        'recurpay_',
+        ('opportunity_id', 'contract_receipt_id', 'term_id', 'provider',
+         'external_invoice_id', 'invoice_url', 'external_transaction_id',
+         'transaction_url', 'gross_amount_cents', 'fee_amount_cents',
+         'net_amount_cents', 'currency', 'service_period_start',
+         'service_period_end', 'invoiced_at', 'paid_at', 'settled_at'),
+    ),
+    'payout_availability_receipts': (
+        'pavr_',
+        ('opportunity_id', 'payment_receipt_id', 'provider',
+         'external_balance_id', 'evidence_url', 'amount_cents', 'currency',
+         'available_at'),
+    ),
+    'recurring_payout_availability_receipts': (
+        'recuravail_',
+        ('opportunity_id', 'recurring_payment_receipt_id', 'provider',
+         'external_balance_id', 'evidence_url', 'amount_cents', 'currency',
+         'available_at'),
+    ),
+    'bank_receipts': (
+        'bankr_',
+        ('opportunity_id', 'payout_availability_receipt_id',
+         'financial_institution', 'external_transfer_id', 'evidence_url',
+         'amount_cents', 'currency', 'received_at'),
+    ),
+    'recurring_bank_receipts': (
+        'recurbank_',
+        ('opportunity_id', 'recurring_payout_receipt_id',
+         'financial_institution', 'external_transfer_id', 'evidence_url',
+         'amount_cents', 'currency', 'received_at'),
+    ),
+}
+
+
+def verified_receipt_rows(conn, table):
+    """Return only hash-consistent rows from a production receipt table.
+
+    Legacy schemas without receipt_hash remain readable for historical/local
+    compatibility. Once a table has immutable receipt columns, invalid rows
+    fail closed and cannot contribute to verified mission metrics.
+    """
+    try:
+        columns = {
+            row[1] for row in conn.execute(f'PRAGMA table_info({table})').fetchall()
+        }
+    except sqlite3.OperationalError:
+        return []
+    if not columns:
+        return []
+    prefix, snapshot_columns = RECEIPT_SPECS[table]
+    if 'receipt_hash' not in columns:
+        cursor = conn.execute(f'SELECT * FROM {table}')
+        names = [item[0] for item in cursor.description]
+        return [dict(zip(names, row)) for row in cursor.fetchall()]
+    required = {'receipt_id', 'receipt_hash', *snapshot_columns}
+    if not required.issubset(columns):
+        return []
+    selected = ('receipt_id', *snapshot_columns, 'receipt_hash')
+    rows = conn.execute(
+        f"SELECT {','.join(selected)} FROM {table}"
+    ).fetchall()
+    verified = []
+    for row in rows:
+        item = dict(zip(selected, row))
+        snapshot = {key: item[key] for key in snapshot_columns}
+        serialized = json.dumps(snapshot, sort_keys=True, separators=(',', ':'))
+        expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        if (item['receipt_hash'] == expected_hash
+                and item['receipt_id'] == prefix + expected_hash[:24]):
+            verified.append(item)
+    return verified
+
+
+def receipt_totals(conn, table, amount_columns):
+    rows = verified_receipt_rows(conn, table)
+    return len(rows), {
+        column: sum((row.get(column) or 0) for row in rows) / 100.0
+        for column in amount_columns
+    }
+
+
 def snapshot(conn):
     sent = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='sent'")
     replies = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='reply'")
@@ -94,36 +185,30 @@ def snapshot(conn):
     claimed_sales = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='sale'")
     claimed_sale_value = scalar(conn, "SELECT COALESCE(SUM(value),0) FROM events WHERE event_type='sale'")
     claimed_refund_value = scalar(conn, "SELECT COALESCE(SUM(value),0) FROM events WHERE event_type='refund'")
-    collected_payments = scalar(conn, "SELECT COUNT(*) FROM payment_receipts")
-    recurring_payments = scalar(
-        conn, "SELECT COUNT(*) FROM recurring_payment_receipts")
-    one_time_gross = scalar(
-        conn, "SELECT COALESCE(SUM(gross_amount_cents),0) / 100.0 FROM payment_receipts")
-    one_time_fees = scalar(
-        conn, "SELECT COALESCE(SUM(fee_amount_cents),0) / 100.0 FROM payment_receipts")
-    one_time_net = scalar(
-        conn, "SELECT COALESCE(SUM(net_amount_cents),0) / 100.0 FROM payment_receipts")
-    recurring_gross = scalar(
-        conn, """SELECT COALESCE(SUM(gross_amount_cents),0) / 100.0
-                 FROM recurring_payment_receipts""")
-    recurring_fees = scalar(
-        conn, """SELECT COALESCE(SUM(fee_amount_cents),0) / 100.0
-                 FROM recurring_payment_receipts""")
-    recurring_net = scalar(
-        conn, """SELECT COALESCE(SUM(net_amount_cents),0) / 100.0
-                 FROM recurring_payment_receipts""")
-    recurring_withdrawable = scalar(
-        conn, """SELECT COALESCE(SUM(amount_cents),0) / 100.0
-                 FROM recurring_payout_availability_receipts""")
-    recurring_bank_received = scalar(
-        conn, """SELECT COALESCE(SUM(amount_cents),0) / 100.0
-                 FROM recurring_bank_receipts""")
-    one_time_withdrawable = scalar(
-        conn, """SELECT COALESCE(SUM(amount_cents),0) / 100.0
-                 FROM payout_availability_receipts""")
-    one_time_bank_received = scalar(
-        conn, """SELECT COALESCE(SUM(amount_cents),0) / 100.0
-                 FROM bank_receipts""")
+    collected_payments, one_time = receipt_totals(
+        conn, 'payment_receipts',
+        ('gross_amount_cents', 'fee_amount_cents', 'net_amount_cents'))
+    recurring_payments, recurring = receipt_totals(
+        conn, 'recurring_payment_receipts',
+        ('gross_amount_cents', 'fee_amount_cents', 'net_amount_cents'))
+    _, recurring_payout = receipt_totals(
+        conn, 'recurring_payout_availability_receipts', ('amount_cents',))
+    _, recurring_bank = receipt_totals(
+        conn, 'recurring_bank_receipts', ('amount_cents',))
+    _, one_time_payout = receipt_totals(
+        conn, 'payout_availability_receipts', ('amount_cents',))
+    _, one_time_bank = receipt_totals(
+        conn, 'bank_receipts', ('amount_cents',))
+    one_time_gross = one_time['gross_amount_cents']
+    one_time_fees = one_time['fee_amount_cents']
+    one_time_net = one_time['net_amount_cents']
+    recurring_gross = recurring['gross_amount_cents']
+    recurring_fees = recurring['fee_amount_cents']
+    recurring_net = recurring['net_amount_cents']
+    recurring_withdrawable = recurring_payout['amount_cents']
+    recurring_bank_received = recurring_bank['amount_cents']
+    one_time_withdrawable = one_time_payout['amount_cents']
+    one_time_bank_received = one_time_bank['amount_cents']
     opportunity_gross = one_time_gross + recurring_gross
     opportunity_fees = one_time_fees + recurring_fees
     opportunity_net = one_time_net + recurring_net

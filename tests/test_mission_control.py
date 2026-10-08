@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import sqlite3
 import tempfile
@@ -138,6 +139,51 @@ class MissionControlTests(unittest.TestCase):
         self.assertEqual(metrics['verified_withdrawable_balance'], 0)
         self.assertEqual(metrics['verified_money_received'], 0)
         self.assertEqual(metrics['verified_opportunity_net_revenue'], 0)
+
+    def test_tampered_production_receipt_cannot_inflate_verified_metrics(self):
+        conn = sqlite3.connect(self.path)
+        conn.execute('''CREATE TABLE payment_receipts (
+            receipt_id TEXT PRIMARY KEY, opportunity_id TEXT,
+            invoice_receipt_id TEXT, provider TEXT,
+            external_transaction_id TEXT, transaction_url TEXT,
+            gross_amount_cents INTEGER, fee_amount_cents INTEGER,
+            net_amount_cents INTEGER, currency TEXT, paid_at TEXT,
+            settled_at TEXT, receipt_hash TEXT
+        )''')
+
+        # Insert explicitly to keep the SQL column order obvious.
+        valid = {
+            'opportunity_id': 'opp_1', 'invoice_receipt_id': 'invr_1',
+            'provider': 'stripe', 'external_transaction_id': 'txn_valid',
+            'transaction_url': 'https://example.com/txn_valid',
+            'gross_amount_cents': 10000, 'fee_amount_cents': 500,
+            'net_amount_cents': 9500, 'currency': 'USD',
+            'paid_at': '2026-10-07T00:00:00+00:00',
+            'settled_at': '2026-10-08T00:00:00+00:00',
+        }
+        serialized = json.dumps(valid, sort_keys=True, separators=(',', ':'))
+        valid_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        conn.execute(
+            'INSERT INTO payment_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            ('payr_' + valid_hash[:24], *valid.values(), valid_hash))
+
+        forged = dict(valid)
+        forged['external_transaction_id'] = 'txn_tampered'
+        forged['transaction_url'] = 'https://example.com/txn_tampered'
+        serialized = json.dumps(forged, sort_keys=True, separators=(',', ':'))
+        forged_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        forged_values = list(forged.values())
+        forged_values[7] = 99999999  # Alter net after the receipt was sealed.
+        conn.execute(
+            'INSERT INTO payment_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            ('payr_' + forged_hash[:24], *forged_values, forged_hash))
+        conn.commit()
+
+        metrics = mission_control.snapshot(conn)
+        conn.close()
+        self.assertEqual(metrics['verified_collected_payments'], 1)
+        self.assertEqual(metrics['verified_gross_revenue'], 100)
+        self.assertEqual(metrics['verified_net_revenue'], 95)
 
     def test_no_leads_prioritizes_approved_source(self):
         result = mission_control.run(self.path)
