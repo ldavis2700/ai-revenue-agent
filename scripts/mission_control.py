@@ -176,6 +176,43 @@ def receipt_totals(conn, table, amount_columns):
     }
 
 
+ACTIVE_BUYER_STAGES = (
+    'response_received', 'buyer_reply', 'interview', 'offer', 'contracted',
+    'executing', 'qa_passed', 'delivered', 'invoiced',
+)
+BUYER_STAGE_PRIORITY = {
+    stage: index for index, stage in enumerate(ACTIVE_BUYER_STAGES, start=1)
+}
+
+
+def active_buyer_pipeline(conn):
+    """Summarize evidence-gated buyer/contract work before prospecting."""
+    try:
+        rows = conn.execute(
+            "SELECT pipeline_state, COUNT(*) FROM opportunities "
+            "WHERE pipeline_state IN ("
+            + ",".join("?" for _ in ACTIVE_BUYER_STAGES)
+            + ") GROUP BY pipeline_state",
+            ACTIVE_BUYER_STAGES,
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    counts = {stage: 0 for stage in ACTIVE_BUYER_STAGES}
+    for stage, count in rows:
+        if stage in counts:
+            counts[stage] = int(count or 0)
+    highest = max(
+        (stage for stage, count in counts.items() if count),
+        key=lambda stage: BUYER_STAGE_PRIORITY[stage],
+        default=None,
+    )
+    return {
+        'active_count': sum(counts.values()),
+        'highest_stage': highest,
+        'stage_counts': counts,
+    }
+
+
 def snapshot(conn):
     sent = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='sent'")
     replies = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='reply'")
@@ -212,7 +249,11 @@ def snapshot(conn):
     opportunity_net = one_time_net + recurring_net
     eligible = scalar(conn, "SELECT COUNT(*) FROM leads WHERE contact_allowed=1 AND score >= ?",
                       (int(os.getenv('MIN_LEAD_SCORE', '55')),))
+    buyer_pipeline = active_buyer_pipeline(conn)
     return {
+        'active_buyer_opportunities': buyer_pipeline['active_count'],
+        'highest_active_buyer_stage': buyer_pipeline['highest_stage'],
+        'active_buyer_stage_counts': buyer_pipeline['stage_counts'],
         'eligible_leads': eligible, 'sent': sent, 'replies': replies,
         'interested': interested,
         'sales': collected_payments + recurring_payments,
@@ -684,7 +725,32 @@ def ensure_zero_cost_validation(path, model_intelligence):
 
 def build_plan(metrics, model_intelligence=None, validation_queue=None):
     plan = []
-    if metrics['eligible_leads'] == 0:
+    buyer_stage = metrics.get('highest_active_buyer_stage')
+    if buyer_stage in {'contracted', 'executing', 'qa_passed', 'delivered', 'invoiced'}:
+        plan.append({
+            'priority': 1,
+            'action': 'advance_verified_contract_delivery',
+            'mode': 'prepare',
+            'buyer_stage': buyer_stage,
+            'reason': 'Verified contracted work outranks prospecting until delivery and collection progress safely.',
+        })
+    elif buyer_stage in {'interview', 'offer'}:
+        plan.append({
+            'priority': 1,
+            'action': 'advance_active_buyer_offer',
+            'mode': 'prepare',
+            'buyer_stage': buyer_stage,
+            'reason': 'A verified interview or offer outranks new prospecting.',
+        })
+    elif buyer_stage in {'response_received', 'buyer_reply'}:
+        plan.append({
+            'priority': 1,
+            'action': 'respond_to_active_buyer_intent',
+            'mode': 'prepare',
+            'buyer_stage': buyer_stage,
+            'reason': 'A verified buyer response outranks new prospecting.',
+        })
+    elif metrics['eligible_leads'] == 0:
         plan.append({'priority': 1, 'action': 'connect_approved_lead_source', 'mode': 'prepare',
                      'reason': 'No qualified, contact-permitted prospects are available.'})
     elif metrics['sent'] == 0:
