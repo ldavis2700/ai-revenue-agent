@@ -314,13 +314,34 @@ class MissionControlTests(unittest.TestCase):
             conn, contract['opportunity_id'], 'contracted',
             'contract:' + contract_id))
 
+        conn.execute('''CREATE TABLE execution_plans (
+            plan_id TEXT, opportunity_id TEXT, contract_receipt_id TEXT,
+            plan_hash TEXT, plan_json TEXT, started_at TEXT)''')
+        invoice_plan = {
+            'opportunity_id': 'invoice_opportunity',
+            'contract_receipt_id': 'contr_' + 'c' * 24,
+            'execution_environment': 'isolated',
+            'deliverables': [],
+            'started_at': '2026-10-12T00:05:00+00:00',
+        }
+        invoice_plan_json = json.dumps(
+            invoice_plan, sort_keys=True, separators=(',', ':'))
+        invoice_plan_hash = hashlib.sha256(
+            invoice_plan_json.encode()).hexdigest()
+        invoice_plan_id = 'execp_' + invoice_plan_hash[:24]
+        conn.execute(
+            'INSERT INTO execution_plans VALUES (?,?,?,?,?,?)',
+            (invoice_plan_id, invoice_plan['opportunity_id'],
+             invoice_plan['contract_receipt_id'], invoice_plan_hash,
+             invoice_plan_json, invoice_plan['started_at']),
+        )
         conn.execute('''CREATE TABLE qa_reports (
             report_id TEXT, opportunity_id TEXT, execution_plan_id TEXT,
             artifact_sha256 TEXT, report_hash TEXT, report_json TEXT,
             completed_at TEXT)''')
         qa = {
             'opportunity_id': 'invoice_opportunity',
-            'execution_plan_id': 'execp_eeeeeeeeeeeeeeeeeeeeeeee',
+            'execution_plan_id': invoice_plan_id,
             'artifact_sha256': 'd' * 64,
             'tests': [{
                 'name': 'acceptance',
@@ -450,6 +471,17 @@ class MissionControlTests(unittest.TestCase):
         conn.execute(
             'UPDATE qa_reports SET artifact_sha256=? WHERE report_id=?',
             (qa['artifact_sha256'], qa_id),
+        )
+        conn.execute(
+            'UPDATE execution_plans SET started_at=? WHERE plan_id=?',
+            ('2026-10-12T00:06:00+00:00', invoice_plan_id),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, invoice['opportunity_id'], 'invoiced',
+            'invoice:' + invoice_id))
+        conn.execute(
+            'UPDATE execution_plans SET started_at=? WHERE plan_id=?',
+            (invoice_plan['started_at'], invoice_plan_id),
         )
         conn.execute(
             'UPDATE invoice_receipts SET amount_cents=? WHERE receipt_id=?',
