@@ -306,7 +306,8 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
             if len(parts) != 4 or parts[2] != 'plan':
                 return False
             row = conn.execute(
-                '''SELECT plan_hash,plan_json FROM execution_plans
+                '''SELECT plan_hash,plan_json,started_at
+                   FROM execution_plans
                    WHERE plan_id=? AND contract_receipt_id=?
                          AND opportunity_id=?''',
                 (parts[3], parts[1], opportunity_id),
@@ -314,22 +315,35 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
             if row is None:
                 return False
             expected = hashlib.sha256(row[1].encode()).hexdigest()
+            payload = json.loads(row[1])
             return (
-                row[0] == expected
+                isinstance(payload, dict)
+                and payload.get('opportunity_id') == opportunity_id
+                and payload.get('contract_receipt_id') == parts[1]
+                and payload.get('started_at') == row[2]
+                and row[0] == expected
                 and parts[3] == 'execp_' + expected[:24]
             )
         receipt_id = evidence_id.split(':', 1)[1]
         if stage == 'qa_passed':
             row = conn.execute(
-                '''SELECT report_hash,report_json FROM qa_reports
+                '''SELECT report_hash,report_json,execution_plan_id,
+                          artifact_sha256,completed_at
+                   FROM qa_reports
                    WHERE report_id=? AND opportunity_id=?''',
                 (receipt_id, opportunity_id),
             ).fetchone()
             if row is None:
                 return False
             expected = hashlib.sha256(row[1].encode()).hexdigest()
+            payload = json.loads(row[1])
             return (
-                row[0] == expected
+                isinstance(payload, dict)
+                and payload.get('opportunity_id') == opportunity_id
+                and payload.get('execution_plan_id') == row[2]
+                and payload.get('artifact_sha256') == row[3]
+                and payload.get('completed_at') == row[4]
+                and row[0] == expected
                 and receipt_id == 'qar_' + expected[:24]
             )
         if stage == 'delivered':
