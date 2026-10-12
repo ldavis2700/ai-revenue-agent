@@ -227,6 +227,50 @@ def _canonical_ledger_id(value, prefix):
     )
 
 
+def _verified_contract_artifact(conn, opportunity_id, receipt_id):
+    row = conn.execute(
+        '''SELECT response_receipt_id,proposal_id,provider,
+                  external_contract_id,contract_url,amount_cents,
+                  currency,contracted_at,terms_authority,
+                  authority_evidence_url,receipt_hash
+           FROM contract_receipts
+           WHERE receipt_id=? AND opportunity_id=?''',
+        (receipt_id, opportunity_id),
+    ).fetchone()
+    if row is None:
+        return False
+    recurring = _contract_terms_binding(
+        conn, 'contract_recurring_terms', receipt_id, opportunity_id,
+        'accepted_base_fee_cents', 'accepted_base_fee_cents')
+    outcome = _contract_terms_binding(
+        conn, 'contract_outcome_terms', receipt_id, opportunity_id,
+        'accepted_fee_cap_cents', 'accepted_fee_cap_cents')
+    if recurring is False or outcome is False:
+        return False
+    snapshot = {
+        'opportunity_id': opportunity_id,
+        'response_receipt_id': row[0],
+        'proposal_id': row[1],
+        'provider': row[2],
+        'external_contract_id': row[3],
+        'contract_url': row[4],
+        'amount_cents': row[5],
+        'currency': row[6],
+        'contracted_at': row[7],
+        'terms_authority': row[8],
+        'authority_evidence_url': row[9],
+        'recurring_terms_binding': recurring,
+        'outcome_terms_binding': outcome,
+    }
+    expected = hashlib.sha256(json.dumps(
+        snapshot, sort_keys=True, separators=(',', ':')
+    ).encode()).hexdigest()
+    return (
+        row[10] == expected
+        and receipt_id == 'contr_' + expected[:24]
+    )
+
+
 def _verified_execution_artifact(
         conn, opportunity_id, plan_id, contract_receipt_id=None):
     row = conn.execute(
@@ -249,6 +293,8 @@ def _verified_execution_artifact(
         and payload.get('started_at') == row[3]
         and row[1] == expected
         and plan_id == 'execp_' + expected[:24]
+        and _verified_contract_artifact(
+            conn, opportunity_id, row[0])
     )
 
 
@@ -352,44 +398,8 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
             return row[5] == expected and receipt_id == 'respr_' + expected[:24]
         if stage == 'contracted':
             receipt_id = evidence_id.split(':', 1)[1]
-            row = conn.execute(
-                '''SELECT response_receipt_id,proposal_id,provider,
-                          external_contract_id,contract_url,amount_cents,
-                          currency,contracted_at,terms_authority,
-                          authority_evidence_url,receipt_hash
-                   FROM contract_receipts
-                   WHERE receipt_id=? AND opportunity_id=?''',
-                (receipt_id, opportunity_id),
-            ).fetchone()
-            if row is None:
-                return False
-            recurring = _contract_terms_binding(
-                conn, 'contract_recurring_terms', receipt_id, opportunity_id,
-                'accepted_base_fee_cents', 'accepted_base_fee_cents')
-            outcome = _contract_terms_binding(
-                conn, 'contract_outcome_terms', receipt_id, opportunity_id,
-                'accepted_fee_cap_cents', 'accepted_fee_cap_cents')
-            if recurring is False or outcome is False:
-                return False
-            snapshot = {
-                'opportunity_id': opportunity_id,
-                'response_receipt_id': row[0],
-                'proposal_id': row[1],
-                'provider': row[2],
-                'external_contract_id': row[3],
-                'contract_url': row[4],
-                'amount_cents': row[5],
-                'currency': row[6],
-                'contracted_at': row[7],
-                'terms_authority': row[8],
-                'authority_evidence_url': row[9],
-                'recurring_terms_binding': recurring,
-                'outcome_terms_binding': outcome,
-            }
-            expected = hashlib.sha256(json.dumps(
-                snapshot, sort_keys=True, separators=(',', ':')
-            ).encode()).hexdigest()
-            return row[10] == expected and receipt_id == 'contr_' + expected[:24]
+            return _verified_contract_artifact(
+                conn, opportunity_id, receipt_id)
         if stage == 'executing':
             parts = evidence_id.split(':')
             if (len(parts) != 4 or parts[2] != 'plan'
