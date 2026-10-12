@@ -227,6 +227,65 @@ def _canonical_ledger_id(value, prefix):
     )
 
 
+def _verified_submission_artifact(conn, opportunity_id, receipt_id):
+    row = conn.execute(
+        '''SELECT proposal_id,provider,external_submission_id,
+                  submission_url,submitted_at,receipt_hash
+           FROM submission_receipts
+           WHERE receipt_id=? AND opportunity_id=?''',
+        (receipt_id, opportunity_id),
+    ).fetchone()
+    if row is None:
+        return False
+    snapshot = {
+        'opportunity_id': opportunity_id,
+        'proposal_id': row[0],
+        'provider': row[1],
+        'external_submission_id': row[2],
+        'submission_url': row[3],
+        'submitted_at': row[4],
+    }
+    expected = hashlib.sha256(json.dumps(
+        snapshot, sort_keys=True, separators=(',', ':')
+    ).encode()).hexdigest()
+    return (
+        row[5] == expected
+        and receipt_id == 'subr_' + expected[:24]
+    )
+
+
+def _verified_response_artifact(
+        conn, opportunity_id, receipt_id, stage):
+    row = conn.execute(
+        '''SELECT submission_receipt_id,provider,external_message_id,
+                  message_url,received_at,receipt_hash
+           FROM response_receipts
+           WHERE receipt_id=? AND opportunity_id=?''',
+        (receipt_id, opportunity_id),
+    ).fetchone()
+    if row is None:
+        return False
+    snapshot = {
+        'opportunity_id': opportunity_id,
+        'submission_receipt_id': row[0],
+        'provider': row[1],
+        'external_message_id': row[2],
+        'message_url': row[3],
+        'received_at': row[4],
+        'stage': stage,
+    }
+    expected = hashlib.sha256(json.dumps(
+        snapshot, sort_keys=True, separators=(',', ':')
+    ).encode()).hexdigest()
+    return (
+        _canonical_ledger_id(row[0], 'subr_')
+        and row[5] == expected
+        and receipt_id == 'respr_' + expected[:24]
+        and _verified_submission_artifact(
+            conn, opportunity_id, row[0])
+    )
+
+
 def _verified_contract_artifact(conn, opportunity_id, receipt_id):
     row = conn.execute(
         '''SELECT response_receipt_id,proposal_id,provider,
@@ -374,28 +433,8 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
     try:
         if stage in {'response_received', 'buyer_reply', 'interview', 'offer'}:
             receipt_id = evidence_id.split(':', 1)[1]
-            row = conn.execute(
-                '''SELECT submission_receipt_id,provider,external_message_id,
-                          message_url,received_at,receipt_hash
-                   FROM response_receipts
-                   WHERE receipt_id=? AND opportunity_id=?''',
-                (receipt_id, opportunity_id),
-            ).fetchone()
-            if row is None:
-                return False
-            snapshot = {
-                'opportunity_id': opportunity_id,
-                'submission_receipt_id': row[0],
-                'provider': row[1],
-                'external_message_id': row[2],
-                'message_url': row[3],
-                'received_at': row[4],
-                'stage': stage,
-            }
-            expected = hashlib.sha256(json.dumps(
-                snapshot, sort_keys=True, separators=(',', ':')
-            ).encode()).hexdigest()
-            return row[5] == expected and receipt_id == 'respr_' + expected[:24]
+            return _verified_response_artifact(
+                conn, opportunity_id, receipt_id, stage)
         if stage == 'contracted':
             receipt_id = evidence_id.split(':', 1)[1]
             return _verified_contract_artifact(
