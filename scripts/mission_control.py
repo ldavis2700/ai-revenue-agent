@@ -4,6 +4,7 @@ import json
 import hashlib
 import math
 import os
+import re
 import sqlite3
 import sys
 from datetime import datetime, timezone
@@ -219,6 +220,13 @@ def _contract_terms_binding(
         return False
     return binding
 
+def _canonical_ledger_id(value, prefix):
+    return (
+        isinstance(value, str)
+        and re.fullmatch(re.escape(prefix) + r'[0-9a-f]{24}', value) is not None
+    )
+
+
 def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
     """Rebuild or identity-check the stage-specific immutable ledger artifact."""
     evidence_prefixes = {
@@ -304,7 +312,7 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
         if stage == 'executing':
             parts = evidence_id.split(':')
             if (len(parts) != 4 or parts[2] != 'plan'
-                    or not parts[1].startswith('contr_')):
+                    or not _canonical_ledger_id(parts[1], 'contr_')):
                 return False
             row = conn.execute(
                 '''SELECT plan_hash,plan_json,started_at
@@ -342,7 +350,7 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
                 isinstance(payload, dict)
                 and payload.get('opportunity_id') == opportunity_id
                 and payload.get('execution_plan_id') == row[2]
-                and row[2].startswith('execp_')
+                and _canonical_ledger_id(row[2], 'execp_')
                 and payload.get('artifact_sha256') == row[3]
                 and payload.get('completed_at') == row[4]
                 and row[0] == expected
@@ -371,7 +379,7 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
                 snapshot, sort_keys=True, separators=(',', ':')
             ).encode()).hexdigest()
             return (
-                row[0].startswith('qar_')
+                _canonical_ledger_id(row[0], 'qar_')
                 and row[6] == expected
                 and receipt_id == 'delr_' + expected[:24]
             )
@@ -416,7 +424,7 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
                 snapshot, sort_keys=True, separators=(',', ':')
             ).encode()).hexdigest()
             return (
-                row[0].startswith('delr_')
+                _canonical_ledger_id(row[0], 'delr_')
                 and row[8] == expected
                 and receipt_id == 'invr_' + expected[:24]
             )
