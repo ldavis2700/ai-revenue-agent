@@ -227,6 +227,31 @@ def _canonical_ledger_id(value, prefix):
     )
 
 
+def _verified_execution_artifact(
+        conn, opportunity_id, plan_id, contract_receipt_id=None):
+    row = conn.execute(
+        '''SELECT contract_receipt_id,plan_hash,plan_json,started_at
+           FROM execution_plans
+           WHERE plan_id=? AND opportunity_id=?''',
+        (plan_id, opportunity_id),
+    ).fetchone()
+    if row is None or (
+            contract_receipt_id is not None
+            and row[0] != contract_receipt_id):
+        return False
+    expected = hashlib.sha256(row[2].encode()).hexdigest()
+    payload = json.loads(row[2])
+    return (
+        isinstance(payload, dict)
+        and _canonical_ledger_id(row[0], 'contr_')
+        and payload.get('opportunity_id') == opportunity_id
+        and payload.get('contract_receipt_id') == row[0]
+        and payload.get('started_at') == row[3]
+        and row[1] == expected
+        and plan_id == 'execp_' + expected[:24]
+    )
+
+
 def _verified_qa_artifact(conn, opportunity_id, report_id):
     row = conn.execute(
         '''SELECT report_hash,report_json,execution_plan_id,
@@ -248,6 +273,8 @@ def _verified_qa_artifact(conn, opportunity_id, report_id):
         and payload.get('completed_at') == row[4]
         and row[0] == expected
         and report_id == 'qar_' + expected[:24]
+        and _verified_execution_artifact(
+            conn, opportunity_id, row[2])
     )
 
 
@@ -368,25 +395,8 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
             if (len(parts) != 4 or parts[2] != 'plan'
                     or not _canonical_ledger_id(parts[1], 'contr_')):
                 return False
-            row = conn.execute(
-                '''SELECT plan_hash,plan_json,started_at
-                   FROM execution_plans
-                   WHERE plan_id=? AND contract_receipt_id=?
-                         AND opportunity_id=?''',
-                (parts[3], parts[1], opportunity_id),
-            ).fetchone()
-            if row is None:
-                return False
-            expected = hashlib.sha256(row[1].encode()).hexdigest()
-            payload = json.loads(row[1])
-            return (
-                isinstance(payload, dict)
-                and payload.get('opportunity_id') == opportunity_id
-                and payload.get('contract_receipt_id') == parts[1]
-                and payload.get('started_at') == row[2]
-                and row[0] == expected
-                and parts[3] == 'execp_' + expected[:24]
-            )
+            return _verified_execution_artifact(
+                conn, opportunity_id, parts[3], parts[1])
         receipt_id = evidence_id.split(':', 1)[1]
         if stage == 'qa_passed':
             return _verified_qa_artifact(
