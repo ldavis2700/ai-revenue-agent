@@ -227,6 +227,35 @@ def _canonical_ledger_id(value, prefix):
     )
 
 
+def _verified_delivery_artifact(conn, opportunity_id, receipt_id):
+    row = conn.execute(
+        '''SELECT qa_report_id,provider,external_delivery_id,
+                  delivery_url,artifact_sha256,delivered_at,receipt_hash
+           FROM delivery_receipts
+           WHERE receipt_id=? AND opportunity_id=?''',
+        (receipt_id, opportunity_id),
+    ).fetchone()
+    if row is None:
+        return False
+    snapshot = {
+        'opportunity_id': opportunity_id,
+        'qa_report_id': row[0],
+        'provider': row[1],
+        'external_delivery_id': row[2],
+        'delivery_url': row[3],
+        'artifact_sha256': row[4],
+        'delivered_at': row[5],
+    }
+    expected = hashlib.sha256(json.dumps(
+        snapshot, sort_keys=True, separators=(',', ':')
+    ).encode()).hexdigest()
+    return (
+        _canonical_ledger_id(row[0], 'qar_')
+        and row[6] == expected
+        and receipt_id == 'delr_' + expected[:24]
+    )
+
+
 def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
     """Rebuild or identity-check the stage-specific immutable ledger artifact."""
     evidence_prefixes = {
@@ -357,32 +386,8 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
                 and receipt_id == 'qar_' + expected[:24]
             )
         if stage == 'delivered':
-            row = conn.execute(
-                '''SELECT qa_report_id,provider,external_delivery_id,
-                          delivery_url,artifact_sha256,delivered_at,receipt_hash
-                   FROM delivery_receipts
-                   WHERE receipt_id=? AND opportunity_id=?''',
-                (receipt_id, opportunity_id),
-            ).fetchone()
-            if row is None:
-                return False
-            snapshot = {
-                'opportunity_id': opportunity_id,
-                'qa_report_id': row[0],
-                'provider': row[1],
-                'external_delivery_id': row[2],
-                'delivery_url': row[3],
-                'artifact_sha256': row[4],
-                'delivered_at': row[5],
-            }
-            expected = hashlib.sha256(json.dumps(
-                snapshot, sort_keys=True, separators=(',', ':')
-            ).encode()).hexdigest()
-            return (
-                _canonical_ledger_id(row[0], 'qar_')
-                and row[6] == expected
-                and receipt_id == 'delr_' + expected[:24]
-            )
+            return _verified_delivery_artifact(
+                conn, opportunity_id, receipt_id)
         if stage == 'invoiced':
             row = conn.execute(
                 '''SELECT delivery_receipt_id,provider,external_invoice_id,
@@ -427,6 +432,9 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
                 _canonical_ledger_id(row[0], 'delr_')
                 and row[8] == expected
                 and receipt_id == 'invr_' + expected[:24]
+                and _verified_delivery_artifact(
+                    conn, opportunity_id, row[0])
+
             )
         return False
     except (
