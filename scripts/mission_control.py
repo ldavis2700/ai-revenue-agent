@@ -134,9 +134,9 @@ RECEIPT_SPECS = {
 def verified_receipt_rows(conn, table):
     """Return only hash-consistent rows from a production receipt table.
 
-    Legacy schemas without receipt_hash remain readable for historical/local
-    compatibility. Once a table has immutable receipt columns, invalid rows
-    fail closed and cannot contribute to verified mission metrics.
+    Unsealed legacy rows are not discarded from storage, but they are never
+    promoted into metrics labeled verified. Only immutable receipt schemas can
+    contribute to collected, withdrawable, or received totals.
     """
     try:
         columns = {
@@ -148,9 +148,7 @@ def verified_receipt_rows(conn, table):
         return []
     prefix, snapshot_columns = RECEIPT_SPECS[table]
     if 'receipt_hash' not in columns:
-        cursor = conn.execute(f'SELECT * FROM {table}')
-        names = [item[0] for item in cursor.description]
-        return [dict(zip(names, row)) for row in cursor.fetchall()]
+        return []
     required = {'receipt_id', 'receipt_hash', *snapshot_columns}
     if not required.issubset(columns):
         return []
