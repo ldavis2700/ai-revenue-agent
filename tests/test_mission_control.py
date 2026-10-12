@@ -49,81 +49,52 @@ class MissionControlTests(unittest.TestCase):
         self.assertNotEqual(
             result['plan'][0]['action'], 'replicate_verified_winning_segment')
 
-    def test_settled_opportunity_payments_feed_mission_metrics_without_double_refunds(self):
+    def test_unsealed_legacy_receipts_do_not_feed_verified_metrics(self):
         conn = sqlite3.connect(self.path)
-        conn.execute('''CREATE TABLE payment_receipts (
-            receipt_id TEXT PRIMARY KEY,
-            gross_amount_cents INTEGER NOT NULL,
-            fee_amount_cents INTEGER NOT NULL,
-            net_amount_cents INTEGER NOT NULL
-        )''')
-        conn.execute('''CREATE TABLE recurring_payment_receipts (
-            receipt_id TEXT PRIMARY KEY,
-            gross_amount_cents INTEGER NOT NULL,
-            fee_amount_cents INTEGER NOT NULL,
-            net_amount_cents INTEGER NOT NULL
-        )''')
-        conn.execute('''CREATE TABLE recurring_payout_availability_receipts (
-            receipt_id TEXT PRIMARY KEY,
-            amount_cents INTEGER NOT NULL
-        )''')
-        conn.execute('''CREATE TABLE recurring_bank_receipts (
-            receipt_id TEXT PRIMARY KEY,
-            amount_cents INTEGER NOT NULL
-        )''')
-        conn.execute('''CREATE TABLE payout_availability_receipts (
-            receipt_id TEXT PRIMARY KEY,
-            amount_cents INTEGER NOT NULL
-        )''')
-        conn.execute('''CREATE TABLE bank_receipts (
-            receipt_id TEXT PRIMARY KEY,
-            amount_cents INTEGER NOT NULL
-        )''')
+        for table, amount_columns in (
+            ('payment_receipts',
+             'gross_amount_cents INTEGER, fee_amount_cents INTEGER, net_amount_cents INTEGER'),
+            ('recurring_payment_receipts',
+             'gross_amount_cents INTEGER, fee_amount_cents INTEGER, net_amount_cents INTEGER'),
+            ('recurring_payout_availability_receipts', 'amount_cents INTEGER'),
+            ('recurring_bank_receipts', 'amount_cents INTEGER'),
+            ('payout_availability_receipts', 'amount_cents INTEGER'),
+            ('bank_receipts', 'amount_cents INTEGER'),
+        ):
+            conn.execute(
+                f'CREATE TABLE {table} (receipt_id TEXT PRIMARY KEY, {amount_columns})'
+            )
         conn.executemany('INSERT INTO events VALUES (?,?,?)', [
             ('l1', 'sent', 0), ('l1', 'sale', 100), ('l1', 'refund', 20)])
         conn.execute(
-            "INSERT INTO payment_receipts VALUES ('payr_1',50000,2500,47500)")
+            "INSERT INTO payment_receipts VALUES ('legacy_pay',50000,2500,47500)")
         conn.execute(
             "INSERT INTO recurring_payment_receipts "
-            "VALUES ('recurpay_1',15000,500,14500)")
-        conn.execute(
-            "INSERT INTO recurring_payout_availability_receipts "
-            "VALUES ('recuravail_1',14500)")
-        conn.execute(
-            "INSERT INTO recurring_bank_receipts "
-            "VALUES ('recurbank_1',14500)")
-        conn.execute(
-            "INSERT INTO payout_availability_receipts "
-            "VALUES ('avail_1',47500)")
-        conn.execute(
-            "INSERT INTO bank_receipts VALUES ('bank_1',47500)")
+            "VALUES ('legacy_recurring',15000,500,14500)")
+        for table, receipt_id, amount in (
+            ('recurring_payout_availability_receipts', 'legacy_recuravail', 14500),
+            ('recurring_bank_receipts', 'legacy_recurbank', 14500),
+            ('payout_availability_receipts', 'legacy_avail', 47500),
+            ('bank_receipts', 'legacy_bank', 47500),
+        ):
+            conn.execute(f'INSERT INTO {table} VALUES (?,?)', (receipt_id, amount))
         conn.commit()
+
         metrics = mission_control.snapshot(conn)
         conn.close()
-        self.assertEqual(metrics['sales'], 2)
+
         self.assertEqual(metrics['claimed_sale_events'], 1)
         self.assertEqual(metrics['claimed_sale_value'], 100)
         self.assertEqual(metrics['claimed_refund_value'], 20)
-        self.assertEqual(metrics['verified_collected_payments'], 2)
-        self.assertEqual(metrics['verified_one_time_payment_receipts'], 1)
-        self.assertEqual(metrics['verified_recurring_payment_receipts'], 1)
-        self.assertEqual(metrics['verified_recurring_gross_revenue'], 150)
-        self.assertEqual(metrics['verified_recurring_fees'], 5)
-        self.assertEqual(metrics['verified_recurring_net_revenue'], 145)
-        self.assertEqual(
-            metrics['verified_recurring_withdrawable_balance'], 145)
-        self.assertEqual(metrics['verified_recurring_money_received'], 145)
-        self.assertEqual(
-            metrics['verified_one_time_withdrawable_balance'], 475)
-        self.assertEqual(metrics['verified_one_time_money_received'], 475)
-        self.assertEqual(metrics['verified_withdrawable_balance'], 620)
-        self.assertEqual(metrics['verified_money_received'], 620)
-        self.assertEqual(metrics['verified_opportunity_gross_revenue'], 650)
-        self.assertEqual(metrics['verified_opportunity_fees'], 30)
-        self.assertEqual(metrics['verified_opportunity_net_revenue'], 620)
-        self.assertEqual(metrics['verified_gross_revenue'], 650)
-        self.assertEqual(metrics['verified_net_revenue'], 620)
-        self.assertEqual(mission_control.objective_score(metrics), 720)
+        self.assertEqual(metrics['verified_collected_payments'], 0)
+        self.assertEqual(metrics['verified_one_time_payment_receipts'], 0)
+        self.assertEqual(metrics['verified_recurring_payment_receipts'], 0)
+        self.assertEqual(metrics['verified_recurring_net_revenue'], 0)
+        self.assertEqual(metrics['verified_withdrawable_balance'], 0)
+        self.assertEqual(metrics['verified_money_received'], 0)
+        self.assertEqual(metrics['verified_gross_revenue'], 0)
+        self.assertEqual(metrics['verified_net_revenue'], 0)
+        self.assertEqual(mission_control.objective_score(metrics), 0)
 
     def test_missing_payment_table_remains_backward_compatible(self):
         conn = sqlite3.connect(self.path)
