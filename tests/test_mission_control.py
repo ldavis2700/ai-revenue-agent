@@ -426,6 +426,45 @@ class MissionControlTests(unittest.TestCase):
         self.assertTrue(mission_control._buyer_stage_artifact_exists(
             conn, contract['opportunity_id'], 'contracted',
             'contract:' + contract_id))
+        response_id = conn.execute(
+            'SELECT response_receipt_id FROM contract_receipts '
+            'WHERE receipt_id=?',
+            (contract_id,),
+        ).fetchone()[0]
+        mismatched = {
+            'opportunity_id': contract['opportunity_id'],
+            'response_receipt_id': response_id,
+            'proposal_id': 'prop_not_submitted',
+            'provider': 'authorized_marketplace',
+            'external_contract_id': 'contract_proposal_mismatch',
+            'contract_url': 'https://example.com/contract/mismatch',
+            'amount_cents': 250000,
+            'currency': 'USD',
+            'contracted_at': '2026-10-12T00:00:00+00:00',
+            'terms_authority': 'authorized_marketplace',
+            'authority_evidence_url': 'https://example.com/authority',
+            'recurring_terms_binding': None,
+            'outcome_terms_binding': None,
+        }
+        mismatch_hash = hashlib.sha256(json.dumps(
+            mismatched, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        mismatch_id = 'contr_' + mismatch_hash[:24]
+        conn.execute(
+            'INSERT INTO contract_receipts VALUES '
+            '(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (mismatch_id, mismatched['opportunity_id'],
+             mismatched['response_receipt_id'],
+             mismatched['proposal_id'], mismatched['provider'],
+             mismatched['external_contract_id'],
+             mismatched['contract_url'], mismatched['amount_cents'],
+             mismatched['currency'], mismatched['contracted_at'],
+             mismatched['terms_authority'],
+             mismatched['authority_evidence_url'], mismatch_hash),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, contract['opportunity_id'], 'contracted',
+            'contract:' + mismatch_id))
         self.assertFalse(mission_control._buyer_stage_artifact_exists(
             conn, contract['opportunity_id'], 'contracted',
             'invoice:' + contract_id))
