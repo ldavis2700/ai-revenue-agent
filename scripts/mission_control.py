@@ -15,6 +15,7 @@ if SCRIPT_DIR not in sys.path:
 from business_model_intelligence import load_catalog, pursuit_plan, rank_models
 from portfolio_competition import compare_candidates
 from opportunity_intake import (
+    PIPELINE_EVIDENCE_PREFIXES,
     _verified_realized_economics,
     _verified_recurring_growth_evidence,
     _verified_reusable_ip_maturity,
@@ -185,22 +186,73 @@ BUYER_STAGE_PRIORITY = {
 }
 
 
+def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
+    """Require the stage-specific ledger artifact referenced by a transition."""
+    try:
+        if stage in {'response_received', 'buyer_reply', 'interview', 'offer'}:
+            receipt_id = evidence_id.split(':', 1)[1]
+            query = ('SELECT 1 FROM response_receipts '
+                     'WHERE receipt_id=? AND opportunity_id=?')
+            params = (receipt_id, opportunity_id)
+        elif stage == 'contracted':
+            receipt_id = evidence_id.split(':', 1)[1]
+            query = ('SELECT 1 FROM contract_receipts '
+                     'WHERE receipt_id=? AND opportunity_id=?')
+            params = (receipt_id, opportunity_id)
+        elif stage == 'executing':
+            parts = evidence_id.split(':')
+            if len(parts) != 4 or parts[2] != 'plan':
+                return False
+            query = ('SELECT 1 FROM execution_plans WHERE plan_id=? '
+                     'AND contract_receipt_id=? AND opportunity_id=?')
+            params = (parts[3], parts[1], opportunity_id)
+        else:
+            table, id_column = {
+                'qa_passed': ('qa_reports', 'report_id'),
+                'delivered': ('delivery_receipts', 'receipt_id'),
+                'invoiced': ('invoice_receipts', 'receipt_id'),
+            }[stage]
+            receipt_id = evidence_id.split(':', 1)[1]
+            query = (
+                f'SELECT 1 FROM {table} WHERE {id_column}=? AND opportunity_id=?'
+            )
+            params = (receipt_id, opportunity_id)
+        return conn.execute(query, params).fetchone() is not None
+    except (IndexError, KeyError, sqlite3.OperationalError):
+        return False
+
+
 def active_buyer_pipeline(conn):
-    """Summarize evidence-gated buyer/contract work before prospecting."""
+    """Summarize only receipt-backed, integrity-checked active buyer work."""
+    counts = {stage: 0 for stage in ACTIVE_BUYER_STAGES}
     try:
         rows = conn.execute(
-            "SELECT pipeline_state, COUNT(*) FROM opportunities "
-            "WHERE pipeline_state IN ("
+            "SELECT o.id,o.pipeline_state,t.evidence_id,t.evidence_hash "
+            "FROM opportunities o JOIN opportunity_transitions t "
+            "ON t.opportunity_id=o.id AND t.to_state=o.pipeline_state "
+            "WHERE o.pipeline_state IN ("
             + ",".join("?" for _ in ACTIVE_BUYER_STAGES)
-            + ") GROUP BY pipeline_state",
+            + ")",
             ACTIVE_BUYER_STAGES,
         ).fetchall()
     except sqlite3.OperationalError:
         rows = []
-    counts = {stage: 0 for stage in ACTIVE_BUYER_STAGES}
-    for stage, count in rows:
-        if stage in counts:
-            counts[stage] = int(count or 0)
+    seen = set()
+    for opportunity_id, stage, evidence_id, evidence_hash in rows:
+        key = (opportunity_id, stage)
+        prefixes = PIPELINE_EVIDENCE_PREFIXES.get(stage, ())
+        if (
+            key in seen
+            or not isinstance(evidence_id, str)
+            or not evidence_id.startswith(prefixes)
+            or hashlib.sha256(evidence_id.encode()).hexdigest() != evidence_hash
+            or not _buyer_stage_artifact_exists(
+                conn, opportunity_id, stage, evidence_id
+            )
+        ):
+            continue
+        seen.add(key)
+        counts[stage] += 1
     highest = max(
         (stage for stage, count in counts.items() if count),
         key=lambda stage: BUYER_STAGE_PRIORITY[stage],
@@ -211,7 +263,6 @@ def active_buyer_pipeline(conn):
         'highest_stage': highest,
         'stage_counts': counts,
     }
-
 
 def snapshot(conn):
     sent = scalar(conn, "SELECT COUNT(*) FROM events WHERE event_type='sent'")
