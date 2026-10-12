@@ -187,40 +187,111 @@ BUYER_STAGE_PRIORITY = {
 
 
 def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
-    """Require the stage-specific ledger artifact referenced by a transition."""
+    """Rebuild or identity-check the stage-specific immutable ledger artifact."""
     try:
         if stage in {'response_received', 'buyer_reply', 'interview', 'offer'}:
             receipt_id = evidence_id.split(':', 1)[1]
-            query = ('SELECT 1 FROM response_receipts '
-                     'WHERE receipt_id=? AND opportunity_id=?')
-            params = (receipt_id, opportunity_id)
-        elif stage == 'contracted':
+            row = conn.execute(
+                '''SELECT submission_receipt_id,provider,external_message_id,
+                          message_url,received_at,receipt_hash
+                   FROM response_receipts
+                   WHERE receipt_id=? AND opportunity_id=?''',
+                (receipt_id, opportunity_id),
+            ).fetchone()
+            if row is None:
+                return False
+            snapshot = {
+                'opportunity_id': opportunity_id,
+                'submission_receipt_id': row[0],
+                'provider': row[1],
+                'external_message_id': row[2],
+                'message_url': row[3],
+                'received_at': row[4],
+                'stage': stage,
+            }
+            expected = hashlib.sha256(json.dumps(
+                snapshot, sort_keys=True, separators=(',', ':')
+            ).encode()).hexdigest()
+            return row[5] == expected and receipt_id == 'respr_' + expected[:24]
+        if stage == 'contracted':
             receipt_id = evidence_id.split(':', 1)[1]
-            query = ('SELECT 1 FROM contract_receipts '
-                     'WHERE receipt_id=? AND opportunity_id=?')
-            params = (receipt_id, opportunity_id)
-        elif stage == 'executing':
+            row = conn.execute(
+                'SELECT receipt_hash FROM contract_receipts '
+                'WHERE receipt_id=? AND opportunity_id=?',
+                (receipt_id, opportunity_id),
+            ).fetchone()
+            return bool(
+                row and receipt_id == 'contr_' + str(row[0])[:24]
+            )
+        if stage == 'executing':
             parts = evidence_id.split(':')
             if len(parts) != 4 or parts[2] != 'plan':
                 return False
-            query = ('SELECT 1 FROM execution_plans WHERE plan_id=? '
-                     'AND contract_receipt_id=? AND opportunity_id=?')
-            params = (parts[3], parts[1], opportunity_id)
-        else:
-            table, id_column = {
-                'qa_passed': ('qa_reports', 'report_id'),
-                'delivered': ('delivery_receipts', 'receipt_id'),
-                'invoiced': ('invoice_receipts', 'receipt_id'),
-            }[stage]
-            receipt_id = evidence_id.split(':', 1)[1]
-            query = (
-                f'SELECT 1 FROM {table} WHERE {id_column}=? AND opportunity_id=?'
+            row = conn.execute(
+                '''SELECT plan_hash,plan_json FROM execution_plans
+                   WHERE plan_id=? AND contract_receipt_id=?
+                         AND opportunity_id=?''',
+                (parts[3], parts[1], opportunity_id),
+            ).fetchone()
+            if row is None:
+                return False
+            expected = hashlib.sha256(row[1].encode()).hexdigest()
+            return (
+                row[0] == expected
+                and parts[3] == 'execp_' + expected[:24]
             )
-            params = (receipt_id, opportunity_id)
-        return conn.execute(query, params).fetchone() is not None
-    except (IndexError, KeyError, sqlite3.OperationalError):
+        receipt_id = evidence_id.split(':', 1)[1]
+        if stage == 'qa_passed':
+            row = conn.execute(
+                '''SELECT report_hash,report_json FROM qa_reports
+                   WHERE report_id=? AND opportunity_id=?''',
+                (receipt_id, opportunity_id),
+            ).fetchone()
+            if row is None:
+                return False
+            expected = hashlib.sha256(row[1].encode()).hexdigest()
+            return (
+                row[0] == expected
+                and receipt_id == 'qar_' + expected[:24]
+            )
+        if stage == 'delivered':
+            row = conn.execute(
+                '''SELECT qa_report_id,provider,external_delivery_id,
+                          delivery_url,artifact_sha256,delivered_at,receipt_hash
+                   FROM delivery_receipts
+                   WHERE receipt_id=? AND opportunity_id=?''',
+                (receipt_id, opportunity_id),
+            ).fetchone()
+            if row is None:
+                return False
+            snapshot = {
+                'opportunity_id': opportunity_id,
+                'qa_report_id': row[0],
+                'provider': row[1],
+                'external_delivery_id': row[2],
+                'delivery_url': row[3],
+                'artifact_sha256': row[4],
+                'delivered_at': row[5],
+            }
+            expected = hashlib.sha256(json.dumps(
+                snapshot, sort_keys=True, separators=(',', ':')
+            ).encode()).hexdigest()
+            return row[6] == expected and receipt_id == 'delr_' + expected[:24]
+        if stage == 'invoiced':
+            row = conn.execute(
+                'SELECT receipt_hash FROM invoice_receipts '
+                'WHERE receipt_id=? AND opportunity_id=?',
+                (receipt_id, opportunity_id),
+            ).fetchone()
+            return bool(
+                row and receipt_id == 'invr_' + str(row[0])[:24]
+            )
         return False
-
+    except (
+        AttributeError, IndexError, KeyError, TypeError, ValueError,
+        sqlite3.OperationalError,
+    ):
+        return False
 
 def active_buyer_pipeline(conn):
     """Summarize only receipt-backed, integrity-checked active buyer work."""
