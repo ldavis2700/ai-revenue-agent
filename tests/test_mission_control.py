@@ -303,6 +303,9 @@ class MissionControlTests(unittest.TestCase):
         self.assertTrue(mission_control._buyer_stage_artifact_exists(
             conn, contract['opportunity_id'], 'contracted',
             'contract:' + contract_id))
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, contract['opportunity_id'], 'contracted',
+            'invoice:' + contract_id))
         conn.execute(
             'UPDATE contract_receipts SET contract_url=? WHERE receipt_id=?',
             ('https://example.com/tampered', contract_id),
@@ -349,6 +352,9 @@ class MissionControlTests(unittest.TestCase):
         self.assertTrue(mission_control._buyer_stage_artifact_exists(
             conn, invoice['opportunity_id'], 'invoiced',
             'invoice:' + invoice_id))
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, invoice['opportunity_id'], 'invoiced',
+            'contract:' + invoice_id))
         conn.execute(
             'UPDATE invoice_receipts SET amount_cents=? WHERE receipt_id=?',
             (99999999, invoice_id),
