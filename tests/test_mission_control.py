@@ -212,6 +212,10 @@ class MissionControlTests(unittest.TestCase):
         conn.execute('''CREATE TABLE opportunity_transitions (
             opportunity_id TEXT, to_state TEXT, evidence_id TEXT,
             evidence_hash TEXT)''')
+        conn.execute('''CREATE TABLE submission_receipts (
+            receipt_id TEXT, opportunity_id TEXT, proposal_id TEXT,
+            provider TEXT, external_submission_id TEXT,
+            submission_url TEXT, submitted_at TEXT, receipt_hash TEXT)''')
         conn.execute('''CREATE TABLE response_receipts (
             receipt_id TEXT, opportunity_id TEXT,
             submission_receipt_id TEXT, provider TEXT,
@@ -227,9 +231,30 @@ class MissionControlTests(unittest.TestCase):
             ('reply', 'buyer_reply', 'reply:'),
             ('offer', 'offer', 'offer:'),
         ):
+            submission = {
+                'opportunity_id': opportunity_id,
+                'proposal_id': 'prop_' + opportunity_id,
+                'provider': 'authorized_marketplace',
+                'external_submission_id': 'submission_' + opportunity_id,
+                'submission_url': 'https://example.com/submission/' + opportunity_id,
+                'submitted_at': '2026-10-11T23:00:00+00:00',
+            }
+            submission_json = json.dumps(
+                submission, sort_keys=True, separators=(',', ':'))
+            submission_hash = hashlib.sha256(
+                submission_json.encode()).hexdigest()
+            submission_id = 'subr_' + submission_hash[:24]
+            conn.execute(
+                'INSERT INTO submission_receipts VALUES (?,?,?,?,?,?,?,?)',
+                (submission_id, opportunity_id, submission['proposal_id'],
+                 submission['provider'],
+                 submission['external_submission_id'],
+                 submission['submission_url'], submission['submitted_at'],
+                 submission_hash),
+            )
             snapshot = {
                 'opportunity_id': opportunity_id,
-                'submission_receipt_id': 'subr_' + opportunity_id,
+                'submission_receipt_id': submission_id,
                 'provider': 'authorized_marketplace',
                 'external_message_id': 'message_' + opportunity_id,
                 'message_url': 'https://example.com/' + opportunity_id,
@@ -293,10 +318,19 @@ class MissionControlTests(unittest.TestCase):
         conn.commit()
 
         metrics = mission_control.snapshot(conn)
+        conn.execute(
+            'UPDATE submission_receipts SET submission_url=? '
+            'WHERE opportunity_id=?',
+            ('https://example.com/tampered', 'offer'),
+        )
+        tampered_metrics = mission_control.snapshot(conn)
         conn.close()
         plan = mission_control.build_plan(metrics)
 
         self.assertEqual(metrics['active_buyer_opportunities'], 2)
+        self.assertEqual(tampered_metrics['active_buyer_opportunities'], 1)
+        self.assertEqual(
+            tampered_metrics['highest_active_buyer_stage'], 'buyer_reply')
         self.assertEqual(metrics['highest_active_buyer_stage'], 'offer')
         self.assertEqual(metrics['active_buyer_stage_counts']['buyer_reply'], 1)
         self.assertEqual(metrics['active_buyer_stage_counts']['offer'], 1)
