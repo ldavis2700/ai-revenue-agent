@@ -314,6 +314,33 @@ class MissionControlTests(unittest.TestCase):
             conn, contract['opportunity_id'], 'contracted',
             'contract:' + contract_id))
 
+        conn.execute('''CREATE TABLE delivery_receipts (
+            receipt_id TEXT, opportunity_id TEXT, qa_report_id TEXT,
+            provider TEXT, external_delivery_id TEXT, delivery_url TEXT,
+            artifact_sha256 TEXT, delivered_at TEXT, receipt_hash TEXT)''')
+        delivery = {
+            'opportunity_id': 'invoice_opportunity',
+            'qa_report_id': 'qar_cccccccccccccccccccccccc',
+            'provider': 'authorized_marketplace',
+            'external_delivery_id': 'delivery_external',
+            'delivery_url': 'https://example.com/delivery',
+            'artifact_sha256': 'd' * 64,
+            'delivered_at': '2026-10-12T00:30:00+00:00',
+        }
+        delivery_serialized = json.dumps(
+            delivery, sort_keys=True, separators=(',', ':'))
+        delivery_hash = hashlib.sha256(
+            delivery_serialized.encode()).hexdigest()
+        delivery_id = 'delr_' + delivery_hash[:24]
+        conn.execute(
+            'INSERT INTO delivery_receipts VALUES (?,?,?,?,?,?,?,?,?)',
+            (delivery_id, delivery['opportunity_id'],
+             delivery['qa_report_id'], delivery['provider'],
+             delivery['external_delivery_id'], delivery['delivery_url'],
+             delivery['artifact_sha256'], delivery['delivered_at'],
+             delivery_hash),
+        )
+
         conn.execute('''CREATE TABLE invoice_receipts (
             receipt_id TEXT, opportunity_id TEXT, delivery_receipt_id TEXT,
             provider TEXT, external_invoice_id TEXT, invoice_url TEXT,
@@ -326,7 +353,7 @@ class MissionControlTests(unittest.TestCase):
             event_id TEXT, event_hash TEXT)''')
         invoice = {
             'opportunity_id': 'invoice_opportunity',
-            'delivery_receipt_id': 'delr_bbbbbbbbbbbbbbbbbbbbbbbb',
+            'delivery_receipt_id': delivery_id,
             'provider': 'authorized_marketplace',
             'external_invoice_id': 'invoice_external',
             'invoice_url': 'https://example.com/invoice',
@@ -378,6 +405,17 @@ class MissionControlTests(unittest.TestCase):
         self.assertFalse(mission_control._buyer_stage_artifact_exists(
             conn, invoice['opportunity_id'], 'invoiced',
             'contract:' + invoice_id))
+        conn.execute(
+            'UPDATE delivery_receipts SET delivery_url=? WHERE receipt_id=?',
+            ('https://example.com/delivery/substituted', delivery_id),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, invoice['opportunity_id'], 'invoiced',
+            'invoice:' + invoice_id))
+        conn.execute(
+            'UPDATE delivery_receipts SET delivery_url=? WHERE receipt_id=?',
+            (delivery['delivery_url'], delivery_id),
+        )
         conn.execute(
             'UPDATE invoice_receipts SET amount_cents=? WHERE receipt_id=?',
             (99999999, invoice_id),
