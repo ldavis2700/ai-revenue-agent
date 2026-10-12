@@ -186,6 +186,39 @@ BUYER_STAGE_PRIORITY = {
 }
 
 
+
+def _contract_terms_binding(
+        conn, table, contract_receipt_id, opportunity_id,
+        amount_column, amount_key):
+    """Return a verified optional pricing binding used by a contract seal."""
+    row = conn.execute(
+        f"""SELECT term_id,accepted_terms_hash,{amount_column},
+                   acceptance_evidence_url,accepted_at,binding_hash
+            FROM {table}
+            WHERE contract_receipt_id=? AND opportunity_id=?""",
+        (contract_receipt_id, opportunity_id),
+    ).fetchone()
+    if row is None:
+        return None
+    binding = {
+        'term_id': row[0],
+        'accepted_terms_hash': row[1],
+        amount_key: row[2],
+        'acceptance_evidence_url': row[3],
+        'accepted_at': row[4],
+    }
+    binding_seal = {
+        'contract_receipt_id': contract_receipt_id,
+        'opportunity_id': opportunity_id,
+        **binding,
+    }
+    expected = hashlib.sha256(json.dumps(
+        binding_seal, sort_keys=True, separators=(',', ':')
+    ).encode()).hexdigest()
+    if row[5] != expected:
+        return False
+    return binding
+
 def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
     """Rebuild or identity-check the stage-specific immutable ledger artifact."""
     try:
@@ -216,13 +249,43 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
         if stage == 'contracted':
             receipt_id = evidence_id.split(':', 1)[1]
             row = conn.execute(
-                'SELECT receipt_hash FROM contract_receipts '
-                'WHERE receipt_id=? AND opportunity_id=?',
+                '''SELECT response_receipt_id,proposal_id,provider,
+                          external_contract_id,contract_url,amount_cents,
+                          currency,contracted_at,terms_authority,
+                          authority_evidence_url,receipt_hash
+                   FROM contract_receipts
+                   WHERE receipt_id=? AND opportunity_id=?''',
                 (receipt_id, opportunity_id),
             ).fetchone()
-            return bool(
-                row and receipt_id == 'contr_' + str(row[0])[:24]
-            )
+            if row is None:
+                return False
+            recurring = _contract_terms_binding(
+                conn, 'contract_recurring_terms', receipt_id, opportunity_id,
+                'accepted_base_fee_cents', 'accepted_base_fee_cents')
+            outcome = _contract_terms_binding(
+                conn, 'contract_outcome_terms', receipt_id, opportunity_id,
+                'accepted_fee_cap_cents', 'accepted_fee_cap_cents')
+            if recurring is False or outcome is False:
+                return False
+            snapshot = {
+                'opportunity_id': opportunity_id,
+                'response_receipt_id': row[0],
+                'proposal_id': row[1],
+                'provider': row[2],
+                'external_contract_id': row[3],
+                'contract_url': row[4],
+                'amount_cents': row[5],
+                'currency': row[6],
+                'contracted_at': row[7],
+                'terms_authority': row[8],
+                'authority_evidence_url': row[9],
+                'recurring_terms_binding': recurring,
+                'outcome_terms_binding': outcome,
+            }
+            expected = hashlib.sha256(json.dumps(
+                snapshot, sort_keys=True, separators=(',', ':')
+            ).encode()).hexdigest()
+            return row[10] == expected and receipt_id == 'contr_' + expected[:24]
         if stage == 'executing':
             parts = evidence_id.split(':')
             if len(parts) != 4 or parts[2] != 'plan':
@@ -279,13 +342,45 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
             return row[6] == expected and receipt_id == 'delr_' + expected[:24]
         if stage == 'invoiced':
             row = conn.execute(
-                'SELECT receipt_hash FROM invoice_receipts '
-                'WHERE receipt_id=? AND opportunity_id=?',
+                '''SELECT delivery_receipt_id,provider,external_invoice_id,
+                          invoice_url,amount_cents,currency,issued_at,due_at,
+                          receipt_hash
+                   FROM invoice_receipts
+                   WHERE receipt_id=? AND opportunity_id=?''',
                 (receipt_id, opportunity_id),
             ).fetchone()
-            return bool(
-                row and receipt_id == 'invr_' + str(row[0])[:24]
-            )
+            if row is None:
+                return False
+            outcomes = conn.execute(
+                '''SELECT ioe.event_id,ioe.outcome_fee_cents,aoe.event_hash
+                   FROM invoice_outcome_events ioe
+                   JOIN attributed_outcome_events aoe
+                     ON aoe.event_id=ioe.event_id
+                   WHERE ioe.invoice_receipt_id=?
+                   ORDER BY ioe.event_id''',
+                (receipt_id,),
+            ).fetchall()
+            snapshot = {
+                'opportunity_id': opportunity_id,
+                'delivery_receipt_id': row[0],
+                'provider': row[1],
+                'external_invoice_id': row[2],
+                'invoice_url': row[3],
+                'amount_cents': row[4],
+                'outcome_fee_cents': sum(item[1] for item in outcomes),
+                'outcome_event_ids': [item[0] for item in outcomes],
+                'outcome_event_hashes': [
+                    {'event_id': item[0], 'event_hash': item[2]}
+                    for item in outcomes
+                ],
+                'currency': row[5],
+                'issued_at': row[6],
+                'due_at': row[7],
+            }
+            expected = hashlib.sha256(json.dumps(
+                snapshot, sort_keys=True, separators=(',', ':')
+            ).encode()).hexdigest()
+            return row[8] == expected and receipt_id == 'invr_' + expected[:24]
         return False
     except (
         AttributeError, IndexError, KeyError, TypeError, ValueError,
