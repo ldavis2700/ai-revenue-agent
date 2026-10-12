@@ -575,6 +575,16 @@ class MissionControlTests(unittest.TestCase):
         self.assertTrue(mission_control._buyer_stage_artifact_exists(
             conn, 'work', 'executing', evidence_id))
         conn.execute(
+            'UPDATE contract_receipts SET contract_url=? WHERE receipt_id=?',
+            ('https://example.com/tampered', contract_id),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, 'work', 'executing', evidence_id))
+        conn.execute(
+            'UPDATE contract_receipts SET contract_url=? WHERE receipt_id=?',
+            ('https://example.com/contract/work', contract_id),
+        )
+        conn.execute(
             'UPDATE execution_plans SET started_at=? WHERE plan_id=?',
             ('2026-10-12T00:01:00+00:00', plan_id),
         )
