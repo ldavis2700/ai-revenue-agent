@@ -221,6 +221,21 @@ def _contract_terms_binding(
 
 def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
     """Rebuild or identity-check the stage-specific immutable ledger artifact."""
+    evidence_prefixes = {
+        'response_received': 'reply:',
+        'buyer_reply': 'reply:',
+        'interview': 'interview:',
+        'offer': 'offer:',
+        'contracted': 'contract:',
+        'executing': 'contract:',
+        'qa_passed': 'qa:',
+        'delivered': 'delivery:',
+        'invoiced': 'invoice:',
+    }
+    expected_prefix = evidence_prefixes.get(stage)
+    if (not isinstance(evidence_id, str) or expected_prefix is None
+            or not evidence_id.startswith(expected_prefix)):
+        return False
     try:
         if stage in {'response_received', 'buyer_reply', 'interview', 'offer'}:
             receipt_id = evidence_id.split(':', 1)[1]
