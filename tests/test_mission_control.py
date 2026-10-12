@@ -158,10 +158,39 @@ class MissionControlTests(unittest.TestCase):
 
     def test_active_buyer_stage_outranks_new_prospecting(self):
         conn = sqlite3.connect(self.path)
-        conn.execute('CREATE TABLE opportunities (pipeline_state TEXT)')
+        conn.execute(
+            'CREATE TABLE opportunities (id TEXT, pipeline_state TEXT)')
+        conn.execute('''CREATE TABLE opportunity_transitions (
+            opportunity_id TEXT, to_state TEXT, evidence_id TEXT,
+            evidence_hash TEXT)''')
+        conn.execute('''CREATE TABLE response_receipts (
+            receipt_id TEXT, opportunity_id TEXT)''')
         conn.executemany(
-            'INSERT INTO opportunities VALUES (?)',
-            [('qualified',), ('buyer_reply',), ('offer',)],
+            'INSERT INTO opportunities VALUES (?,?)',
+            [('prospect', 'qualified'), ('reply', 'buyer_reply'),
+             ('offer', 'offer'), ('forged', 'contracted')],
+        )
+        for opportunity_id, stage, prefix, receipt_id in (
+            ('reply', 'buyer_reply', 'reply:', 'respr_reply'),
+            ('offer', 'offer', 'offer:', 'respr_offer'),
+        ):
+            evidence_id = prefix + receipt_id
+            conn.execute(
+                'INSERT INTO opportunity_transitions VALUES (?,?,?,?)',
+                (opportunity_id, stage, evidence_id,
+                 hashlib.sha256(evidence_id.encode()).hexdigest()),
+            )
+            conn.execute(
+                'INSERT INTO response_receipts VALUES (?,?)',
+                (receipt_id, opportunity_id),
+            )
+        # A raw state write plus a self-consistent transition hash is still not
+        # buyer evidence when its referenced contract receipt does not exist.
+        forged_evidence = 'contract:contr_missing'
+        conn.execute(
+            'INSERT INTO opportunity_transitions VALUES (?,?,?,?)',
+            ('forged', 'contracted', forged_evidence,
+             hashlib.sha256(forged_evidence.encode()).hexdigest()),
         )
         conn.execute("INSERT INTO leads VALUES ('l1', 90, 1)")
         conn.commit()
@@ -174,6 +203,7 @@ class MissionControlTests(unittest.TestCase):
         self.assertEqual(metrics['highest_active_buyer_stage'], 'offer')
         self.assertEqual(metrics['active_buyer_stage_counts']['buyer_reply'], 1)
         self.assertEqual(metrics['active_buyer_stage_counts']['offer'], 1)
+        self.assertEqual(metrics['active_buyer_stage_counts']['contracted'], 0)
         self.assertEqual(plan[0]['action'], 'advance_active_buyer_offer')
         self.assertEqual(plan[0]['buyer_stage'], 'offer')
         self.assertNotEqual(plan[0]['action'], 'prepare_initial_outreach_batch')
