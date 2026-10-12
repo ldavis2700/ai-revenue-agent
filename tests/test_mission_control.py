@@ -256,6 +256,108 @@ class MissionControlTests(unittest.TestCase):
         self.assertEqual(plan[0]['buyer_stage'], 'offer')
         self.assertNotEqual(plan[0]['action'], 'prepare_initial_outreach_batch')
 
+    def test_active_contract_and_invoice_require_full_receipt_integrity(self):
+        conn = sqlite3.connect(':memory:')
+        conn.execute('''CREATE TABLE contract_receipts (
+            receipt_id TEXT, opportunity_id TEXT, response_receipt_id TEXT,
+            proposal_id TEXT, provider TEXT, external_contract_id TEXT,
+            contract_url TEXT, amount_cents INTEGER, currency TEXT,
+            contracted_at TEXT, terms_authority TEXT,
+            authority_evidence_url TEXT, receipt_hash TEXT)''')
+        for table, amount_column in (
+                ('contract_recurring_terms', 'accepted_base_fee_cents'),
+                ('contract_outcome_terms', 'accepted_fee_cap_cents')):
+            conn.execute(f'''CREATE TABLE {table} (
+                contract_receipt_id TEXT, opportunity_id TEXT, term_id TEXT,
+                accepted_terms_hash TEXT, {amount_column} INTEGER,
+                acceptance_evidence_url TEXT, accepted_at TEXT,
+                binding_hash TEXT)''')
+        contract = {
+            'opportunity_id': 'contract_opportunity',
+            'response_receipt_id': 'respr_valid',
+            'proposal_id': 'prop_valid',
+            'provider': 'authorized_marketplace',
+            'external_contract_id': 'contract_external',
+            'contract_url': 'https://example.com/contract',
+            'amount_cents': 250000,
+            'currency': 'USD',
+            'contracted_at': '2026-10-12T00:00:00+00:00',
+            'terms_authority': 'authorized_marketplace',
+            'authority_evidence_url': 'https://example.com/authority',
+            'recurring_terms_binding': None,
+            'outcome_terms_binding': None,
+        }
+        serialized = json.dumps(contract, sort_keys=True, separators=(',', ':'))
+        contract_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        contract_id = 'contr_' + contract_hash[:24]
+        conn.execute(
+            'INSERT INTO contract_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (contract_id, contract['opportunity_id'],
+             contract['response_receipt_id'], contract['proposal_id'],
+             contract['provider'], contract['external_contract_id'],
+             contract['contract_url'], contract['amount_cents'],
+             contract['currency'], contract['contracted_at'],
+             contract['terms_authority'], contract['authority_evidence_url'],
+             contract_hash),
+        )
+        self.assertTrue(mission_control._buyer_stage_artifact_exists(
+            conn, contract['opportunity_id'], 'contracted',
+            'contract:' + contract_id))
+        conn.execute(
+            'UPDATE contract_receipts SET contract_url=? WHERE receipt_id=?',
+            ('https://example.com/tampered', contract_id),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, contract['opportunity_id'], 'contracted',
+            'contract:' + contract_id))
+
+        conn.execute('''CREATE TABLE invoice_receipts (
+            receipt_id TEXT, opportunity_id TEXT, delivery_receipt_id TEXT,
+            provider TEXT, external_invoice_id TEXT, invoice_url TEXT,
+            amount_cents INTEGER, currency TEXT, issued_at TEXT, due_at TEXT,
+            receipt_hash TEXT)''')
+        conn.execute('''CREATE TABLE invoice_outcome_events (
+            invoice_receipt_id TEXT, event_id TEXT,
+            outcome_fee_cents INTEGER)''')
+        conn.execute('''CREATE TABLE attributed_outcome_events (
+            event_id TEXT, event_hash TEXT)''')
+        invoice = {
+            'opportunity_id': 'invoice_opportunity',
+            'delivery_receipt_id': 'delr_valid',
+            'provider': 'authorized_marketplace',
+            'external_invoice_id': 'invoice_external',
+            'invoice_url': 'https://example.com/invoice',
+            'amount_cents': 250000,
+            'outcome_fee_cents': 0,
+            'outcome_event_ids': [],
+            'outcome_event_hashes': [],
+            'currency': 'USD',
+            'issued_at': '2026-10-12T01:00:00+00:00',
+            'due_at': '2026-10-26T01:00:00+00:00',
+        }
+        serialized = json.dumps(invoice, sort_keys=True, separators=(',', ':'))
+        invoice_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        invoice_id = 'invr_' + invoice_hash[:24]
+        conn.execute(
+            'INSERT INTO invoice_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            (invoice_id, invoice['opportunity_id'],
+             invoice['delivery_receipt_id'], invoice['provider'],
+             invoice['external_invoice_id'], invoice['invoice_url'],
+             invoice['amount_cents'], invoice['currency'],
+             invoice['issued_at'], invoice['due_at'], invoice_hash),
+        )
+        self.assertTrue(mission_control._buyer_stage_artifact_exists(
+            conn, invoice['opportunity_id'], 'invoiced',
+            'invoice:' + invoice_id))
+        conn.execute(
+            'UPDATE invoice_receipts SET amount_cents=? WHERE receipt_id=?',
+            (99999999, invoice_id),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, invoice['opportunity_id'], 'invoiced',
+            'invoice:' + invoice_id))
+        conn.close()
+
     def test_no_leads_prioritizes_approved_source(self):
         result = mission_control.run(self.path)
         self.assertEqual(result['plan'][0]['action'], 'connect_approved_lead_source')
