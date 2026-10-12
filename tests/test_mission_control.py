@@ -364,6 +364,74 @@ class MissionControlTests(unittest.TestCase):
             'invoice:' + invoice_id))
         conn.close()
 
+    def test_active_execution_and_qa_bind_columns_to_sealed_payloads(self):
+        conn = sqlite3.connect(':memory:')
+        conn.execute('''CREATE TABLE execution_plans (
+            plan_id TEXT, opportunity_id TEXT, contract_receipt_id TEXT,
+            plan_hash TEXT, plan_json TEXT, started_at TEXT)''')
+        plan = {
+            'opportunity_id': 'work',
+            'contract_receipt_id': 'contr_valid',
+            'execution_environment': 'isolated',
+            'deliverables': [{
+                'title': 'diagnostic',
+                'description': 'bounded delivery',
+                'acceptance_criteria': 'verified',
+                'due_at': '2026-10-13T00:00:00+00:00',
+            }],
+            'started_at': '2026-10-12T00:00:00+00:00',
+        }
+        plan_json = json.dumps(plan, sort_keys=True, separators=(',', ':'))
+        plan_hash = hashlib.sha256(plan_json.encode()).hexdigest()
+        plan_id = 'execp_' + plan_hash[:24]
+        conn.execute(
+            'INSERT INTO execution_plans VALUES (?,?,?,?,?,?)',
+            (plan_id, 'work', 'contr_valid', plan_hash, plan_json,
+             plan['started_at']),
+        )
+        evidence_id = 'contract:contr_valid:plan:' + plan_id
+        self.assertTrue(mission_control._buyer_stage_artifact_exists(
+            conn, 'work', 'executing', evidence_id))
+        conn.execute(
+            'UPDATE execution_plans SET started_at=? WHERE plan_id=?',
+            ('2026-10-12T00:01:00+00:00', plan_id),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, 'work', 'executing', evidence_id))
+
+        conn.execute('''CREATE TABLE qa_reports (
+            report_id TEXT, opportunity_id TEXT, execution_plan_id TEXT,
+            artifact_sha256 TEXT, report_hash TEXT, report_json TEXT,
+            completed_at TEXT)''')
+        report = {
+            'opportunity_id': 'work',
+            'execution_plan_id': plan_id,
+            'artifact_sha256': 'a' * 64,
+            'tests': [{
+                'name': 'acceptance',
+                'status': 'passed',
+                'evidence_url': 'https://example.com/evidence',
+            }],
+            'completed_at': '2026-10-12T01:00:00+00:00',
+        }
+        report_json = json.dumps(report, sort_keys=True, separators=(',', ':'))
+        report_hash = hashlib.sha256(report_json.encode()).hexdigest()
+        report_id = 'qar_' + report_hash[:24]
+        conn.execute(
+            'INSERT INTO qa_reports VALUES (?,?,?,?,?,?,?)',
+            (report_id, 'work', plan_id, report['artifact_sha256'],
+             report_hash, report_json, report['completed_at']),
+        )
+        self.assertTrue(mission_control._buyer_stage_artifact_exists(
+            conn, 'work', 'qa_passed', 'qa:' + report_id))
+        conn.execute(
+            'UPDATE qa_reports SET artifact_sha256=? WHERE report_id=?',
+            ('b' * 64, report_id),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, 'work', 'qa_passed', 'qa:' + report_id))
+        conn.close()
+
     def test_no_leads_prioritizes_approved_source(self):
         result = mission_control.run(self.path)
         self.assertEqual(result['plan'][0]['action'], 'connect_approved_lead_source')
