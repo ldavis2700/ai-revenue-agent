@@ -156,6 +156,28 @@ class MissionControlTests(unittest.TestCase):
         self.assertEqual(metrics['verified_gross_revenue'], 100)
         self.assertEqual(metrics['verified_net_revenue'], 95)
 
+    def test_active_buyer_stage_outranks_new_prospecting(self):
+        conn = sqlite3.connect(self.path)
+        conn.execute('CREATE TABLE opportunities (pipeline_state TEXT)')
+        conn.executemany(
+            'INSERT INTO opportunities VALUES (?)',
+            [('qualified',), ('buyer_reply',), ('offer',)],
+        )
+        conn.execute("INSERT INTO leads VALUES ('l1', 90, 1)")
+        conn.commit()
+
+        metrics = mission_control.snapshot(conn)
+        conn.close()
+        plan = mission_control.build_plan(metrics)
+
+        self.assertEqual(metrics['active_buyer_opportunities'], 2)
+        self.assertEqual(metrics['highest_active_buyer_stage'], 'offer')
+        self.assertEqual(metrics['active_buyer_stage_counts']['buyer_reply'], 1)
+        self.assertEqual(metrics['active_buyer_stage_counts']['offer'], 1)
+        self.assertEqual(plan[0]['action'], 'advance_active_buyer_offer')
+        self.assertEqual(plan[0]['buyer_stage'], 'offer')
+        self.assertNotEqual(plan[0]['action'], 'prepare_initial_outreach_batch')
+
     def test_no_leads_prioritizes_approved_source(self):
         result = mission_control.run(self.path)
         self.assertEqual(result['plan'][0]['action'], 'connect_approved_lead_source')
