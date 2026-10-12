@@ -495,6 +495,10 @@ class MissionControlTests(unittest.TestCase):
         )
         self.assertFalse(mission_control._buyer_stage_artifact_exists(
             conn, 'work', 'executing', evidence_id))
+        conn.execute(
+            'UPDATE execution_plans SET started_at=? WHERE plan_id=?',
+            (plan['started_at'], plan_id),
+        )
 
         conn.execute('''CREATE TABLE qa_reports (
             report_id TEXT, opportunity_id TEXT, execution_plan_id TEXT,
@@ -521,6 +525,16 @@ class MissionControlTests(unittest.TestCase):
         )
         self.assertTrue(mission_control._buyer_stage_artifact_exists(
             conn, 'work', 'qa_passed', 'qa:' + report_id))
+        conn.execute(
+            'UPDATE execution_plans SET started_at=? WHERE plan_id=?',
+            ('2026-10-12T00:02:00+00:00', plan_id),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, 'work', 'qa_passed', 'qa:' + report_id))
+        conn.execute(
+            'UPDATE execution_plans SET started_at=? WHERE plan_id=?',
+            (plan['started_at'], plan_id),
+        )
         conn.execute(
             'UPDATE qa_reports SET artifact_sha256=? WHERE report_id=?',
             ('b' * 64, report_id),
