@@ -303,7 +303,8 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
             return row[10] == expected and receipt_id == 'contr_' + expected[:24]
         if stage == 'executing':
             parts = evidence_id.split(':')
-            if len(parts) != 4 or parts[2] != 'plan':
+            if (len(parts) != 4 or parts[2] != 'plan'
+                    or not parts[1].startswith('contr_')):
                 return False
             row = conn.execute(
                 '''SELECT plan_hash,plan_json,started_at
@@ -341,6 +342,7 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
                 isinstance(payload, dict)
                 and payload.get('opportunity_id') == opportunity_id
                 and payload.get('execution_plan_id') == row[2]
+                and row[2].startswith('execp_')
                 and payload.get('artifact_sha256') == row[3]
                 and payload.get('completed_at') == row[4]
                 and row[0] == expected
@@ -368,7 +370,11 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
             expected = hashlib.sha256(json.dumps(
                 snapshot, sort_keys=True, separators=(',', ':')
             ).encode()).hexdigest()
-            return row[6] == expected and receipt_id == 'delr_' + expected[:24]
+            return (
+                row[0].startswith('qar_')
+                and row[6] == expected
+                and receipt_id == 'delr_' + expected[:24]
+            )
         if stage == 'invoiced':
             row = conn.execute(
                 '''SELECT delivery_receipt_id,provider,external_invoice_id,
@@ -409,7 +415,11 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
             expected = hashlib.sha256(json.dumps(
                 snapshot, sort_keys=True, separators=(',', ':')
             ).encode()).hexdigest()
-            return row[8] == expected and receipt_id == 'invr_' + expected[:24]
+            return (
+                row[0].startswith('delr_')
+                and row[8] == expected
+                and receipt_id == 'invr_' + expected[:24]
+            )
         return False
     except (
         AttributeError, IndexError, KeyError, TypeError, ValueError,
