@@ -314,13 +314,37 @@ class MissionControlTests(unittest.TestCase):
             conn, contract['opportunity_id'], 'contracted',
             'contract:' + contract_id))
 
+        conn.execute('''CREATE TABLE qa_reports (
+            report_id TEXT, opportunity_id TEXT, execution_plan_id TEXT,
+            artifact_sha256 TEXT, report_hash TEXT, report_json TEXT,
+            completed_at TEXT)''')
+        qa = {
+            'opportunity_id': 'invoice_opportunity',
+            'execution_plan_id': 'execp_eeeeeeeeeeeeeeeeeeeeeeee',
+            'artifact_sha256': 'd' * 64,
+            'tests': [{
+                'name': 'acceptance',
+                'status': 'passed',
+                'evidence_url': 'https://example.com/evidence',
+            }],
+            'completed_at': '2026-10-12T00:15:00+00:00',
+        }
+        qa_json = json.dumps(qa, sort_keys=True, separators=(',', ':'))
+        qa_hash = hashlib.sha256(qa_json.encode()).hexdigest()
+        qa_id = 'qar_' + qa_hash[:24]
+        conn.execute(
+            'INSERT INTO qa_reports VALUES (?,?,?,?,?,?,?)',
+            (qa_id, qa['opportunity_id'], qa['execution_plan_id'],
+             qa['artifact_sha256'], qa_hash, qa_json, qa['completed_at']),
+        )
+
         conn.execute('''CREATE TABLE delivery_receipts (
             receipt_id TEXT, opportunity_id TEXT, qa_report_id TEXT,
             provider TEXT, external_delivery_id TEXT, delivery_url TEXT,
             artifact_sha256 TEXT, delivered_at TEXT, receipt_hash TEXT)''')
         delivery = {
             'opportunity_id': 'invoice_opportunity',
-            'qa_report_id': 'qar_cccccccccccccccccccccccc',
+            'qa_report_id': qa_id,
             'provider': 'authorized_marketplace',
             'external_delivery_id': 'delivery_external',
             'delivery_url': 'https://example.com/delivery',
@@ -417,6 +441,17 @@ class MissionControlTests(unittest.TestCase):
             (delivery['delivery_url'], delivery_id),
         )
         conn.execute(
+            'UPDATE qa_reports SET artifact_sha256=? WHERE report_id=?',
+            ('f' * 64, qa_id),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, invoice['opportunity_id'], 'invoiced',
+            'invoice:' + invoice_id))
+        conn.execute(
+            'UPDATE qa_reports SET artifact_sha256=? WHERE report_id=?',
+            (qa['artifact_sha256'], qa_id),
+        )
+        conn.execute(
             'UPDATE invoice_receipts SET amount_cents=? WHERE receipt_id=?',
             (99999999, invoice_id),
         )
@@ -450,7 +485,8 @@ class MissionControlTests(unittest.TestCase):
             (plan_id, 'work', 'contr_aaaaaaaaaaaaaaaaaaaaaaaa', plan_hash, plan_json,
              plan['started_at']),
         )
-        evidence_id = 'contract:contr_valid:plan:' + plan_id
+        evidence_id = (
+            'contract:contr_aaaaaaaaaaaaaaaaaaaaaaaa:plan:' + plan_id)
         self.assertTrue(mission_control._buyer_stage_artifact_exists(
             conn, 'work', 'executing', evidence_id))
         conn.execute(
