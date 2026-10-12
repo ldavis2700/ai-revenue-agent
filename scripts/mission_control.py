@@ -286,8 +286,20 @@ def _verified_response_artifact(
     )
 
 
-def _verified_response_lineage(conn, opportunity_id, receipt_id):
+def _verified_response_lineage(
+        conn, opportunity_id, receipt_id, proposal_id):
     if not _canonical_ledger_id(receipt_id, 'respr_'):
+        return False
+    proposal = conn.execute(
+        '''SELECT sr.proposal_id
+           FROM response_receipts rr
+           JOIN submission_receipts sr
+             ON sr.receipt_id=rr.submission_receipt_id
+           WHERE rr.receipt_id=? AND rr.opportunity_id=?
+             AND sr.opportunity_id=?''',
+        (receipt_id, opportunity_id, opportunity_id),
+    ).fetchone()
+    if proposal is None or proposal[0] != proposal_id:
         return False
     stage_prefixes = (
         ('response_received', 'reply:'),
@@ -355,7 +367,7 @@ def _verified_contract_artifact(conn, opportunity_id, receipt_id):
         and row[10] == expected
         and receipt_id == 'contr_' + expected[:24]
         and _verified_response_lineage(
-            conn, opportunity_id, row[0])
+            conn, opportunity_id, row[0], row[1])
     )
 
 
