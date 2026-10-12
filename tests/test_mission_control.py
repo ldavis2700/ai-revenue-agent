@@ -352,6 +352,24 @@ class MissionControlTests(unittest.TestCase):
         self.assertTrue(mission_control._buyer_stage_artifact_exists(
             conn, invoice['opportunity_id'], 'invoiced',
             'invoice:' + invoice_id))
+
+        wrong_type = dict(invoice)
+        wrong_type['delivery_receipt_id'] = 'qar_cross_type'
+        wrong_serialized = json.dumps(
+            wrong_type, sort_keys=True, separators=(',', ':'))
+        wrong_hash = hashlib.sha256(wrong_serialized.encode()).hexdigest()
+        wrong_id = 'invr_' + wrong_hash[:24]
+        conn.execute(
+            'INSERT INTO invoice_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            (wrong_id, wrong_type['opportunity_id'],
+             wrong_type['delivery_receipt_id'], wrong_type['provider'],
+             'invoice_cross_type', wrong_type['invoice_url'],
+             wrong_type['amount_cents'], wrong_type['currency'],
+             wrong_type['issued_at'], wrong_type['due_at'], wrong_hash),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, wrong_type['opportunity_id'], 'invoiced',
+            'invoice:' + wrong_id))
         self.assertFalse(mission_control._buyer_stage_artifact_exists(
             conn, invoice['opportunity_id'], 'invoiced',
             'contract:' + invoice_id))
