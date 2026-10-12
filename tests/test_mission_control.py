@@ -22,6 +22,55 @@ class MissionControlTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    @staticmethod
+    def create_contract_tables(conn):
+        conn.execute('''CREATE TABLE contract_receipts (
+            receipt_id TEXT, opportunity_id TEXT, response_receipt_id TEXT,
+            proposal_id TEXT, provider TEXT, external_contract_id TEXT,
+            contract_url TEXT, amount_cents INTEGER, currency TEXT,
+            contracted_at TEXT, terms_authority TEXT,
+            authority_evidence_url TEXT, receipt_hash TEXT)''')
+        for table, amount_column in (
+                ('contract_recurring_terms', 'accepted_base_fee_cents'),
+                ('contract_outcome_terms', 'accepted_fee_cap_cents')):
+            conn.execute(f'''CREATE TABLE {table} (
+                contract_receipt_id TEXT, opportunity_id TEXT, term_id TEXT,
+                accepted_terms_hash TEXT, {amount_column} INTEGER,
+                acceptance_evidence_url TEXT, accepted_at TEXT,
+                binding_hash TEXT)''')
+
+    @staticmethod
+    def insert_contract(conn, opportunity_id):
+        contract = {
+            'opportunity_id': opportunity_id,
+            'response_receipt_id': 'respr_valid',
+            'proposal_id': 'prop_valid',
+            'provider': 'authorized_marketplace',
+            'external_contract_id': 'contract_external_' + opportunity_id,
+            'contract_url': 'https://example.com/contract/' + opportunity_id,
+            'amount_cents': 250000,
+            'currency': 'USD',
+            'contracted_at': '2026-10-12T00:00:00+00:00',
+            'terms_authority': 'authorized_marketplace',
+            'authority_evidence_url': 'https://example.com/authority',
+            'recurring_terms_binding': None,
+            'outcome_terms_binding': None,
+        }
+        serialized = json.dumps(
+            contract, sort_keys=True, separators=(',', ':'))
+        contract_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        contract_id = 'contr_' + contract_hash[:24]
+        conn.execute(
+            'INSERT INTO contract_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (contract_id, opportunity_id, contract['response_receipt_id'],
+             contract['proposal_id'], contract['provider'],
+             contract['external_contract_id'], contract['contract_url'],
+             contract['amount_cents'], contract['currency'],
+             contract['contracted_at'], contract['terms_authority'],
+             contract['authority_evidence_url'], contract_hash),
+        )
+        return contract_id
+
     def test_defaults_to_safe_preparation_mode(self):
         result = mission_control.run(self.path)
         self.assertEqual(result['mode'], 'analysis_and_preparation_only')
@@ -317,9 +366,11 @@ class MissionControlTests(unittest.TestCase):
         conn.execute('''CREATE TABLE execution_plans (
             plan_id TEXT, opportunity_id TEXT, contract_receipt_id TEXT,
             plan_hash TEXT, plan_json TEXT, started_at TEXT)''')
+        invoice_contract_id = self.insert_contract(
+            conn, 'invoice_opportunity')
         invoice_plan = {
             'opportunity_id': 'invoice_opportunity',
-            'contract_receipt_id': 'contr_' + 'c' * 24,
+            'contract_receipt_id': invoice_contract_id,
             'execution_environment': 'isolated',
             'deliverables': [],
             'started_at': '2026-10-12T00:05:00+00:00',
@@ -494,12 +545,14 @@ class MissionControlTests(unittest.TestCase):
 
     def test_active_execution_and_qa_bind_columns_to_sealed_payloads(self):
         conn = sqlite3.connect(':memory:')
+        self.create_contract_tables(conn)
+        contract_id = self.insert_contract(conn, 'work')
         conn.execute('''CREATE TABLE execution_plans (
             plan_id TEXT, opportunity_id TEXT, contract_receipt_id TEXT,
             plan_hash TEXT, plan_json TEXT, started_at TEXT)''')
         plan = {
             'opportunity_id': 'work',
-            'contract_receipt_id': 'contr_aaaaaaaaaaaaaaaaaaaaaaaa',
+            'contract_receipt_id': contract_id,
             'execution_environment': 'isolated',
             'deliverables': [{
                 'title': 'diagnostic',
@@ -514,11 +567,11 @@ class MissionControlTests(unittest.TestCase):
         plan_id = 'execp_' + plan_hash[:24]
         conn.execute(
             'INSERT INTO execution_plans VALUES (?,?,?,?,?,?)',
-            (plan_id, 'work', 'contr_aaaaaaaaaaaaaaaaaaaaaaaa', plan_hash, plan_json,
+            (plan_id, 'work', contract_id, plan_hash, plan_json,
              plan['started_at']),
         )
         evidence_id = (
-            'contract:contr_aaaaaaaaaaaaaaaaaaaaaaaa:plan:' + plan_id)
+            'contract:' + contract_id + ':plan:' + plan_id)
         self.assertTrue(mission_control._buyer_stage_artifact_exists(
             conn, 'work', 'executing', evidence_id))
         conn.execute(
