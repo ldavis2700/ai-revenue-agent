@@ -164,16 +164,33 @@ class MissionControlTests(unittest.TestCase):
             opportunity_id TEXT, to_state TEXT, evidence_id TEXT,
             evidence_hash TEXT)''')
         conn.execute('''CREATE TABLE response_receipts (
-            receipt_id TEXT, opportunity_id TEXT)''')
+            receipt_id TEXT, opportunity_id TEXT,
+            submission_receipt_id TEXT, provider TEXT,
+            external_message_id TEXT, message_url TEXT,
+            received_at TEXT, receipt_hash TEXT)''')
         conn.executemany(
             'INSERT INTO opportunities VALUES (?,?)',
             [('prospect', 'qualified'), ('reply', 'buyer_reply'),
-             ('offer', 'offer'), ('forged', 'contracted')],
+             ('offer', 'offer'), ('tampered', 'offer'),
+             ('forged', 'contracted')],
         )
-        for opportunity_id, stage, prefix, receipt_id in (
-            ('reply', 'buyer_reply', 'reply:', 'respr_reply'),
-            ('offer', 'offer', 'offer:', 'respr_offer'),
+        for opportunity_id, stage, prefix in (
+            ('reply', 'buyer_reply', 'reply:'),
+            ('offer', 'offer', 'offer:'),
         ):
+            snapshot = {
+                'opportunity_id': opportunity_id,
+                'submission_receipt_id': 'subr_' + opportunity_id,
+                'provider': 'authorized_marketplace',
+                'external_message_id': 'message_' + opportunity_id,
+                'message_url': 'https://example.com/' + opportunity_id,
+                'received_at': '2026-10-12T00:00:00+00:00',
+                'stage': stage,
+            }
+            serialized = json.dumps(
+                snapshot, sort_keys=True, separators=(',', ':'))
+            receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            receipt_id = 'respr_' + receipt_hash[:24]
             evidence_id = prefix + receipt_id
             conn.execute(
                 'INSERT INTO opportunity_transitions VALUES (?,?,?,?)',
@@ -181,9 +198,40 @@ class MissionControlTests(unittest.TestCase):
                  hashlib.sha256(evidence_id.encode()).hexdigest()),
             )
             conn.execute(
-                'INSERT INTO response_receipts VALUES (?,?)',
-                (receipt_id, opportunity_id),
+                'INSERT INTO response_receipts VALUES (?,?,?,?,?,?,?,?)',
+                (receipt_id, opportunity_id,
+                 snapshot['submission_receipt_id'], snapshot['provider'],
+                 snapshot['external_message_id'], snapshot['message_url'],
+                 snapshot['received_at'], receipt_hash),
             )
+
+        tampered = {
+            'opportunity_id': 'tampered',
+            'submission_receipt_id': 'subr_tampered',
+            'provider': 'authorized_marketplace',
+            'external_message_id': 'message_tampered',
+            'message_url': 'https://example.com/original',
+            'received_at': '2026-10-12T00:00:00+00:00',
+            'stage': 'offer',
+        }
+        serialized = json.dumps(
+            tampered, sort_keys=True, separators=(',', ':'))
+        tampered_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        tampered_id = 'respr_' + tampered_hash[:24]
+        tampered_evidence = 'offer:' + tampered_id
+        conn.execute(
+            'INSERT INTO opportunity_transitions VALUES (?,?,?,?)',
+            ('tampered', 'offer', tampered_evidence,
+             hashlib.sha256(tampered_evidence.encode()).hexdigest()),
+        )
+        conn.execute(
+            'INSERT INTO response_receipts VALUES (?,?,?,?,?,?,?,?)',
+            (tampered_id, 'tampered', tampered['submission_receipt_id'],
+             tampered['provider'], tampered['external_message_id'],
+             'https://example.com/altered', tampered['received_at'],
+             tampered_hash),
+        )
+
         # A raw state write plus a self-consistent transition hash is still not
         # buyer evidence when its referenced contract receipt does not exist.
         forged_evidence = 'contract:contr_missing'
