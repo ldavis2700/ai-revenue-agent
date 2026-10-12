@@ -326,7 +326,7 @@ class MissionControlTests(unittest.TestCase):
             event_id TEXT, event_hash TEXT)''')
         invoice = {
             'opportunity_id': 'invoice_opportunity',
-            'delivery_receipt_id': 'delr_valid',
+            'delivery_receipt_id': 'delr_bbbbbbbbbbbbbbbbbbbbbbbb',
             'provider': 'authorized_marketplace',
             'external_invoice_id': 'invoice_external',
             'invoice_url': 'https://example.com/invoice',
@@ -353,23 +353,28 @@ class MissionControlTests(unittest.TestCase):
             conn, invoice['opportunity_id'], 'invoiced',
             'invoice:' + invoice_id))
 
-        wrong_type = dict(invoice)
-        wrong_type['delivery_receipt_id'] = 'qar_cross_type'
-        wrong_serialized = json.dumps(
-            wrong_type, sort_keys=True, separators=(',', ':'))
-        wrong_hash = hashlib.sha256(wrong_serialized.encode()).hexdigest()
-        wrong_id = 'invr_' + wrong_hash[:24]
-        conn.execute(
-            'INSERT INTO invoice_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-            (wrong_id, wrong_type['opportunity_id'],
-             wrong_type['delivery_receipt_id'], wrong_type['provider'],
-             'invoice_cross_type', wrong_type['invoice_url'],
-             wrong_type['amount_cents'], wrong_type['currency'],
-             wrong_type['issued_at'], wrong_type['due_at'], wrong_hash),
-        )
-        self.assertFalse(mission_control._buyer_stage_artifact_exists(
-            conn, wrong_type['opportunity_id'], 'invoiced',
-            'invoice:' + wrong_id))
+        for index, invalid_delivery_id in enumerate((
+            'qar_cccccccccccccccccccccccc',
+            'delr_not-a-canonical-ledger-id',
+        )):
+            wrong_type = dict(invoice)
+            wrong_type['delivery_receipt_id'] = invalid_delivery_id
+            wrong_serialized = json.dumps(
+                wrong_type, sort_keys=True, separators=(',', ':'))
+            wrong_hash = hashlib.sha256(wrong_serialized.encode()).hexdigest()
+            wrong_id = 'invr_' + wrong_hash[:24]
+            conn.execute(
+                'INSERT INTO invoice_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                (wrong_id, wrong_type['opportunity_id'],
+                 wrong_type['delivery_receipt_id'], wrong_type['provider'],
+                 f'invoice_invalid_lineage_{index}',
+                 wrong_type['invoice_url'], wrong_type['amount_cents'],
+                 wrong_type['currency'], wrong_type['issued_at'],
+                 wrong_type['due_at'], wrong_hash),
+            )
+            self.assertFalse(mission_control._buyer_stage_artifact_exists(
+                conn, wrong_type['opportunity_id'], 'invoiced',
+                'invoice:' + wrong_id))
         self.assertFalse(mission_control._buyer_stage_artifact_exists(
             conn, invoice['opportunity_id'], 'invoiced',
             'contract:' + invoice_id))
@@ -389,7 +394,7 @@ class MissionControlTests(unittest.TestCase):
             plan_hash TEXT, plan_json TEXT, started_at TEXT)''')
         plan = {
             'opportunity_id': 'work',
-            'contract_receipt_id': 'contr_valid',
+            'contract_receipt_id': 'contr_aaaaaaaaaaaaaaaaaaaaaaaa',
             'execution_environment': 'isolated',
             'deliverables': [{
                 'title': 'diagnostic',
@@ -404,7 +409,7 @@ class MissionControlTests(unittest.TestCase):
         plan_id = 'execp_' + plan_hash[:24]
         conn.execute(
             'INSERT INTO execution_plans VALUES (?,?,?,?,?,?)',
-            (plan_id, 'work', 'contr_valid', plan_hash, plan_json,
+            (plan_id, 'work', 'contr_aaaaaaaaaaaaaaaaaaaaaaaa', plan_hash, plan_json,
              plan['started_at']),
         )
         evidence_id = 'contract:contr_valid:plan:' + plan_id
