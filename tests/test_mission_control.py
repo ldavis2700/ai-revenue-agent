@@ -38,13 +38,70 @@ class MissionControlTests(unittest.TestCase):
                 accepted_terms_hash TEXT, {amount_column} INTEGER,
                 acceptance_evidence_url TEXT, accepted_at TEXT,
                 binding_hash TEXT)''')
+        conn.execute('''CREATE TABLE submission_receipts (
+            receipt_id TEXT, opportunity_id TEXT, proposal_id TEXT,
+            provider TEXT, external_submission_id TEXT,
+            submission_url TEXT, submitted_at TEXT, receipt_hash TEXT)''')
+        conn.execute('''CREATE TABLE response_receipts (
+            receipt_id TEXT, opportunity_id TEXT,
+            submission_receipt_id TEXT, provider TEXT,
+            external_message_id TEXT, message_url TEXT,
+            received_at TEXT, receipt_hash TEXT)''')
+        conn.execute('''CREATE TABLE opportunity_transitions (
+            opportunity_id TEXT, to_state TEXT, evidence_id TEXT,
+            evidence_hash TEXT)''')
 
     @staticmethod
     def insert_contract(conn, opportunity_id):
+        submission = {
+            'opportunity_id': opportunity_id,
+            'proposal_id': 'prop_' + opportunity_id,
+            'provider': 'authorized_marketplace',
+            'external_submission_id': 'submission_' + opportunity_id,
+            'submission_url': 'https://example.com/submission/' + opportunity_id,
+            'submitted_at': '2026-10-11T22:00:00+00:00',
+        }
+        submission_hash = hashlib.sha256(json.dumps(
+            submission, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        submission_id = 'subr_' + submission_hash[:24]
+        conn.execute(
+            'INSERT INTO submission_receipts VALUES (?,?,?,?,?,?,?,?)',
+            (submission_id, opportunity_id, submission['proposal_id'],
+             submission['provider'], submission['external_submission_id'],
+             submission['submission_url'], submission['submitted_at'],
+             submission_hash),
+        )
+        response = {
+            'opportunity_id': opportunity_id,
+            'submission_receipt_id': submission_id,
+            'provider': submission['provider'],
+            'external_message_id': 'message_' + opportunity_id,
+            'message_url': 'https://example.com/message/' + opportunity_id,
+            'received_at': '2026-10-11T23:00:00+00:00',
+            'stage': 'offer',
+        }
+        response_hash = hashlib.sha256(json.dumps(
+            response, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        response_id = 'respr_' + response_hash[:24]
+        conn.execute(
+            'INSERT INTO response_receipts VALUES (?,?,?,?,?,?,?,?)',
+            (response_id, opportunity_id, submission_id,
+             response['provider'], response['external_message_id'],
+             response['message_url'], response['received_at'],
+             response_hash),
+        )
+        evidence_id = 'offer:' + response_id
+        conn.execute(
+            'INSERT INTO opportunity_transitions VALUES (?,?,?,?)',
+            (opportunity_id, 'offer', evidence_id,
+             hashlib.sha256(evidence_id.encode()).hexdigest()),
+        )
         contract = {
             'opportunity_id': opportunity_id,
-            'response_receipt_id': 'respr_valid',
-            'proposal_id': 'prop_valid',
+            'response_receipt_id': response_id,
+            'proposal_id': submission['proposal_id'],
             'provider': 'authorized_marketplace',
             'external_contract_id': 'contract_external_' + opportunity_id,
             'contract_url': 'https://example.com/contract/' + opportunity_id,
@@ -341,48 +398,13 @@ class MissionControlTests(unittest.TestCase):
 
     def test_active_contract_and_invoice_require_full_receipt_integrity(self):
         conn = sqlite3.connect(':memory:')
-        conn.execute('''CREATE TABLE contract_receipts (
-            receipt_id TEXT, opportunity_id TEXT, response_receipt_id TEXT,
-            proposal_id TEXT, provider TEXT, external_contract_id TEXT,
-            contract_url TEXT, amount_cents INTEGER, currency TEXT,
-            contracted_at TEXT, terms_authority TEXT,
-            authority_evidence_url TEXT, receipt_hash TEXT)''')
-        for table, amount_column in (
-                ('contract_recurring_terms', 'accepted_base_fee_cents'),
-                ('contract_outcome_terms', 'accepted_fee_cap_cents')):
-            conn.execute(f'''CREATE TABLE {table} (
-                contract_receipt_id TEXT, opportunity_id TEXT, term_id TEXT,
-                accepted_terms_hash TEXT, {amount_column} INTEGER,
-                acceptance_evidence_url TEXT, accepted_at TEXT,
-                binding_hash TEXT)''')
+        self.create_contract_tables(conn)
         contract = {
             'opportunity_id': 'contract_opportunity',
-            'response_receipt_id': 'respr_valid',
-            'proposal_id': 'prop_valid',
-            'provider': 'authorized_marketplace',
-            'external_contract_id': 'contract_external',
-            'contract_url': 'https://example.com/contract',
-            'amount_cents': 250000,
-            'currency': 'USD',
-            'contracted_at': '2026-10-12T00:00:00+00:00',
-            'terms_authority': 'authorized_marketplace',
-            'authority_evidence_url': 'https://example.com/authority',
-            'recurring_terms_binding': None,
-            'outcome_terms_binding': None,
+            'contract_url': 'https://example.com/contract/contract_opportunity',
         }
-        serialized = json.dumps(contract, sort_keys=True, separators=(',', ':'))
-        contract_hash = hashlib.sha256(serialized.encode()).hexdigest()
-        contract_id = 'contr_' + contract_hash[:24]
-        conn.execute(
-            'INSERT INTO contract_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
-            (contract_id, contract['opportunity_id'],
-             contract['response_receipt_id'], contract['proposal_id'],
-             contract['provider'], contract['external_contract_id'],
-             contract['contract_url'], contract['amount_cents'],
-             contract['currency'], contract['contracted_at'],
-             contract['terms_authority'], contract['authority_evidence_url'],
-             contract_hash),
-        )
+        contract_id = self.insert_contract(
+            conn, contract['opportunity_id'])
         self.assertTrue(mission_control._buyer_stage_artifact_exists(
             conn, contract['opportunity_id'], 'contracted',
             'contract:' + contract_id))
