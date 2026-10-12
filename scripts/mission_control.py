@@ -227,6 +227,30 @@ def _canonical_ledger_id(value, prefix):
     )
 
 
+def _verified_qa_artifact(conn, opportunity_id, report_id):
+    row = conn.execute(
+        '''SELECT report_hash,report_json,execution_plan_id,
+                  artifact_sha256,completed_at
+           FROM qa_reports
+           WHERE report_id=? AND opportunity_id=?''',
+        (report_id, opportunity_id),
+    ).fetchone()
+    if row is None:
+        return False
+    expected = hashlib.sha256(row[1].encode()).hexdigest()
+    payload = json.loads(row[1])
+    return (
+        isinstance(payload, dict)
+        and payload.get('opportunity_id') == opportunity_id
+        and payload.get('execution_plan_id') == row[2]
+        and _canonical_ledger_id(row[2], 'execp_')
+        and payload.get('artifact_sha256') == row[3]
+        and payload.get('completed_at') == row[4]
+        and row[0] == expected
+        and report_id == 'qar_' + expected[:24]
+    )
+
+
 def _verified_delivery_artifact(conn, opportunity_id, receipt_id):
     row = conn.execute(
         '''SELECT qa_report_id,provider,external_delivery_id,
@@ -253,6 +277,7 @@ def _verified_delivery_artifact(conn, opportunity_id, receipt_id):
         _canonical_ledger_id(row[0], 'qar_')
         and row[6] == expected
         and receipt_id == 'delr_' + expected[:24]
+        and _verified_qa_artifact(conn, opportunity_id, row[0])
     )
 
 
@@ -364,27 +389,8 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
             )
         receipt_id = evidence_id.split(':', 1)[1]
         if stage == 'qa_passed':
-            row = conn.execute(
-                '''SELECT report_hash,report_json,execution_plan_id,
-                          artifact_sha256,completed_at
-                   FROM qa_reports
-                   WHERE report_id=? AND opportunity_id=?''',
-                (receipt_id, opportunity_id),
-            ).fetchone()
-            if row is None:
-                return False
-            expected = hashlib.sha256(row[1].encode()).hexdigest()
-            payload = json.loads(row[1])
-            return (
-                isinstance(payload, dict)
-                and payload.get('opportunity_id') == opportunity_id
-                and payload.get('execution_plan_id') == row[2]
-                and _canonical_ledger_id(row[2], 'execp_')
-                and payload.get('artifact_sha256') == row[3]
-                and payload.get('completed_at') == row[4]
-                and row[0] == expected
-                and receipt_id == 'qar_' + expected[:24]
-            )
+            return _verified_qa_artifact(
+                conn, opportunity_id, receipt_id)
         if stage == 'delivered':
             return _verified_delivery_artifact(
                 conn, opportunity_id, receipt_id)
