@@ -286,6 +286,32 @@ def _verified_response_artifact(
     )
 
 
+def _verified_response_lineage(conn, opportunity_id, receipt_id):
+    if not _canonical_ledger_id(receipt_id, 'respr_'):
+        return False
+    stage_prefixes = (
+        ('response_received', 'reply:'),
+        ('buyer_reply', 'reply:'),
+        ('interview', 'interview:'),
+        ('offer', 'offer:'),
+    )
+    for stage, prefix in stage_prefixes:
+        evidence_id = prefix + receipt_id
+        row = conn.execute(
+            '''SELECT evidence_hash FROM opportunity_transitions
+               WHERE opportunity_id=? AND to_state=? AND evidence_id=?''',
+            (opportunity_id, stage, evidence_id),
+        ).fetchone()
+        if (
+            row is not None
+            and row[0] == hashlib.sha256(evidence_id.encode()).hexdigest()
+            and _verified_response_artifact(
+                conn, opportunity_id, receipt_id, stage)
+        ):
+            return True
+    return False
+
+
 def _verified_contract_artifact(conn, opportunity_id, receipt_id):
     row = conn.execute(
         '''SELECT response_receipt_id,proposal_id,provider,
@@ -325,8 +351,11 @@ def _verified_contract_artifact(conn, opportunity_id, receipt_id):
         snapshot, sort_keys=True, separators=(',', ':')
     ).encode()).hexdigest()
     return (
-        row[10] == expected
+        _canonical_ledger_id(row[0], 'respr_')
+        and row[10] == expected
         and receipt_id == 'contr_' + expected[:24]
+        and _verified_response_lineage(
+            conn, opportunity_id, row[0])
     )
 
 
