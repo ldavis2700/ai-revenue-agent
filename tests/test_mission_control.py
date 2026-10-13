@@ -1288,6 +1288,28 @@ class MissionControlTests(unittest.TestCase):
         self.assertTrue(mission_control._verified_attributed_outcome_event(
             conn, snapshot['opportunity_id'], event_id, event_hash))
 
+        future_binding = dict(binding)
+        future_binding['accepted_at'] = '2999-10-11T00:00:00+00:00'
+        future_binding_hash = hashlib.sha256(json.dumps(
+            future_binding, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        conn.execute(
+            """UPDATE contract_outcome_terms
+               SET accepted_at=?, binding_hash=?
+               WHERE contract_receipt_id=? AND opportunity_id=?""",
+            (future_binding['accepted_at'], future_binding_hash,
+             binding['contract_receipt_id'], binding['opportunity_id']),
+        )
+        self.assertFalse(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], event_id, event_hash))
+        conn.execute(
+            """UPDATE contract_outcome_terms
+               SET accepted_at=?, binding_hash=?
+               WHERE contract_receipt_id=? AND opportunity_id=?""",
+            (binding['accepted_at'], binding_hash,
+             binding['contract_receipt_id'], binding['opportunity_id']),
+        )
+
         review_forgery = dict(review)
         review_forgery['matched_exclusions'] = ['excluded-outcome']
         review_snapshot = dict(snapshot)
