@@ -1346,6 +1346,34 @@ class MissionControlTests(unittest.TestCase):
             conn, snapshot['opportunity_id'], chronology_event_id,
             chronology_hash))
 
+        future_review = dict(review)
+        future_review['reviewed_at'] = '2999-10-12T00:05:00+00:00'
+        future_snapshot = dict(snapshot)
+        future_snapshot['external_event_id'] = 'event_future_review'
+        future_snapshot['eligibility_review'] = future_review
+        future_hash = hashlib.sha256(json.dumps(
+            future_snapshot, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        future_event_id = 'oute_' + future_hash[:24]
+        conn.execute(
+            'INSERT INTO attributed_outcome_events VALUES '
+            '(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (future_event_id, future_snapshot['opportunity_id'],
+             future_snapshot['term_id'],
+             future_snapshot['contract_receipt_id'],
+             future_snapshot['provider'],
+             future_snapshot['external_event_id'],
+             future_snapshot['evidence_url'],
+             future_snapshot['artifact_sha256'],
+             future_snapshot['attribution_reference'],
+             json.dumps(future_review, sort_keys=True, separators=(',', ':')),
+             future_snapshot['units'], future_snapshot['unit_fee_cents'],
+             future_snapshot['fee_cents'], future_snapshot['occurred_at'],
+             future_hash),
+        )
+        self.assertFalse(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], future_event_id, future_hash))
+
         arithmetic_forgery = dict(snapshot)
         arithmetic_forgery['external_event_id'] = 'event_bad_arithmetic'
         arithmetic_forgery['fee_cents'] = 10001
