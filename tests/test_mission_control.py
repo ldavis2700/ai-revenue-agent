@@ -465,6 +465,37 @@ class MissionControlTests(unittest.TestCase):
         self.assertFalse(mission_control._buyer_stage_artifact_exists(
             conn, contract['opportunity_id'], 'contracted',
             'contract:' + mismatch_id))
+        submitted_proposal_id = conn.execute(
+            'SELECT proposal_id FROM submission_receipts '
+            'WHERE opportunity_id=?',
+            (contract['opportunity_id'],),
+        ).fetchone()[0]
+        cross_provider = {
+            **mismatched,
+            'proposal_id': submitted_proposal_id,
+            'provider': 'substituted_marketplace',
+            'external_contract_id': 'contract_provider_mismatch',
+        }
+        cross_provider_hash = hashlib.sha256(json.dumps(
+            cross_provider, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        cross_provider_id = 'contr_' + cross_provider_hash[:24]
+        conn.execute(
+            'INSERT INTO contract_receipts VALUES '
+            '(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (cross_provider_id, cross_provider['opportunity_id'],
+             cross_provider['response_receipt_id'],
+             cross_provider['proposal_id'], cross_provider['provider'],
+             cross_provider['external_contract_id'],
+             cross_provider['contract_url'], cross_provider['amount_cents'],
+             cross_provider['currency'], cross_provider['contracted_at'],
+             cross_provider['terms_authority'],
+             cross_provider['authority_evidence_url'],
+             cross_provider_hash),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, contract['opportunity_id'], 'contracted',
+            'contract:' + cross_provider_id))
         self.assertFalse(mission_control._buyer_stage_artifact_exists(
             conn, contract['opportunity_id'], 'contracted',
             'invoice:' + contract_id))
