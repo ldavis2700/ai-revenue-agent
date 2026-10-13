@@ -529,12 +529,23 @@ def _verified_attributed_outcome_event(
                 str(row[11]).replace('Z', '+00:00'))
             reviewed_at = datetime.fromisoformat(
                 str(review.get('reviewed_at')).replace('Z', '+00:00'))
-            if occurred_at.tzinfo is None or reviewed_at.tzinfo is None:
+            accepted_at = datetime.fromisoformat(
+                str(binding.get('accepted_at')).replace('Z', '+00:00'))
+            if (
+                occurred_at.tzinfo is None
+                or reviewed_at.tzinfo is None
+                or accepted_at.tzinfo is None
+            ):
                 return False
         except (TypeError, ValueError):
             return False
         now = datetime.now(timezone.utc)
-        if occurred_at > now or reviewed_at > now or reviewed_at < occurred_at:
+        if (
+            occurred_at > now
+            or reviewed_at > now
+            or occurred_at < accepted_at
+            or reviewed_at < occurred_at
+        ):
             return False
         if (
             row[0] != binding.get('term_id')
