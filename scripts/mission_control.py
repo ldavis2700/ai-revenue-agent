@@ -529,6 +529,13 @@ def _verified_attributed_outcome_event(
             or terms[0] != binding.get('accepted_terms_hash')
             or terms[2] != binding.get('accepted_fee_cap_cents')
             or row[2] != contract[0]
+            or not all(
+                isinstance(value, int) and not isinstance(value, bool)
+                for value in (row[8], row[9], row[10]))
+            or row[8] <= 0
+            or row[9] <= 0
+            or row[10] != row[8] * row[9]
+            or row[10] > binding.get('accepted_fee_cap_cents')
             or review.get('reviewed_terms_hash') != terms[0]
             or review.get('reviewed_exclusions_hash') != exclusions_hash
             or not re.fullmatch(
