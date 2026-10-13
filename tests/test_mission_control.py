@@ -746,6 +746,33 @@ class MissionControlTests(unittest.TestCase):
             conn, cross_currency_invoice['opportunity_id'], 'invoiced',
             'invoice:' + cross_currency_id))
 
+        over_contract_invoice = {
+            **invoice,
+            'amount_cents': invoice['amount_cents'] + 1,
+            'external_invoice_id': 'invoice_amount_exceeds_contract',
+        }
+        over_contract_serialized = json.dumps(
+            over_contract_invoice, sort_keys=True, separators=(',', ':'))
+        over_contract_hash = hashlib.sha256(
+            over_contract_serialized.encode()).hexdigest()
+        over_contract_id = 'invr_' + over_contract_hash[:24]
+        conn.execute(
+            'INSERT INTO invoice_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            (over_contract_id, over_contract_invoice['opportunity_id'],
+             over_contract_invoice['delivery_receipt_id'],
+             over_contract_invoice['provider'],
+             over_contract_invoice['external_invoice_id'],
+             over_contract_invoice['invoice_url'],
+             over_contract_invoice['amount_cents'],
+             over_contract_invoice['currency'],
+             over_contract_invoice['issued_at'],
+             over_contract_invoice['due_at'],
+             over_contract_hash),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, over_contract_invoice['opportunity_id'], 'invoiced',
+            'invoice:' + over_contract_id))
+
         for index, invalid_delivery_id in enumerate((
             'qar_cccccccccccccccccccccccc',
             'delr_not-a-canonical-ledger-id',
