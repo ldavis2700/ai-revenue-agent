@@ -1374,6 +1374,36 @@ class MissionControlTests(unittest.TestCase):
         self.assertFalse(mission_control._verified_attributed_outcome_event(
             conn, snapshot['opportunity_id'], future_event_id, future_hash))
 
+        pre_contract_snapshot = dict(snapshot)
+        pre_contract_snapshot['external_event_id'] = 'event_pre_contract'
+        pre_contract_snapshot['occurred_at'] = '2026-10-10T23:59:59+00:00'
+        pre_contract_snapshot['eligibility_review'] = dict(review)
+        pre_contract_hash = hashlib.sha256(json.dumps(
+            pre_contract_snapshot, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        pre_contract_event_id = 'oute_' + pre_contract_hash[:24]
+        conn.execute(
+            'INSERT INTO attributed_outcome_events VALUES '
+            '(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (pre_contract_event_id, pre_contract_snapshot['opportunity_id'],
+             pre_contract_snapshot['term_id'],
+             pre_contract_snapshot['contract_receipt_id'],
+             pre_contract_snapshot['provider'],
+             pre_contract_snapshot['external_event_id'],
+             pre_contract_snapshot['evidence_url'],
+             pre_contract_snapshot['artifact_sha256'],
+             pre_contract_snapshot['attribution_reference'],
+             json.dumps(pre_contract_snapshot['eligibility_review'],
+                        sort_keys=True, separators=(',', ':')),
+             pre_contract_snapshot['units'],
+             pre_contract_snapshot['unit_fee_cents'],
+             pre_contract_snapshot['fee_cents'],
+             pre_contract_snapshot['occurred_at'], pre_contract_hash),
+        )
+        self.assertFalse(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], pre_contract_event_id,
+            pre_contract_hash))
+
         arithmetic_forgery = dict(snapshot)
         arithmetic_forgery['external_event_id'] = 'event_bad_arithmetic'
         arithmetic_forgery['fee_cents'] = 10001
