@@ -773,6 +773,33 @@ class MissionControlTests(unittest.TestCase):
             conn, over_contract_invoice['opportunity_id'], 'invoiced',
             'invoice:' + over_contract_id))
 
+        predelivery_invoice = {
+            **invoice,
+            'issued_at': '2026-10-12T00:20:00+00:00',
+            'external_invoice_id': 'invoice_before_delivery',
+        }
+        predelivery_serialized = json.dumps(
+            predelivery_invoice, sort_keys=True, separators=(',', ':'))
+        predelivery_hash = hashlib.sha256(
+            predelivery_serialized.encode()).hexdigest()
+        predelivery_id = 'invr_' + predelivery_hash[:24]
+        conn.execute(
+            'INSERT INTO invoice_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            (predelivery_id, predelivery_invoice['opportunity_id'],
+             predelivery_invoice['delivery_receipt_id'],
+             predelivery_invoice['provider'],
+             predelivery_invoice['external_invoice_id'],
+             predelivery_invoice['invoice_url'],
+             predelivery_invoice['amount_cents'],
+             predelivery_invoice['currency'],
+             predelivery_invoice['issued_at'],
+             predelivery_invoice['due_at'],
+             predelivery_hash),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, predelivery_invoice['opportunity_id'], 'invoiced',
+            'invoice:' + predelivery_id))
+
         for index, invalid_delivery_id in enumerate((
             'qar_cccccccccccccccccccccccc',
             'delr_not-a-canonical-ledger-id',
