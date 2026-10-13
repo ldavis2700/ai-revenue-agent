@@ -484,6 +484,52 @@ def _verified_delivery_artifact(conn, opportunity_id, receipt_id):
     )
 
 
+def _verified_attributed_outcome_event(
+        conn, opportunity_id, event_id, invoice_event_hash):
+    """Recompute one outcome event before it can support invoice priority."""
+    row = conn.execute(
+        """SELECT term_id,contract_receipt_id,provider,external_event_id,
+                  evidence_url,artifact_sha256,attribution_reference,
+                  eligibility_review_json,units,unit_fee_cents,fee_cents,
+                  occurred_at,event_hash
+           FROM attributed_outcome_events
+           WHERE event_id=? AND opportunity_id=?""",
+        (event_id, opportunity_id),
+    ).fetchone()
+    if row is None:
+        return False
+    try:
+        review = json.loads(row[7])
+        if not isinstance(review, dict):
+            return False
+        snapshot = {
+            'opportunity_id': opportunity_id,
+            'term_id': row[0],
+            'contract_receipt_id': row[1],
+            'provider': row[2],
+            'external_event_id': row[3],
+            'evidence_url': row[4],
+            'artifact_sha256': row[5],
+            'attribution_reference': row[6],
+            'eligibility_review': review,
+            'units': row[8],
+            'unit_fee_cents': row[9],
+            'fee_cents': row[10],
+            'occurred_at': row[11],
+        }
+        expected = hashlib.sha256(json.dumps(
+            snapshot, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        return (
+            _canonical_ledger_id(event_id, 'oute_')
+            and event_id == 'oute_' + expected[:24]
+            and row[12] == expected
+            and invoice_event_hash == expected
+        )
+    except (TypeError, ValueError):
+        return False
+
+
 def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
     """Rebuild or identity-check the stage-specific immutable ledger artifact."""
     evidence_prefixes = {
@@ -592,6 +638,9 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
                 and 0 < row[4] <= contract_context[1]
                 and row[5] == contract_context[2]
                 and delivered_at <= issued_at < due_at
+                and all(_verified_attributed_outcome_event(
+                    conn, opportunity_id, item[0], item[2]
+                ) for item in outcomes)
                 and row[8] == expected
                 and receipt_id == 'invr_' + expected[:24]
                 and _verified_delivery_artifact(
