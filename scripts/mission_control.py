@@ -502,6 +502,49 @@ def _verified_attributed_outcome_event(
         review = json.loads(row[7])
         if not isinstance(review, dict):
             return False
+        terms = conn.execute(
+            """SELECT terms_hash,exclusions_json,fee_cap_cents
+               FROM outcome_pricing_terms
+               WHERE term_id=? AND opportunity_id=?""",
+            (row[0], opportunity_id),
+        ).fetchone()
+        contract = conn.execute(
+            """SELECT provider FROM contract_receipts
+               WHERE receipt_id=? AND opportunity_id=?""",
+            (row[1], opportunity_id),
+        ).fetchone()
+        binding = _contract_terms_binding(
+            conn, 'contract_outcome_terms', row[1], opportunity_id,
+            'accepted_fee_cap_cents', 'accepted_fee_cap_cents')
+        if terms is None or contract is None or not binding:
+            return False
+        try:
+            exclusions_hash = hashlib.sha256(json.dumps(
+                json.loads(terms[1]), sort_keys=True, separators=(',', ':')
+            ).encode()).hexdigest()
+        except (TypeError, json.JSONDecodeError):
+            return False
+        if (
+            row[0] != binding.get('term_id')
+            or terms[0] != binding.get('accepted_terms_hash')
+            or terms[2] != binding.get('accepted_fee_cap_cents')
+            or row[2] != contract[0]
+            or review.get('reviewed_terms_hash') != terms[0]
+            or review.get('reviewed_exclusions_hash') != exclusions_hash
+            or not re.fullmatch(
+                r'[0-9a-f]{64}', str(review.get('artifact_sha256') or ''))
+        ):
+            return False
+        if review.get('requires_human_escalation'):
+            decision = review.get('human_escalation_decision')
+            if (
+                not isinstance(decision, dict)
+                or decision.get('decision') != 'approved'
+                or not re.fullmatch(
+                    r'[0-9a-f]{64}',
+                    str(decision.get('artifact_sha256') or ''))
+            ):
+                return False
         snapshot = {
             'opportunity_id': opportunity_id,
             'term_id': row[0],
