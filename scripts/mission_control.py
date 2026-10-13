@@ -533,7 +533,8 @@ def _verified_attributed_outcome_event(
                 return False
         except (TypeError, ValueError):
             return False
-        if reviewed_at < occurred_at:
+        now = datetime.now(timezone.utc)
+        if occurred_at > now or reviewed_at > now or reviewed_at < occurred_at:
             return False
         if (
             row[0] != binding.get('term_id')
@@ -567,7 +568,11 @@ def _verified_attributed_outcome_event(
             try:
                 decided_at = datetime.fromisoformat(
                     str(decision.get('decided_at')).replace('Z', '+00:00'))
-                if decided_at.tzinfo is None or decided_at < reviewed_at:
+                if (
+                    decided_at.tzinfo is None
+                    or decided_at > now
+                    or decided_at < reviewed_at
+                ):
                     return False
             except (TypeError, ValueError):
                 return False
