@@ -1219,6 +1219,7 @@ class MissionControlTests(unittest.TestCase):
         review = {
             'reviewed_terms_hash': terms_hash,
             'reviewed_exclusions_hash': exclusions_hash,
+            'matched_exclusions': [],
             'artifact_sha256': 'c' * 64,
             'requires_human_escalation': False,
         }
@@ -1286,9 +1287,9 @@ class MissionControlTests(unittest.TestCase):
             conn, snapshot['opportunity_id'], event_id, event_hash))
 
         review_forgery = dict(review)
-        review_forgery['artifact_sha256'] = 'd' * 64
+        review_forgery['matched_exclusions'] = ['excluded-outcome']
         review_snapshot = dict(snapshot)
-        review_snapshot['external_event_id'] = 'event_bad_review_artifact'
+        review_snapshot['external_event_id'] = 'event_bad_exclusion'
         review_snapshot['eligibility_review'] = review_forgery
         review_hash = hashlib.sha256(json.dumps(
             review_snapshot, sort_keys=True, separators=(',', ':')
