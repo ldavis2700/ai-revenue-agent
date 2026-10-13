@@ -1221,7 +1221,9 @@ class MissionControlTests(unittest.TestCase):
             'reviewed_exclusions_hash': exclusions_hash,
             'matched_exclusions': [],
             'artifact_sha256': 'c' * 64,
+            'reviewed_at': '2026-10-12T00:05:00+00:00',
             'requires_human_escalation': False,
+            'human_escalation_decision': None,
         }
         snapshot = {
             'opportunity_id': 'opp_outcome',
@@ -1313,6 +1315,36 @@ class MissionControlTests(unittest.TestCase):
         )
         self.assertFalse(mission_control._verified_attributed_outcome_event(
             conn, snapshot['opportunity_id'], review_event_id, review_hash))
+
+        chronology_review = dict(review)
+        chronology_review['reviewed_at'] = '2026-10-11T23:59:59+00:00'
+        chronology_snapshot = dict(snapshot)
+        chronology_snapshot['external_event_id'] = 'event_bad_review_time'
+        chronology_snapshot['eligibility_review'] = chronology_review
+        chronology_hash = hashlib.sha256(json.dumps(
+            chronology_snapshot, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        chronology_event_id = 'oute_' + chronology_hash[:24]
+        conn.execute(
+            'INSERT INTO attributed_outcome_events VALUES '
+            '(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (chronology_event_id, chronology_snapshot['opportunity_id'],
+             chronology_snapshot['term_id'],
+             chronology_snapshot['contract_receipt_id'],
+             chronology_snapshot['provider'],
+             chronology_snapshot['external_event_id'],
+             chronology_snapshot['evidence_url'],
+             chronology_snapshot['artifact_sha256'],
+             chronology_snapshot['attribution_reference'],
+             json.dumps(chronology_review, sort_keys=True, separators=(',', ':')),
+             chronology_snapshot['units'],
+             chronology_snapshot['unit_fee_cents'],
+             chronology_snapshot['fee_cents'],
+             chronology_snapshot['occurred_at'], chronology_hash),
+        )
+        self.assertFalse(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], chronology_event_id,
+            chronology_hash))
 
         arithmetic_forgery = dict(snapshot)
         arithmetic_forgery['external_event_id'] = 'event_bad_arithmetic'
