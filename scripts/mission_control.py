@@ -437,7 +437,7 @@ def _verified_qa_artifact(conn, opportunity_id, report_id):
 
 def _contract_context_for_qa_lineage(conn, opportunity_id, report_id):
     row = conn.execute(
-        '''SELECT cr.provider,cr.currency
+        '''SELECT cr.provider,cr.amount_cents,cr.currency
            FROM qa_reports qr
            JOIN execution_plans ep
              ON ep.plan_id=qr.execution_plan_id
@@ -448,7 +448,7 @@ def _contract_context_for_qa_lineage(conn, opportunity_id, report_id):
            WHERE qr.report_id=? AND qr.opportunity_id=?''',
         (report_id, opportunity_id),
     ).fetchone()
-    return None if row is None else (row[0], row[1])
+    return None if row is None else (row[0], row[1], row[2])
 
 def _verified_delivery_artifact(conn, opportunity_id, receipt_id):
     row = conn.execute(
@@ -580,7 +580,9 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
                 and delivery_lineage is not None
                 and contract_context is not None
                 and row[1] == delivery_lineage[0]
-                and row[5] == contract_context[1]
+                and isinstance(row[4], int)
+                and 0 < row[4] <= contract_context[1]
+                and row[5] == contract_context[2]
                 and row[8] == expected
                 and receipt_id == 'invr_' + expected[:24]
                 and _verified_delivery_artifact(
