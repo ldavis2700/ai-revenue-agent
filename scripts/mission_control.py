@@ -435,9 +435,9 @@ def _verified_qa_artifact(conn, opportunity_id, report_id):
 
 
 
-def _provider_for_qa_lineage(conn, opportunity_id, report_id):
+def _contract_context_for_qa_lineage(conn, opportunity_id, report_id):
     row = conn.execute(
-        '''SELECT cr.provider
+        '''SELECT cr.provider,cr.currency
            FROM qa_reports qr
            JOIN execution_plans ep
              ON ep.plan_id=qr.execution_plan_id
@@ -472,12 +472,12 @@ def _verified_delivery_artifact(conn, opportunity_id, receipt_id):
     expected = hashlib.sha256(json.dumps(
         snapshot, sort_keys=True, separators=(',', ':')
     ).encode()).hexdigest()
-    contract_provider = _provider_for_qa_lineage(
+    contract_context = _contract_context_for_qa_lineage(
         conn, opportunity_id, row[0])
     return (
         _canonical_ledger_id(row[0], 'qar_')
-        and contract_provider is not None
-        and row[1] == contract_provider
+        and contract_context is not None
+        and row[1] == contract_context[0]
         and row[6] == expected
         and receipt_id == 'delr_' + expected[:24]
         and _verified_qa_artifact(conn, opportunity_id, row[0])
@@ -564,15 +564,23 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
             expected = hashlib.sha256(json.dumps(
                 snapshot, sort_keys=True, separators=(',', ':')
             ).encode()).hexdigest()
-            delivery_provider = conn.execute(
-                '''SELECT provider FROM delivery_receipts
+            delivery_lineage = conn.execute(
+                '''SELECT provider,qa_report_id FROM delivery_receipts
                    WHERE receipt_id=? AND opportunity_id=?''',
                 (row[0], opportunity_id),
             ).fetchone()
+            contract_context = (
+                None
+                if delivery_lineage is None
+                else _contract_context_for_qa_lineage(
+                    conn, opportunity_id, delivery_lineage[1])
+            )
             return (
                 _canonical_ledger_id(row[0], 'delr_')
-                and delivery_provider is not None
-                and row[1] == delivery_provider[0]
+                and delivery_lineage is not None
+                and contract_context is not None
+                and row[1] == delivery_lineage[0]
+                and row[5] == contract_context[1]
                 and row[8] == expected
                 and receipt_id == 'invr_' + expected[:24]
                 and _verified_delivery_artifact(
