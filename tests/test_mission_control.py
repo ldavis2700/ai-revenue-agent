@@ -1190,6 +1190,19 @@ class MissionControlTests(unittest.TestCase):
     def test_invoice_priority_recomputes_outcome_event_hashes(self):
         conn = mission_control.connect(self.path)
         self.addCleanup(conn.close)
+        conn.execute("""CREATE TABLE contract_receipts (
+            receipt_id TEXT, opportunity_id TEXT, provider TEXT
+        )""")
+        conn.execute("""CREATE TABLE outcome_pricing_terms (
+            term_id TEXT, opportunity_id TEXT, terms_hash TEXT,
+            exclusions_json TEXT, fee_cap_cents INTEGER
+        )""")
+        conn.execute("""CREATE TABLE contract_outcome_terms (
+            contract_receipt_id TEXT, opportunity_id TEXT, term_id TEXT,
+            accepted_terms_hash TEXT, accepted_fee_cap_cents INTEGER,
+            acceptance_evidence_url TEXT, accepted_at TEXT,
+            binding_hash TEXT
+        )""")
         conn.execute("""CREATE TABLE attributed_outcome_events (
             event_id TEXT, opportunity_id TEXT, term_id TEXT,
             contract_receipt_id TEXT, provider TEXT, external_event_id TEXT,
@@ -1198,6 +1211,17 @@ class MissionControlTests(unittest.TestCase):
             units INTEGER, unit_fee_cents INTEGER, fee_cents INTEGER,
             occurred_at TEXT, event_hash TEXT
         )""")
+        exclusions = []
+        exclusions_hash = hashlib.sha256(json.dumps(
+            exclusions, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        terms_hash = 'b' * 64
+        review = {
+            'reviewed_terms_hash': terms_hash,
+            'reviewed_exclusions_hash': exclusions_hash,
+            'artifact_sha256': 'c' * 64,
+            'requires_human_escalation': False,
+        }
         snapshot = {
             'opportunity_id': 'opp_outcome',
             'term_id': 'term_1',
@@ -1207,7 +1231,7 @@ class MissionControlTests(unittest.TestCase):
             'evidence_url': 'https://example.com/outcome',
             'artifact_sha256': 'a' * 64,
             'attribution_reference': 'buyer-approved-result',
-            'eligibility_review': {},
+            'eligibility_review': review,
             'units': 2,
             'unit_fee_cents': 5000,
             'fee_cents': 10000,
@@ -1216,6 +1240,36 @@ class MissionControlTests(unittest.TestCase):
         event_hash = hashlib.sha256(json.dumps(
             snapshot, sort_keys=True, separators=(',', ':')
         ).encode()).hexdigest()
+        binding = {
+            'contract_receipt_id': snapshot['contract_receipt_id'],
+            'opportunity_id': snapshot['opportunity_id'],
+            'term_id': snapshot['term_id'],
+            'accepted_terms_hash': terms_hash,
+            'accepted_fee_cap_cents': 50000,
+            'acceptance_evidence_url': 'https://example.com/terms',
+            'accepted_at': '2026-10-11T00:00:00+00:00',
+        }
+        binding_hash = hashlib.sha256(json.dumps(
+            binding, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        conn.execute(
+            'INSERT INTO contract_receipts VALUES (?,?,?)',
+            (snapshot['contract_receipt_id'], snapshot['opportunity_id'],
+             snapshot['provider']),
+        )
+        conn.execute(
+            'INSERT INTO outcome_pricing_terms VALUES (?,?,?,?,?)',
+            (snapshot['term_id'], snapshot['opportunity_id'], terms_hash,
+             json.dumps(exclusions), 50000),
+        )
+        conn.execute(
+            'INSERT INTO contract_outcome_terms VALUES (?,?,?,?,?,?,?,?)',
+            (binding['contract_receipt_id'], binding['opportunity_id'],
+             binding['term_id'], binding['accepted_terms_hash'],
+             binding['accepted_fee_cap_cents'],
+             binding['acceptance_evidence_url'], binding['accepted_at'],
+             binding_hash),
+        )
         event_id = 'oute_' + event_hash[:24]
         conn.execute(
             'INSERT INTO attributed_outcome_events VALUES '
@@ -1224,7 +1278,8 @@ class MissionControlTests(unittest.TestCase):
              snapshot['contract_receipt_id'], snapshot['provider'],
              snapshot['external_event_id'], snapshot['evidence_url'],
              snapshot['artifact_sha256'], snapshot['attribution_reference'],
-             '{}', snapshot['units'], snapshot['unit_fee_cents'],
+             json.dumps(review, sort_keys=True, separators=(',', ':')),
+             snapshot['units'], snapshot['unit_fee_cents'],
              snapshot['fee_cents'], snapshot['occurred_at'], event_hash),
         )
         self.assertTrue(mission_control._verified_attributed_outcome_event(
@@ -1237,6 +1292,16 @@ class MissionControlTests(unittest.TestCase):
         )
         self.assertFalse(mission_control._verified_attributed_outcome_event(
             conn, snapshot['opportunity_id'], event_id, forged_hash))
+        conn.execute(
+            'UPDATE attributed_outcome_events SET event_hash=? WHERE event_id=?',
+            (event_hash, event_id),
+        )
+        conn.execute(
+            'UPDATE outcome_pricing_terms SET terms_hash=? WHERE term_id=?',
+            ('d' * 64, snapshot['term_id']),
+        )
+        self.assertFalse(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], event_id, event_hash))
 
     def test_nonfinite_evidence_cannot_insert_or_replace_measurements(self):
         conn = mission_control.connect(self.path)
