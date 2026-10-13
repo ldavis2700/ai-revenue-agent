@@ -257,10 +257,14 @@ def _verified_submission_artifact(conn, opportunity_id, receipt_id):
 def _verified_response_artifact(
         conn, opportunity_id, receipt_id, stage):
     row = conn.execute(
-        '''SELECT submission_receipt_id,provider,external_message_id,
-                  message_url,received_at,receipt_hash
-           FROM response_receipts
-           WHERE receipt_id=? AND opportunity_id=?''',
+        '''SELECT rr.submission_receipt_id,rr.provider,
+                  rr.external_message_id,rr.message_url,rr.received_at,
+                  rr.receipt_hash,sr.provider
+           FROM response_receipts rr
+           JOIN submission_receipts sr
+             ON sr.receipt_id=rr.submission_receipt_id
+            AND sr.opportunity_id=rr.opportunity_id
+           WHERE rr.receipt_id=? AND rr.opportunity_id=?''',
         (receipt_id, opportunity_id),
     ).fetchone()
     if row is None:
@@ -279,6 +283,7 @@ def _verified_response_artifact(
     ).encode()).hexdigest()
     return (
         _canonical_ledger_id(row[0], 'subr_')
+        and row[1] == row[6]
         and row[5] == expected
         and receipt_id == 'respr_' + expected[:24]
         and _verified_submission_artifact(
