@@ -524,6 +524,17 @@ def _verified_attributed_outcome_event(
             ).encode()).hexdigest()
         except (TypeError, json.JSONDecodeError):
             return False
+        try:
+            occurred_at = datetime.fromisoformat(
+                str(row[11]).replace('Z', '+00:00'))
+            reviewed_at = datetime.fromisoformat(
+                str(review.get('reviewed_at')).replace('Z', '+00:00'))
+            if occurred_at.tzinfo is None or reviewed_at.tzinfo is None:
+                return False
+        except (TypeError, ValueError):
+            return False
+        if reviewed_at < occurred_at:
+            return False
         if (
             row[0] != binding.get('term_id')
             or terms[0] != binding.get('accepted_terms_hash')
@@ -553,6 +564,15 @@ def _verified_attributed_outcome_event(
                     str(decision.get('artifact_sha256') or ''))
             ):
                 return False
+            try:
+                decided_at = datetime.fromisoformat(
+                    str(decision.get('decided_at')).replace('Z', '+00:00'))
+                if decided_at.tzinfo is None or decided_at < reviewed_at:
+                    return False
+            except (TypeError, ValueError):
+                return False
+        elif review.get('human_escalation_decision') is not None:
+            return False
         snapshot = {
             'opportunity_id': opportunity_id,
             'term_id': row[0],
