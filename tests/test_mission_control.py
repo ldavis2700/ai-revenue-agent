@@ -1285,6 +1285,34 @@ class MissionControlTests(unittest.TestCase):
         self.assertTrue(mission_control._verified_attributed_outcome_event(
             conn, snapshot['opportunity_id'], event_id, event_hash))
 
+        arithmetic_forgery = dict(snapshot)
+        arithmetic_forgery['external_event_id'] = 'event_bad_arithmetic'
+        arithmetic_forgery['fee_cents'] = 10001
+        arithmetic_hash = hashlib.sha256(json.dumps(
+            arithmetic_forgery, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        arithmetic_event_id = 'oute_' + arithmetic_hash[:24]
+        conn.execute(
+            'INSERT INTO attributed_outcome_events VALUES '
+            '(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (arithmetic_event_id, arithmetic_forgery['opportunity_id'],
+             arithmetic_forgery['term_id'],
+             arithmetic_forgery['contract_receipt_id'],
+             arithmetic_forgery['provider'],
+             arithmetic_forgery['external_event_id'],
+             arithmetic_forgery['evidence_url'],
+             arithmetic_forgery['artifact_sha256'],
+             arithmetic_forgery['attribution_reference'],
+             json.dumps(review, sort_keys=True, separators=(',', ':')),
+             arithmetic_forgery['units'],
+             arithmetic_forgery['unit_fee_cents'],
+             arithmetic_forgery['fee_cents'],
+             arithmetic_forgery['occurred_at'], arithmetic_hash),
+        )
+        self.assertFalse(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], arithmetic_event_id,
+            arithmetic_hash))
+
         forged_hash = 'f' * 64
         conn.execute(
             'UPDATE attributed_outcome_events SET event_hash=? WHERE event_id=?',
