@@ -448,7 +448,7 @@ def _contract_context_for_qa_lineage(conn, opportunity_id, report_id):
            WHERE qr.report_id=? AND qr.opportunity_id=?''',
         (report_id, opportunity_id),
     ).fetchone()
-    return None if row is None else row[0]
+    return None if row is None else (row[0], row[1])
 
 def _verified_delivery_artifact(conn, opportunity_id, receipt_id):
     row = conn.execute(
