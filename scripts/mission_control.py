@@ -538,7 +538,7 @@ def _verified_attributed_outcome_event(
             or row[10] > binding.get('accepted_fee_cap_cents')
             or review.get('reviewed_terms_hash') != terms[0]
             or review.get('reviewed_exclusions_hash') != exclusions_hash
-            or review.get('artifact_sha256') != row[5]
+            or review.get('matched_exclusions') != []
             or not re.fullmatch(
                 r'[0-9a-f]{64}', str(review.get('artifact_sha256') or ''))
         ):
