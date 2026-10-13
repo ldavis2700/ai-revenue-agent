@@ -1187,6 +1187,57 @@ class MissionControlTests(unittest.TestCase):
         self.assertEqual(model['observed_cost'], 270)
         self.assertTrue(model['_ledger_verified'])
 
+    def test_invoice_priority_recomputes_outcome_event_hashes(self):
+        conn = mission_control.connect(self.path)
+        self.addCleanup(conn.close)
+        conn.execute("""CREATE TABLE attributed_outcome_events (
+            event_id TEXT, opportunity_id TEXT, term_id TEXT,
+            contract_receipt_id TEXT, provider TEXT, external_event_id TEXT,
+            evidence_url TEXT, artifact_sha256 TEXT,
+            attribution_reference TEXT, eligibility_review_json TEXT,
+            units INTEGER, unit_fee_cents INTEGER, fee_cents INTEGER,
+            occurred_at TEXT, event_hash TEXT
+        )""")
+        snapshot = {
+            'opportunity_id': 'opp_outcome',
+            'term_id': 'term_1',
+            'contract_receipt_id': 'contr_123456789012345678901234',
+            'provider': 'authorized_marketplace',
+            'external_event_id': 'event_external',
+            'evidence_url': 'https://example.com/outcome',
+            'artifact_sha256': 'a' * 64,
+            'attribution_reference': 'buyer-approved-result',
+            'eligibility_review': {},
+            'units': 2,
+            'unit_fee_cents': 5000,
+            'fee_cents': 10000,
+            'occurred_at': '2026-10-12T00:00:00+00:00',
+        }
+        event_hash = hashlib.sha256(json.dumps(
+            snapshot, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        event_id = 'oute_' + event_hash[:24]
+        conn.execute(
+            'INSERT INTO attributed_outcome_events VALUES '
+            '(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (event_id, snapshot['opportunity_id'], snapshot['term_id'],
+             snapshot['contract_receipt_id'], snapshot['provider'],
+             snapshot['external_event_id'], snapshot['evidence_url'],
+             snapshot['artifact_sha256'], snapshot['attribution_reference'],
+             '{}', snapshot['units'], snapshot['unit_fee_cents'],
+             snapshot['fee_cents'], snapshot['occurred_at'], event_hash),
+        )
+        self.assertTrue(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], event_id, event_hash))
+
+        forged_hash = 'f' * 64
+        conn.execute(
+            'UPDATE attributed_outcome_events SET event_hash=? WHERE event_id=?',
+            (forged_hash, event_id),
+        )
+        self.assertFalse(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], event_id, forged_hash))
+
     def test_nonfinite_evidence_cannot_insert_or_replace_measurements(self):
         conn = mission_control.connect(self.path)
         self.addCleanup(conn.close)
