@@ -381,11 +381,55 @@ class MissionControlTests(unittest.TestCase):
             ('https://example.com/tampered', 'offer'),
         )
         tampered_metrics = mission_control.snapshot(conn)
+        reply_submission_id = conn.execute(
+            'SELECT receipt_id FROM submission_receipts '
+            'WHERE opportunity_id=?',
+            ('reply',),
+        ).fetchone()[0]
+        cross_provider_response = {
+            'opportunity_id': 'reply',
+            'submission_receipt_id': reply_submission_id,
+            'provider': 'substituted_marketplace',
+            'external_message_id': 'message_reply',
+            'message_url': 'https://example.com/reply',
+            'received_at': '2026-10-12T00:00:00+00:00',
+            'stage': 'buyer_reply',
+        }
+        cross_provider_hash = hashlib.sha256(json.dumps(
+            cross_provider_response, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        cross_provider_id = 'respr_' + cross_provider_hash[:24]
+        cross_provider_evidence = 'reply:' + cross_provider_id
+        conn.execute(
+            'DELETE FROM response_receipts WHERE opportunity_id=?',
+            ('reply',),
+        )
+        conn.execute(
+            'DELETE FROM opportunity_transitions WHERE opportunity_id=?',
+            ('reply',),
+        )
+        conn.execute(
+            'INSERT INTO response_receipts VALUES (?,?,?,?,?,?,?,?)',
+            (cross_provider_id, 'reply', reply_submission_id,
+             cross_provider_response['provider'],
+             cross_provider_response['external_message_id'],
+             cross_provider_response['message_url'],
+             cross_provider_response['received_at'],
+             cross_provider_hash),
+        )
+        conn.execute(
+            'INSERT INTO opportunity_transitions VALUES (?,?,?,?)',
+            ('reply', 'buyer_reply', cross_provider_evidence,
+             hashlib.sha256(cross_provider_evidence.encode()).hexdigest()),
+        )
+        cross_provider_metrics = mission_control.snapshot(conn)
         conn.close()
         plan = mission_control.build_plan(metrics)
 
         self.assertEqual(metrics['active_buyer_opportunities'], 2)
         self.assertEqual(tampered_metrics['active_buyer_opportunities'], 1)
+        self.assertEqual(
+            cross_provider_metrics['active_buyer_opportunities'], 0)
         self.assertEqual(
             tampered_metrics['highest_active_buyer_stage'], 'buyer_reply')
         self.assertEqual(metrics['highest_active_buyer_stage'], 'offer')
