@@ -1285,6 +1285,34 @@ class MissionControlTests(unittest.TestCase):
         self.assertTrue(mission_control._verified_attributed_outcome_event(
             conn, snapshot['opportunity_id'], event_id, event_hash))
 
+        review_forgery = dict(review)
+        review_forgery['artifact_sha256'] = 'd' * 64
+        review_snapshot = dict(snapshot)
+        review_snapshot['external_event_id'] = 'event_bad_review_artifact'
+        review_snapshot['eligibility_review'] = review_forgery
+        review_hash = hashlib.sha256(json.dumps(
+            review_snapshot, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        review_event_id = 'oute_' + review_hash[:24]
+        conn.execute(
+            'INSERT INTO attributed_outcome_events VALUES '
+            '(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (review_event_id, review_snapshot['opportunity_id'],
+             review_snapshot['term_id'],
+             review_snapshot['contract_receipt_id'],
+             review_snapshot['provider'],
+             review_snapshot['external_event_id'],
+             review_snapshot['evidence_url'],
+             review_snapshot['artifact_sha256'],
+             review_snapshot['attribution_reference'],
+             json.dumps(review_forgery, sort_keys=True, separators=(',', ':')),
+             review_snapshot['units'], review_snapshot['unit_fee_cents'],
+             review_snapshot['fee_cents'], review_snapshot['occurred_at'],
+             review_hash),
+        )
+        self.assertFalse(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], review_event_id, review_hash))
+
         arithmetic_forgery = dict(snapshot)
         arithmetic_forgery['external_event_id'] = 'event_bad_arithmetic'
         arithmetic_forgery['fee_cents'] = 10001
