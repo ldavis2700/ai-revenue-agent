@@ -625,6 +625,34 @@ class MissionControlTests(unittest.TestCase):
              delivery_hash),
         )
 
+        self.assertTrue(mission_control._buyer_stage_artifact_exists(
+            conn, delivery['opportunity_id'], 'delivered',
+            'delivery:' + delivery_id))
+        cross_provider_delivery = {
+            **delivery,
+            'provider': 'substituted_marketplace',
+            'external_delivery_id': 'delivery_provider_mismatch',
+        }
+        cross_delivery_serialized = json.dumps(
+            cross_provider_delivery, sort_keys=True, separators=(',', ':'))
+        cross_delivery_hash = hashlib.sha256(
+            cross_delivery_serialized.encode()).hexdigest()
+        cross_delivery_id = 'delr_' + cross_delivery_hash[:24]
+        conn.execute(
+            'INSERT INTO delivery_receipts VALUES (?,?,?,?,?,?,?,?,?)',
+            (cross_delivery_id, cross_provider_delivery['opportunity_id'],
+             cross_provider_delivery['qa_report_id'],
+             cross_provider_delivery['provider'],
+             cross_provider_delivery['external_delivery_id'],
+             cross_provider_delivery['delivery_url'],
+             cross_provider_delivery['artifact_sha256'],
+             cross_provider_delivery['delivered_at'],
+             cross_delivery_hash),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, cross_provider_delivery['opportunity_id'], 'delivered',
+            'delivery:' + cross_delivery_id))
+
         conn.execute('''CREATE TABLE invoice_receipts (
             receipt_id TEXT, opportunity_id TEXT, delivery_receipt_id TEXT,
             provider TEXT, external_invoice_id TEXT, invoice_url TEXT,
@@ -663,6 +691,33 @@ class MissionControlTests(unittest.TestCase):
         self.assertTrue(mission_control._buyer_stage_artifact_exists(
             conn, invoice['opportunity_id'], 'invoiced',
             'invoice:' + invoice_id))
+
+        cross_provider_invoice = {
+            **invoice,
+            'provider': 'substituted_marketplace',
+            'external_invoice_id': 'invoice_provider_mismatch',
+        }
+        cross_invoice_serialized = json.dumps(
+            cross_provider_invoice, sort_keys=True, separators=(',', ':'))
+        cross_invoice_hash = hashlib.sha256(
+            cross_invoice_serialized.encode()).hexdigest()
+        cross_invoice_id = 'invr_' + cross_invoice_hash[:24]
+        conn.execute(
+            'INSERT INTO invoice_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            (cross_invoice_id, cross_provider_invoice['opportunity_id'],
+             cross_provider_invoice['delivery_receipt_id'],
+             cross_provider_invoice['provider'],
+             cross_provider_invoice['external_invoice_id'],
+             cross_provider_invoice['invoice_url'],
+             cross_provider_invoice['amount_cents'],
+             cross_provider_invoice['currency'],
+             cross_provider_invoice['issued_at'],
+             cross_provider_invoice['due_at'],
+             cross_invoice_hash),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, cross_provider_invoice['opportunity_id'], 'invoiced',
+            'invoice:' + cross_invoice_id))
 
         for index, invalid_delivery_id in enumerate((
             'qar_cccccccccccccccccccccccc',
