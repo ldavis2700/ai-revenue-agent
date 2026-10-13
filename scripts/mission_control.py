@@ -434,6 +434,22 @@ def _verified_qa_artifact(conn, opportunity_id, report_id):
     )
 
 
+
+def _provider_for_qa_lineage(conn, opportunity_id, report_id):
+    row = conn.execute(
+        '''SELECT cr.provider
+           FROM qa_reports qr
+           JOIN execution_plans ep
+             ON ep.plan_id=qr.execution_plan_id
+            AND ep.opportunity_id=qr.opportunity_id
+           JOIN contract_receipts cr
+             ON cr.receipt_id=ep.contract_receipt_id
+            AND cr.opportunity_id=ep.opportunity_id
+           WHERE qr.report_id=? AND qr.opportunity_id=?''',
+        (report_id, opportunity_id),
+    ).fetchone()
+    return None if row is None else row[0]
+
 def _verified_delivery_artifact(conn, opportunity_id, receipt_id):
     row = conn.execute(
         '''SELECT qa_report_id,provider,external_delivery_id,
@@ -456,8 +472,12 @@ def _verified_delivery_artifact(conn, opportunity_id, receipt_id):
     expected = hashlib.sha256(json.dumps(
         snapshot, sort_keys=True, separators=(',', ':')
     ).encode()).hexdigest()
+    contract_provider = _provider_for_qa_lineage(
+        conn, opportunity_id, row[0])
     return (
         _canonical_ledger_id(row[0], 'qar_')
+        and contract_provider is not None
+        and row[1] == contract_provider
         and row[6] == expected
         and receipt_id == 'delr_' + expected[:24]
         and _verified_qa_artifact(conn, opportunity_id, row[0])
@@ -544,8 +564,15 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
             expected = hashlib.sha256(json.dumps(
                 snapshot, sort_keys=True, separators=(',', ':')
             ).encode()).hexdigest()
+            delivery_provider = conn.execute(
+                '''SELECT provider FROM delivery_receipts
+                   WHERE receipt_id=? AND opportunity_id=?''',
+                (row[0], opportunity_id),
+            ).fetchone()
             return (
                 _canonical_ledger_id(row[0], 'delr_')
+                and delivery_provider is not None
+                and row[1] == delivery_provider[0]
                 and row[8] == expected
                 and receipt_id == 'invr_' + expected[:24]
                 and _verified_delivery_artifact(
