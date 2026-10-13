@@ -565,7 +565,8 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
                 snapshot, sort_keys=True, separators=(',', ':')
             ).encode()).hexdigest()
             delivery_lineage = conn.execute(
-                '''SELECT provider,qa_report_id FROM delivery_receipts
+                '''SELECT provider,qa_report_id,delivered_at
+                   FROM delivery_receipts
                    WHERE receipt_id=? AND opportunity_id=?''',
                 (row[0], opportunity_id),
             ).fetchone()
@@ -575,6 +576,13 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
                 else _contract_context_for_qa_lineage(
                     conn, opportunity_id, delivery_lineage[1])
             )
+            delivered_at = (
+                None
+                if delivery_lineage is None
+                else datetime.fromisoformat(delivery_lineage[2])
+            )
+            issued_at = datetime.fromisoformat(row[6])
+            due_at = datetime.fromisoformat(row[7])
             return (
                 _canonical_ledger_id(row[0], 'delr_')
                 and delivery_lineage is not None
@@ -583,6 +591,7 @@ def _buyer_stage_artifact_exists(conn, opportunity_id, stage, evidence_id):
                 and isinstance(row[4], int)
                 and 0 < row[4] <= contract_context[1]
                 and row[5] == contract_context[2]
+                and delivered_at <= issued_at < due_at
                 and row[8] == expected
                 and receipt_id == 'invr_' + expected[:24]
                 and _verified_delivery_artifact(
