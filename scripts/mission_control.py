@@ -218,6 +218,16 @@ def _contract_terms_binding(
     ).encode()).hexdigest()
     if row[5] != expected:
         return False
+    try:
+        accepted_at = datetime.fromisoformat(
+            str(binding['accepted_at']).replace('Z', '+00:00'))
+        if (
+            accepted_at.tzinfo is None
+            or accepted_at > datetime.now(timezone.utc)
+        ):
+            return False
+    except (TypeError, ValueError):
+        return False
     return binding
 
 def _canonical_ledger_id(value, prefix):
