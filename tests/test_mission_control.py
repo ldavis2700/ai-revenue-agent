@@ -1310,6 +1310,29 @@ class MissionControlTests(unittest.TestCase):
              binding['contract_receipt_id'], binding['opportunity_id']),
         )
 
+        insecure_binding = dict(binding)
+        insecure_binding['acceptance_evidence_url'] = 'http://example.com/terms'
+        insecure_binding_hash = hashlib.sha256(json.dumps(
+            insecure_binding, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        conn.execute(
+            """UPDATE contract_outcome_terms
+               SET acceptance_evidence_url=?, binding_hash=?
+               WHERE contract_receipt_id=? AND opportunity_id=?""",
+            (insecure_binding['acceptance_evidence_url'],
+             insecure_binding_hash, binding['contract_receipt_id'],
+             binding['opportunity_id']),
+        )
+        self.assertFalse(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], event_id, event_hash))
+        conn.execute(
+            """UPDATE contract_outcome_terms
+               SET acceptance_evidence_url=?, binding_hash=?
+               WHERE contract_receipt_id=? AND opportunity_id=?""",
+            (binding['acceptance_evidence_url'], binding_hash,
+             binding['contract_receipt_id'], binding['opportunity_id']),
+        )
+
         review_forgery = dict(review)
         review_forgery['matched_exclusions'] = ['excluded-outcome']
         review_snapshot = dict(snapshot)
