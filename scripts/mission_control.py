@@ -181,6 +181,7 @@ def verified_receipt_rows(conn, table):
                     _credible_https_evidence_url(item[column])
                     for column in evidence_urls
                 )
+                and _valid_receipt_amounts(item, table)
                 and _valid_receipt_chronology(item, table)):
             verified.append(item)
     return verified
@@ -214,6 +215,45 @@ def _credible_https_evidence_url(value):
             and parsed.username is None
             and parsed.password is None
         )
+    except ValueError:
+        return False
+
+
+def _valid_receipt_amounts(item, table):
+    """Require canonical currency and internally consistent positive money."""
+    currency = item.get('currency')
+    if (
+        not isinstance(currency, str)
+        or re.fullmatch(r'[A-Z]{3}', currency) is None
+    ):
+        return False
+
+    def cents(field, *, allow_zero=False):
+        value = item.get(field)
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value < 0
+            or (not allow_zero and value == 0)
+        ):
+            raise ValueError(f'{field} is not a valid monetary amount')
+        return value
+
+    try:
+        if table in {'payment_receipts', 'recurring_payment_receipts'}:
+            gross = cents('gross_amount_cents')
+            fee = cents('fee_amount_cents', allow_zero=True)
+            net = cents('net_amount_cents')
+            return fee <= gross and net == gross - fee
+        if table in {
+            'payout_availability_receipts',
+            'recurring_payout_availability_receipts',
+            'bank_receipts',
+            'recurring_bank_receipts',
+        }:
+            cents('amount_cents')
+            return True
+        return False
     except ValueError:
         return False
 
