@@ -416,6 +416,19 @@ class OpportunityIntakeTests(unittest.TestCase):
             result["rejections"][0]["reason"],
             "buyer_stage_evidence_url_required")
 
+    def test_issue_164_active_buyer_evidence_requires_https(self):
+        insecure = candidate(
+            external_id="insecure-buyer-evidence",
+            buyer_stage="buyer_reply",
+            buyer_stage_evidence_url="http://example.com/messages/reply",
+            buyer_stage_evidence_at=(NOW - timedelta(minutes=5)).isoformat(),
+        )
+        result = opportunity_intake.ingest([insecure], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(
+            result["rejections"][0]["reason"],
+            "buyer_stage_evidence_url_https_required")
+
     def test_issue_164_buyer_stage_evidence_must_be_fresh_and_non_future(self):
         stale = candidate(
             external_id="stale-buyer-reply",
