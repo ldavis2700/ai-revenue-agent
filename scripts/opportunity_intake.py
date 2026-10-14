@@ -916,8 +916,16 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
     buyer_stage = str(payload.get("buyer_stage") or "prospect").strip().lower()
     if buyer_stage not in BUYER_STAGE_SCORES:
         raise ValueError("buyer_stage_invalid")
-    buyer_stage_evidence_url = canonical_url(
-        payload.get("buyer_stage_evidence_url"))
+    raw_buyer_stage_evidence_url = payload.get("buyer_stage_evidence_url")
+    if buyer_stage != "prospect" and raw_buyer_stage_evidence_url:
+        try:
+            raw_buyer_stage_url = urlsplit(
+                str(raw_buyer_stage_evidence_url).strip())
+        except ValueError as exc:
+            raise ValueError("buyer_stage_evidence_url_invalid") from exc
+        if raw_buyer_stage_url.username is not None or raw_buyer_stage_url.password is not None:
+            raise ValueError("buyer_stage_evidence_url_credentials_forbidden")
+    buyer_stage_evidence_url = canonical_url(raw_buyer_stage_evidence_url)
     buyer_stage_evidence_at = None
     if buyer_stage != "prospect":
         if not buyer_stage_evidence_url:
