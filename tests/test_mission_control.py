@@ -242,6 +242,13 @@ class MissionControlTests(unittest.TestCase):
             net_amount_cents INTEGER, currency TEXT, paid_at TEXT,
             settled_at TEXT, receipt_hash TEXT
         )''')
+        conn.execute('''CREATE TABLE payout_availability_receipts (
+            receipt_id TEXT PRIMARY KEY, opportunity_id TEXT,
+            payment_receipt_id TEXT, provider TEXT,
+            external_balance_id TEXT, evidence_url TEXT,
+            amount_cents INTEGER, currency TEXT, available_at TEXT,
+            receipt_hash TEXT
+        )''')
 
         # Insert explicitly to keep the SQL column order obvious.
         valid = {
@@ -255,9 +262,10 @@ class MissionControlTests(unittest.TestCase):
         }
         serialized = json.dumps(valid, sort_keys=True, separators=(',', ':'))
         valid_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        valid_receipt_id = 'payr_' + valid_hash[:24]
         conn.execute(
             'INSERT INTO payment_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
-            ('payr_' + valid_hash[:24], *valid.values(), valid_hash))
+            (valid_receipt_id, *valid.values(), valid_hash))
 
         forged = dict(valid)
         forged['external_transaction_id'] = 'txn_tampered'
@@ -337,6 +345,31 @@ class MissionControlTests(unittest.TestCase):
                 ('payr_' + invalid_hash[:24],
                  *invalid_amount.values(), invalid_hash),
             )
+        payout_cases = (
+            ('valid', valid_receipt_id, 9500),
+            ('amount_mismatch', valid_receipt_id, 9600),
+            ('orphan', 'payr_missing', 9500),
+        )
+        for name, payment_receipt_id, amount in payout_cases:
+            payout = {
+                'opportunity_id': 'opp_1',
+                'payment_receipt_id': payment_receipt_id,
+                'provider': 'stripe',
+                'external_balance_id': f'balance_{name}',
+                'evidence_url': f'https://example.com/balance_{name}',
+                'amount_cents': amount,
+                'currency': 'USD',
+                'available_at': '2026-10-09T00:00:00+00:00',
+            }
+            payout_hash = hashlib.sha256(json.dumps(
+                payout, sort_keys=True, separators=(',', ':')
+            ).encode()).hexdigest()
+            conn.execute(
+                'INSERT INTO payout_availability_receipts VALUES '
+                '(?,?,?,?,?,?,?,?,?,?)',
+                ('pavr_' + payout_hash[:24],
+                 *payout.values(), payout_hash),
+            )
         conn.commit()
 
         metrics = mission_control.snapshot(conn)
@@ -344,6 +377,8 @@ class MissionControlTests(unittest.TestCase):
         self.assertEqual(metrics['verified_collected_payments'], 1)
         self.assertEqual(metrics['verified_gross_revenue'], 100)
         self.assertEqual(metrics['verified_net_revenue'], 95)
+        self.assertEqual(
+            metrics['verified_one_time_withdrawable_balance'], 95)
 
     def test_active_buyer_stage_outranks_new_prospecting(self):
         conn = sqlite3.connect(self.path)
