@@ -182,7 +182,8 @@ def verified_receipt_rows(conn, table):
                     for column in evidence_urls
                 )
                 and _valid_receipt_amounts(item, table)
-                and _valid_receipt_chronology(item, table)):
+                and _valid_receipt_chronology(item, table)
+                and _valid_receipt_lineage(conn, item, table)):
             verified.append(item)
     return verified
 
@@ -256,6 +257,53 @@ def _valid_receipt_amounts(item, table):
         return False
     except ValueError:
         return False
+
+
+def _valid_receipt_lineage(conn, item, table):
+    """Bind withdrawable and received money to its verified parent state."""
+    if table in {'payment_receipts', 'recurring_payment_receipts'}:
+        return True
+    lineage = {
+        'payout_availability_receipts': (
+            'payment_receipts', 'payment_receipt_id'),
+        'recurring_payout_availability_receipts': (
+            'recurring_payment_receipts', 'recurring_payment_receipt_id'),
+        'bank_receipts': (
+            'payout_availability_receipts',
+            'payout_availability_receipt_id'),
+        'recurring_bank_receipts': (
+            'recurring_payout_availability_receipts',
+            'recurring_payout_receipt_id'),
+    }
+    parent_table, parent_key = lineage.get(table, (None, None))
+    if parent_table is None:
+        return False
+    parent_id = item.get(parent_key)
+    parent = next(
+        (row for row in verified_receipt_rows(conn, parent_table)
+         if row['receipt_id'] == parent_id),
+        None,
+    )
+    if parent is None:
+        return False
+    parent_amount = (
+        parent.get('net_amount_cents')
+        if parent_table in {
+            'payment_receipts', 'recurring_payment_receipts'}
+        else parent.get('amount_cents')
+    )
+    if (
+        item.get('opportunity_id') != parent.get('opportunity_id')
+        or item.get('currency') != parent.get('currency')
+        or item.get('amount_cents') != parent_amount
+    ):
+        return False
+    if table in {
+        'payout_availability_receipts',
+        'recurring_payout_availability_receipts',
+    } and item.get('provider') != parent.get('provider'):
+        return False
+    return True
 
 
 def _valid_receipt_chronology(item, table):
