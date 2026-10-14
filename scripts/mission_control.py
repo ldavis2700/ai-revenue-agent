@@ -133,6 +133,15 @@ RECEIPT_SPECS = {
     ),
 }
 
+RECEIPT_EVIDENCE_URL_COLUMNS = {
+    'payment_receipts': ('transaction_url',),
+    'recurring_payment_receipts': ('invoice_url', 'transaction_url'),
+    'payout_availability_receipts': ('evidence_url',),
+    'recurring_payout_availability_receipts': ('evidence_url',),
+    'bank_receipts': ('evidence_url',),
+    'recurring_bank_receipts': ('evidence_url',),
+}
+
 
 def verified_receipt_rows(conn, table):
     """Return only hash-consistent rows from a production receipt table.
@@ -165,8 +174,13 @@ def verified_receipt_rows(conn, table):
         snapshot = {key: item[key] for key in snapshot_columns}
         serialized = json.dumps(snapshot, sort_keys=True, separators=(',', ':'))
         expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        evidence_urls = RECEIPT_EVIDENCE_URL_COLUMNS.get(table, ())
         if (item['receipt_hash'] == expected_hash
-                and item['receipt_id'] == prefix + expected_hash[:24]):
+                and item['receipt_id'] == prefix + expected_hash[:24]
+                and all(
+                    _credible_https_evidence_url(item[column])
+                    for column in evidence_urls
+                )):
             verified.append(item)
     return verified
 
