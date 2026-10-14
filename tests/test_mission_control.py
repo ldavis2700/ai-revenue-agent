@@ -312,6 +312,31 @@ class MissionControlTests(unittest.TestCase):
                 ('payr_' + invalid_hash[:24],
                  *invalid_time.values(), invalid_hash),
             )
+
+        amount_cases = (
+            ('inconsistent_net', 10000, 500, 9600, 'USD'),
+            ('negative_fee', 10000, -100, 10100, 'USD'),
+            ('zero_payment', 0, 0, 0, 'USD'),
+            ('noncanonical_currency', 10000, 500, 9500, 'usd'),
+        )
+        for name, gross, fee, net, currency in amount_cases:
+            invalid_amount = dict(valid)
+            invalid_amount['external_transaction_id'] = f'txn_{name}'
+            invalid_amount['transaction_url'] = (
+                f'https://example.com/txn_{name}')
+            invalid_amount['gross_amount_cents'] = gross
+            invalid_amount['fee_amount_cents'] = fee
+            invalid_amount['net_amount_cents'] = net
+            invalid_amount['currency'] = currency
+            invalid_hash = hashlib.sha256(json.dumps(
+                invalid_amount, sort_keys=True, separators=(',', ':')
+            ).encode()).hexdigest()
+            conn.execute(
+                'INSERT INTO payment_receipts VALUES '
+                '(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                ('payr_' + invalid_hash[:24],
+                 *invalid_amount.values(), invalid_hash),
+            )
         conn.commit()
 
         metrics = mission_control.snapshot(conn)
