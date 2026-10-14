@@ -128,6 +128,21 @@ class MissionControlTests(unittest.TestCase):
         )
         return contract_id
 
+    def test_buyer_evidence_urls_require_credential_free_https_hostname(self):
+        self.assertTrue(mission_control._credible_https_evidence_url(
+            'https://marketplace.example/evidence/123'))
+        for invalid in (
+            'http://marketplace.example/evidence/123',
+            'https://?evidence=123',
+            'https://user:secret@marketplace.example/evidence/123',
+            'javascript:alert(1)',
+            '',
+            None,
+        ):
+            with self.subTest(url=invalid):
+                self.assertFalse(
+                    mission_control._credible_https_evidence_url(invalid))
+
     def test_defaults_to_safe_preparation_mode(self):
         result = mission_control.run(self.path)
         self.assertEqual(result['mode'], 'analysis_and_preparation_only')
