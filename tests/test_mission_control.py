@@ -1333,6 +1333,34 @@ class MissionControlTests(unittest.TestCase):
              binding['contract_receipt_id'], binding['opportunity_id']),
         )
 
+        for deceptive_url in (
+            'https://?evidence=terms',
+            'https://user:secret@example.com/terms',
+        ):
+            deceptive_binding = dict(binding)
+            deceptive_binding['acceptance_evidence_url'] = deceptive_url
+            deceptive_binding_hash = hashlib.sha256(json.dumps(
+                deceptive_binding, sort_keys=True, separators=(',', ':')
+            ).encode()).hexdigest()
+            conn.execute(
+                """UPDATE contract_outcome_terms
+                   SET acceptance_evidence_url=?, binding_hash=?
+                   WHERE contract_receipt_id=? AND opportunity_id=?""",
+                (deceptive_url, deceptive_binding_hash,
+                 binding['contract_receipt_id'],
+                 binding['opportunity_id']),
+            )
+            self.assertFalse(
+                mission_control._verified_attributed_outcome_event(
+                    conn, snapshot['opportunity_id'], event_id, event_hash))
+        conn.execute(
+            """UPDATE contract_outcome_terms
+               SET acceptance_evidence_url=?, binding_hash=?
+               WHERE contract_receipt_id=? AND opportunity_id=?""",
+            (binding['acceptance_evidence_url'], binding_hash,
+             binding['contract_receipt_id'], binding['opportunity_id']),
+        )
+
         review_forgery = dict(review)
         review_forgery['matched_exclusions'] = ['excluded-outcome']
         review_snapshot = dict(snapshot)
