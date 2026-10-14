@@ -922,6 +922,8 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
     if buyer_stage != "prospect":
         if not buyer_stage_evidence_url:
             raise ValueError("buyer_stage_evidence_url_required")
+        if urlsplit(buyer_stage_evidence_url).scheme != "https":
+            raise ValueError("buyer_stage_evidence_url_https_required")
         buyer_stage_evidence_at = parse_time(
             payload.get("buyer_stage_evidence_at"),
             "buyer_stage_evidence_at")
