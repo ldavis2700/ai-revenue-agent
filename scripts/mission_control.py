@@ -303,6 +303,27 @@ def _valid_receipt_lineage(conn, item, table):
         'recurring_payout_availability_receipts',
     } and item.get('provider') != parent.get('provider'):
         return False
+
+    # A cryptographically intact receipt can still describe an impossible
+    # sequence. Withdrawable funds must not predate settlement, and bank
+    # receipt evidence must not predate payout availability.
+    child_time_field, parent_time_field = (
+        ('available_at', 'settled_at')
+        if table in {
+            'payout_availability_receipts',
+            'recurring_payout_availability_receipts',
+        }
+        else ('received_at', 'available_at')
+    )
+    try:
+        child_time = datetime.fromisoformat(
+            str(item.get(child_time_field)).replace('Z', '+00:00'))
+        parent_time = datetime.fromisoformat(
+            str(parent.get(parent_time_field)).replace('Z', '+00:00'))
+        if child_time < parent_time:
+            return False
+    except (TypeError, ValueError):
+        return False
     return True
 
 
