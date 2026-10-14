@@ -180,7 +180,8 @@ def verified_receipt_rows(conn, table):
                 and all(
                     _credible_https_evidence_url(item[column])
                     for column in evidence_urls
-                )):
+                )
+                and _valid_receipt_chronology(item, table)):
             verified.append(item)
     return verified
 
@@ -214,6 +215,43 @@ def _credible_https_evidence_url(value):
             and parsed.password is None
         )
     except ValueError:
+        return False
+
+
+def _valid_receipt_chronology(item, table):
+    """Require timezone-aware, non-future money-state evidence."""
+    try:
+        def parsed(field):
+            value = datetime.fromisoformat(
+                str(item.get(field)).replace('Z', '+00:00'))
+            if value.tzinfo is None:
+                raise ValueError(f'{field} must include a timezone')
+            return value
+
+        now = datetime.now(timezone.utc)
+        if table == 'payment_receipts':
+            paid_at = parsed('paid_at')
+            settled_at = parsed('settled_at')
+            return paid_at <= settled_at <= now
+        if table == 'recurring_payment_receipts':
+            period_start = parsed('service_period_start')
+            period_end = parsed('service_period_end')
+            invoiced_at = parsed('invoiced_at')
+            paid_at = parsed('paid_at')
+            settled_at = parsed('settled_at')
+            return (
+                period_start < period_end
+                and invoiced_at <= paid_at <= settled_at <= now
+            )
+        if table in {
+            'payout_availability_receipts',
+            'recurring_payout_availability_receipts',
+        }:
+            return parsed('available_at') <= now
+        if table in {'bank_receipts', 'recurring_bank_receipts'}:
+            return parsed('received_at') <= now
+        return False
+    except (TypeError, ValueError):
         return False
 
 
