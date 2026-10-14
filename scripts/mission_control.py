@@ -8,6 +8,7 @@ import re
 import sqlite3
 import sys
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
@@ -219,16 +220,24 @@ def _contract_terms_binding(
     if row[5] != expected:
         return False
     accepted_amount = binding.get(amount_key)
+    try:
+        evidence_url = urlsplit(
+            str(binding['acceptance_evidence_url'] or ''))
+        evidence_url_valid = (
+            evidence_url.scheme == 'https'
+            and evidence_url.hostname is not None
+            and evidence_url.username is None
+            and evidence_url.password is None
+        )
+    except ValueError:
+        evidence_url_valid = False
     if (
         re.fullmatch(r'[0-9a-f]{64}', str(binding['accepted_terms_hash'] or ''))
         is None
         or not isinstance(accepted_amount, int)
         or isinstance(accepted_amount, bool)
         or accepted_amount <= 0
-        or re.fullmatch(
-            r'https://[^\s]+',
-            str(binding['acceptance_evidence_url'] or ''),
-        ) is None
+        or not evidence_url_valid
     ):
         return False
     try:
