@@ -353,12 +353,17 @@ class MissionControlTests(unittest.TestCase):
                  *invalid_amount.values(), invalid_hash),
             )
         payout_cases = (
-            ('valid', valid_receipt_id, 9500),
-            ('amount_mismatch', valid_receipt_id, 9600),
-            ('orphan', 'payr_missing', 9500),
+            ('valid', valid_receipt_id, 9500,
+             '2026-10-09T00:00:00+00:00'),
+            ('amount_mismatch', valid_receipt_id, 9600,
+             '2026-10-09T00:00:00+00:00'),
+            ('orphan', 'payr_missing', 9500,
+             '2026-10-09T00:00:00+00:00'),
+            ('before_settlement', valid_receipt_id, 9500,
+             '2026-10-07T23:59:59+00:00'),
         )
         valid_payout_receipt_id = None
-        for name, payment_receipt_id, amount in payout_cases:
+        for name, payment_receipt_id, amount, available_at in payout_cases:
             payout = {
                 'opportunity_id': 'opp_1',
                 'payment_receipt_id': payment_receipt_id,
@@ -367,7 +372,7 @@ class MissionControlTests(unittest.TestCase):
                 'evidence_url': f'https://example.com/balance_{name}',
                 'amount_cents': amount,
                 'currency': 'USD',
-                'available_at': '2026-10-09T00:00:00+00:00',
+                'available_at': available_at,
             }
             payout_hash = hashlib.sha256(json.dumps(
                 payout, sort_keys=True, separators=(',', ':')
@@ -382,11 +387,16 @@ class MissionControlTests(unittest.TestCase):
                 valid_payout_receipt_id = payout_receipt_id
 
         bank_cases = (
-            ('valid', valid_payout_receipt_id, 9500),
-            ('amount_mismatch', valid_payout_receipt_id, 9600),
-            ('orphan', 'pavr_missing', 9500),
+            ('valid', valid_payout_receipt_id, 9500,
+             '2026-10-10T00:00:00+00:00'),
+            ('amount_mismatch', valid_payout_receipt_id, 9600,
+             '2026-10-10T00:00:00+00:00'),
+            ('orphan', 'pavr_missing', 9500,
+             '2026-10-10T00:00:00+00:00'),
+            ('before_availability', valid_payout_receipt_id, 9500,
+             '2026-10-08T23:59:59+00:00'),
         )
-        for name, payout_receipt_id, amount in bank_cases:
+        for name, payout_receipt_id, amount, received_at in bank_cases:
             bank = {
                 'opportunity_id': 'opp_1',
                 'payout_availability_receipt_id': payout_receipt_id,
@@ -395,7 +405,7 @@ class MissionControlTests(unittest.TestCase):
                 'evidence_url': f'https://example.com/transfer_{name}',
                 'amount_cents': amount,
                 'currency': 'USD',
-                'received_at': '2026-10-10T00:00:00+00:00',
+                'received_at': received_at,
             }
             bank_hash = hashlib.sha256(json.dumps(
                 bank, sort_keys=True, separators=(',', ':')
