@@ -429,6 +429,20 @@ class OpportunityIntakeTests(unittest.TestCase):
             result["rejections"][0]["reason"],
             "buyer_stage_evidence_url_https_required")
 
+    def test_issue_164_active_buyer_evidence_rejects_url_credentials(self):
+        credentialed = candidate(
+            external_id="credentialed-buyer-evidence",
+            buyer_stage="offer",
+            buyer_stage_evidence_url=(
+                "https://user:secret@example.com/offers/credentialed"),
+            buyer_stage_evidence_at=(NOW - timedelta(minutes=5)).isoformat(),
+        )
+        result = opportunity_intake.ingest([credentialed], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(
+            result["rejections"][0]["reason"],
+            "buyer_stage_evidence_url_credentials_forbidden")
+
     def test_issue_164_buyer_stage_evidence_must_be_fresh_and_non_future(self):
         stale = candidate(
             external_id="stale-buyer-reply",
