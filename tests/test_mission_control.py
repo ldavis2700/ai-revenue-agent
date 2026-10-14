@@ -269,6 +269,24 @@ class MissionControlTests(unittest.TestCase):
         conn.execute(
             'INSERT INTO payment_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
             ('payr_' + forged_hash[:24], *forged_values, forged_hash))
+
+        for index, insecure_url in enumerate((
+            'http://example.com/txn_insecure',
+            'https://user:secret@example.com/txn_credentialed',
+            'https://?transaction=missing-host',
+        )):
+            insecure = dict(valid)
+            insecure['external_transaction_id'] = f'txn_insecure_{index}'
+            insecure['transaction_url'] = insecure_url
+            insecure_hash = hashlib.sha256(json.dumps(
+                insecure, sort_keys=True, separators=(',', ':')
+            ).encode()).hexdigest()
+            conn.execute(
+                'INSERT INTO payment_receipts VALUES '
+                '(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                ('payr_' + insecure_hash[:24],
+                 *insecure.values(), insecure_hash),
+            )
         conn.commit()
 
         metrics = mission_control.snapshot(conn)
