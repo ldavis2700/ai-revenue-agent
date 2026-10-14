@@ -189,6 +189,20 @@ BUYER_STAGE_PRIORITY = {
 
 
 
+def _credible_https_evidence_url(value):
+    """Require a network-verifiable HTTPS locator without embedded credentials."""
+    try:
+        parsed = urlsplit(str(value or ''))
+        return (
+            parsed.scheme == 'https'
+            and parsed.hostname is not None
+            and parsed.username is None
+            and parsed.password is None
+        )
+    except ValueError:
+        return False
+
+
 def _contract_terms_binding(
         conn, table, contract_receipt_id, opportunity_id,
         amount_column, amount_key):
@@ -220,17 +234,8 @@ def _contract_terms_binding(
     if row[5] != expected:
         return False
     accepted_amount = binding.get(amount_key)
-    try:
-        evidence_url = urlsplit(
-            str(binding['acceptance_evidence_url'] or ''))
-        evidence_url_valid = (
-            evidence_url.scheme == 'https'
-            and evidence_url.hostname is not None
-            and evidence_url.username is None
-            and evidence_url.password is None
-        )
-    except ValueError:
-        evidence_url_valid = False
+    evidence_url_valid = _credible_https_evidence_url(
+        binding['acceptance_evidence_url'])
     if (
         re.fullmatch(r'[0-9a-f]{64}', str(binding['accepted_terms_hash'] or ''))
         is None
@@ -283,6 +288,7 @@ def _verified_submission_artifact(conn, opportunity_id, receipt_id):
     return (
         row[5] == expected
         and receipt_id == 'subr_' + expected[:24]
+        and _credible_https_evidence_url(row[3])
     )
 
 
@@ -318,6 +324,7 @@ def _verified_response_artifact(
         and row[1] == row[6]
         and row[5] == expected
         and receipt_id == 'respr_' + expected[:24]
+        and _credible_https_evidence_url(row[3])
         and _verified_submission_artifact(
             conn, opportunity_id, row[0])
     )
@@ -408,6 +415,8 @@ def _verified_contract_artifact(conn, opportunity_id, receipt_id):
         _canonical_ledger_id(row[0], 'respr_')
         and row[10] == expected
         and receipt_id == 'contr_' + expected[:24]
+        and _credible_https_evidence_url(row[4])
+        and _credible_https_evidence_url(row[9])
         and _verified_response_lineage(
             conn, opportunity_id, row[0], row[1], row[2])
     )
