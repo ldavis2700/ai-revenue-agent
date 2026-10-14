@@ -199,30 +199,6 @@ class MissionControlTests(unittest.TestCase):
             ('bank_receipts', 'legacy_bank', 47500),
         ):
             conn.execute(f'INSERT INTO {table} VALUES (?,?)', (receipt_id, amount))
-        chronology_cases = (
-            ('naive', '2026-10-07T00:00:00',
-             '2026-10-08T00:00:00+00:00'),
-            ('reversed', '2026-10-09T00:00:00+00:00',
-             '2026-10-08T00:00:00+00:00'),
-            ('future', '2026-10-07T00:00:00+00:00',
-             '9999-10-08T00:00:00+00:00'),
-        )
-        for name, paid_at, settled_at in chronology_cases:
-            invalid_time = dict(valid)
-            invalid_time['external_transaction_id'] = f'txn_{name}'
-            invalid_time['transaction_url'] = (
-                f'https://example.com/txn_{name}')
-            invalid_time['paid_at'] = paid_at
-            invalid_time['settled_at'] = settled_at
-            invalid_hash = hashlib.sha256(json.dumps(
-                invalid_time, sort_keys=True, separators=(',', ':')
-            ).encode()).hexdigest()
-            conn.execute(
-                'INSERT INTO payment_receipts VALUES '
-                '(?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                ('payr_' + invalid_hash[:24],
-                 *invalid_time.values(), invalid_hash),
-            )
         conn.commit()
 
         metrics = mission_control.snapshot(conn)
@@ -310,6 +286,31 @@ class MissionControlTests(unittest.TestCase):
                 '(?,?,?,?,?,?,?,?,?,?,?,?,?)',
                 ('payr_' + insecure_hash[:24],
                  *insecure.values(), insecure_hash),
+            )
+
+        chronology_cases = (
+            ('naive', '2026-10-07T00:00:00',
+             '2026-10-08T00:00:00+00:00'),
+            ('reversed', '2026-10-09T00:00:00+00:00',
+             '2026-10-08T00:00:00+00:00'),
+            ('future', '2026-10-07T00:00:00+00:00',
+             '9999-10-08T00:00:00+00:00'),
+        )
+        for name, paid_at, settled_at in chronology_cases:
+            invalid_time = dict(valid)
+            invalid_time['external_transaction_id'] = f'txn_{name}'
+            invalid_time['transaction_url'] = (
+                f'https://example.com/txn_{name}')
+            invalid_time['paid_at'] = paid_at
+            invalid_time['settled_at'] = settled_at
+            invalid_hash = hashlib.sha256(json.dumps(
+                invalid_time, sort_keys=True, separators=(',', ':')
+            ).encode()).hexdigest()
+            conn.execute(
+                'INSERT INTO payment_receipts VALUES '
+                '(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                ('payr_' + invalid_hash[:24],
+                 *invalid_time.values(), invalid_hash),
             )
         conn.commit()
 
