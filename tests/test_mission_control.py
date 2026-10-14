@@ -249,6 +249,13 @@ class MissionControlTests(unittest.TestCase):
             amount_cents INTEGER, currency TEXT, available_at TEXT,
             receipt_hash TEXT
         )''')
+        conn.execute('''CREATE TABLE bank_receipts (
+            receipt_id TEXT PRIMARY KEY, opportunity_id TEXT,
+            payout_availability_receipt_id TEXT,
+            financial_institution TEXT, external_transfer_id TEXT,
+            evidence_url TEXT, amount_cents INTEGER, currency TEXT,
+            received_at TEXT, receipt_hash TEXT
+        )''')
 
         # Insert explicitly to keep the SQL column order obvious.
         valid = {
@@ -350,6 +357,7 @@ class MissionControlTests(unittest.TestCase):
             ('amount_mismatch', valid_receipt_id, 9600),
             ('orphan', 'payr_missing', 9500),
         )
+        valid_payout_receipt_id = None
         for name, payment_receipt_id, amount in payout_cases:
             payout = {
                 'opportunity_id': 'opp_1',
@@ -364,11 +372,38 @@ class MissionControlTests(unittest.TestCase):
             payout_hash = hashlib.sha256(json.dumps(
                 payout, sort_keys=True, separators=(',', ':')
             ).encode()).hexdigest()
+            payout_receipt_id = 'pavr_' + payout_hash[:24]
             conn.execute(
                 'INSERT INTO payout_availability_receipts VALUES '
                 '(?,?,?,?,?,?,?,?,?,?)',
-                ('pavr_' + payout_hash[:24],
-                 *payout.values(), payout_hash),
+                (payout_receipt_id, *payout.values(), payout_hash),
+            )
+            if name == 'valid':
+                valid_payout_receipt_id = payout_receipt_id
+
+        bank_cases = (
+            ('valid', valid_payout_receipt_id, 9500),
+            ('amount_mismatch', valid_payout_receipt_id, 9600),
+            ('orphan', 'pavr_missing', 9500),
+        )
+        for name, payout_receipt_id, amount in bank_cases:
+            bank = {
+                'opportunity_id': 'opp_1',
+                'payout_availability_receipt_id': payout_receipt_id,
+                'financial_institution': 'test_bank',
+                'external_transfer_id': f'transfer_{name}',
+                'evidence_url': f'https://example.com/transfer_{name}',
+                'amount_cents': amount,
+                'currency': 'USD',
+                'received_at': '2026-10-10T00:00:00+00:00',
+            }
+            bank_hash = hashlib.sha256(json.dumps(
+                bank, sort_keys=True, separators=(',', ':')
+            ).encode()).hexdigest()
+            conn.execute(
+                'INSERT INTO bank_receipts VALUES '
+                '(?,?,?,?,?,?,?,?,?,?)',
+                ('bankr_' + bank_hash[:24], *bank.values(), bank_hash),
             )
         conn.commit()
 
@@ -379,6 +414,8 @@ class MissionControlTests(unittest.TestCase):
         self.assertEqual(metrics['verified_net_revenue'], 95)
         self.assertEqual(
             metrics['verified_one_time_withdrawable_balance'], 95)
+        self.assertEqual(metrics['verified_one_time_money_received'], 95)
+        self.assertEqual(metrics['verified_money_received'], 95)
 
     def test_active_buyer_stage_outranks_new_prospecting(self):
         conn = sqlite3.connect(self.path)
