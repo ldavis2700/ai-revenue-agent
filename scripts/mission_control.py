@@ -218,6 +218,19 @@ def _contract_terms_binding(
     ).encode()).hexdigest()
     if row[5] != expected:
         return False
+    accepted_amount = binding.get(amount_key)
+    if (
+        re.fullmatch(r'[0-9a-f]{64}', str(binding['accepted_terms_hash'] or ''))
+        is None
+        or not isinstance(accepted_amount, int)
+        or isinstance(accepted_amount, bool)
+        or accepted_amount <= 0
+        or re.fullmatch(
+            r'https://[^\s]+',
+            str(binding['acceptance_evidence_url'] or ''),
+        ) is None
+    ):
+        return False
     try:
         accepted_at = datetime.fromisoformat(
             str(binding['accepted_at']).replace('Z', '+00:00'))
