@@ -239,6 +239,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             "credential", "id_token", "password", "private_key",
             "refresh_token", "session_id", "session_token", "signature",
             "secret", "token", "webhook_secret",
+            "x-api-key", "client-secret", "access.token", "api key",
         ):
             result = opportunity_intake.ingest([
                 candidate(
