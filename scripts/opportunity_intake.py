@@ -827,6 +827,8 @@ def canonical_url(value):
         raise ValueError("url_invalid") from exc
     if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
         raise ValueError("url_invalid")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("url_credentials_forbidden")
     host = parsed.hostname.lower() if parsed.hostname else ""
     port = f":{parsed.port}" if parsed.port else ""
     path = re.sub(r"/+", "/", parsed.path or "/").rstrip("/") or "/"
