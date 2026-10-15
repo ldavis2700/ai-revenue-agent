@@ -1,5 +1,5 @@
-Warning: truncated output (original token count: 72914)
-Total output lines: 5795
+Warning: truncated output (original token count: 72992)
+Total output lines: 5803
 
 #!/usr/bin/env python3
 """Normalize, screen, deduplicate, and rank paid-work opportunities.
@@ -2178,7 +2178,7 @@ def prepare_proposal(path, opportunity_id, proposal, *, now=None):
             if artifact["price_cents"] > opportunity["payout_cents"]:
                 raise ValueError("price_exceeds_opportunity_payout")
             tid = transition_id(opportunity_id, "qualified", "proposal_ready", evidence_id)
-            con…22914 tokens truncated…             evidence["proposal_projection_comparison"] = {
+            con…22992 tokens truncated…             evidence["proposal_projection_comparison"] = {
                     "proposal_id": proposal_id,
                     "projected_contribution_cents": projected[
                         "projected_contribution_cents"],
