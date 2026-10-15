@@ -3970,5 +3970,74 @@ class OpportunityIntakeTests(unittest.TestCase):
             connection.close()
 
 
+    def test_self_hashed_future_recurring_payout_is_not_verified(self):
+        snapshot = {
+            "opportunity_id": "opp_forged_future",
+            "recurring_payment_receipt_id": "recurpay_" + "a" * 24,
+            "provider": "authorized_marketplace",
+            "external_balance_id": "future-balance",
+            "evidence_url": "https://example.com/balances/future",
+            "amount_cents": 14500,
+            "currency": "USD",
+            "available_at": "2099-01-01T00:03:00+00:00",
+        }
+        serialized = json.dumps(
+            snapshot, sort_keys=True, separators=(",", ":"))
+        receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        receipt_id = "recuravail_" + receipt_hash[:24]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.open_ledger(path).close()
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """INSERT INTO recurring_payout_availability_receipts
+                   (receipt_id,opportunity_id,recurring_payment_receipt_id,
+                    provider,external_balance_id,evidence_url,amount_cents,
+                    currency,available_at,receipt_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (receipt_id, *snapshot.values(), receipt_hash,
+                 "2099-01-01T00:04:00+00:00"),
+            )
+            with self.assertRaisesRegex(
+                    ValueError, "recurring_payout_receipt_unverified"):
+                opportunity_intake._verified_recurring_payout_receipt(
+                    connection, receipt_id)
+            connection.close()
+
+    def test_self_hashed_invalid_recurring_bank_receipt_is_not_verified(self):
+        snapshot = {
+            "opportunity_id": "opp_forged_bank",
+            "recurring_payout_receipt_id": "recuravail_" + "a" * 24,
+            "financial_institution": "Owner Bank",
+            "external_transfer_id": "invalid-transfer",
+            "evidence_url": "http://example.com/bank/invalid",
+            "amount_cents": 14500,
+            "currency": "USD",
+            "received_at": "2026-01-01T00:00:00+00:00",
+        }
+        serialized = json.dumps(
+            snapshot, sort_keys=True, separators=(",", ":"))
+        receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        receipt_id = "recurbank_" + receipt_hash[:24]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.open_ledger(path).close()
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """INSERT INTO recurring_bank_receipts
+                   (receipt_id,opportunity_id,recurring_payout_receipt_id,
+                    financial_institution,external_transfer_id,evidence_url,
+                    amount_cents,currency,received_at,receipt_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (receipt_id, *snapshot.values(), receipt_hash,
+                 "2026-01-01T00:01:00+00:00"),
+            )
+            with self.assertRaisesRegex(
+                    ValueError, "recurring_bank_receipt_unverified"):
+                opportunity_intake._verified_recurring_bank_receipt(
+                    connection, receipt_id)
+            connection.close()
+
+
 if __name__ == "__main__":
     unittest.main()
