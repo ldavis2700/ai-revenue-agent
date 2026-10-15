@@ -834,10 +834,11 @@ def canonical_url(value):
         "client_secret", "code", "credential", "credentials", "id_token",
         "key", "password", "private_key", "refresh_token", "session_id",
         "session_token", "signature", "signed", "secret", "token",
-        "webhook_secret",
+        "webhook_secret", "x_api_key",
     }
     if any(
-        key.strip().lower() in sensitive_query_keys
+        re.sub(r"[-.\s]+", "_", key.strip().lower())
+        in sensitive_query_keys
         for key, _value in parse_qsl(parsed.query, keep_blank_values=True)
     ):
         raise ValueError("url_sensitive_query_forbidden")
