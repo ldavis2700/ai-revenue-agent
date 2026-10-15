@@ -3641,33 +3641,66 @@ def record_settled_recurring_payment(
 
 
 def summarize_settled_recurring_revenue(path, opportunity_id):
-    """Expose recurring revenue only from settled recurring-payment receipts."""
+    """Expose recurring revenue only after every receipt snapshot re-verifies."""
     if not isinstance(opportunity_id, str) or not opportunity_id.strip():
         raise ValueError("opportunity_id_required")
     connection = open_ledger(path)
     try:
-        row = connection.execute(
-            """SELECT COUNT(*),COALESCE(SUM(gross_amount_cents),0),
-                      COALESCE(SUM(fee_amount_cents),0),
-                      COALESCE(SUM(net_amount_cents),0)
-               FROM recurring_payment_receipts WHERE opportunity_id=?""",
-            (opportunity_id.strip(),)).fetchone()
-        withdrawable = connection.execute(
-            """SELECT COALESCE(SUM(amount_cents),0)
-               FROM recurring_payout_availability_receipts
-               WHERE opportunity_id=?""",
-            (opportunity_id.strip(),)).fetchone()[0]
-        received = connection.execute(
-            """SELECT COALESCE(SUM(amount_cents),0)
-               FROM recurring_bank_receipts WHERE opportunity_id=?""",
-            (opportunity_id.strip(),)).fetchone()[0]
+        opportunity_id = opportunity_id.strip()
+        payment_ids = connection.execute(
+            """SELECT receipt_id FROM recurring_payment_receipts
+               WHERE opportunity_id=?""", (opportunity_id,)).fetchall()
+        payments = [
+            _verified_recurring_payment_receipt(connection, row[0])
+            for row in payment_ids
+        ]
+        if any(payment[0] != opportunity_id for payment in payments):
+            raise ValueError("recurring_revenue_opportunity_mismatch")
+
+        payout_ids = connection.execute(
+            """SELECT receipt_id FROM recurring_payout_availability_receipts
+               WHERE opportunity_id=?""", (opportunity_id,)).fetchall()
+        payouts = []
+        for row in payout_ids:
+            payout = _verified_recurring_payout_receipt(connection, row[0])
+            payment = _verified_recurring_payment_receipt(
+                connection, payout[1])
+            if (
+                payout[0] != opportunity_id
+                or payment[0] != opportunity_id
+                or payout[2] != payment[3]
+                or payout[5] != payment[10]
+                or payout[6] != payment[11]
+                or parse_time(payout[7], "recurring_payout_available_at")
+                < parse_time(payment[16], "recurring_payment_settled_at")
+            ):
+                raise ValueError("recurring_payout_lineage_unverified")
+            payouts.append(payout)
+
+        bank_ids = connection.execute(
+            """SELECT receipt_id FROM recurring_bank_receipts
+               WHERE opportunity_id=?""", (opportunity_id,)).fetchall()
+        banks = []
+        for row in bank_ids:
+            bank = _verified_recurring_bank_receipt(connection, row[0])
+            payout = _verified_recurring_payout_receipt(connection, bank[1])
+            if (
+                bank[0] != opportunity_id
+                or payout[0] != opportunity_id
+                or bank[5] != payout[5]
+                or bank[6] != payout[6]
+                or parse_time(bank[7], "recurring_bank_received_at")
+                < parse_time(payout[7], "recurring_payout_available_at")
+            ):
+                raise ValueError("recurring_bank_lineage_unverified")
+            banks.append(bank)
         return {
-            "settled_receipt_count": row[0],
-            "recurring_collected_gross_cents": row[1],
-            "recurring_collected_fee_cents": row[2],
-            "recurring_collected_net_cents": row[3],
-            "withdrawable_cents": withdrawable,
-            "bank_received_cents": received,
+            "settled_receipt_count": len(payments),
+            "recurring_collected_gross_cents": sum(row[8] for row in payments),
+            "recurring_collected_fee_cents": sum(row[9] for row in payments),
+            "recurring_collected_net_cents": sum(row[10] for row in payments),
+            "withdrawable_cents": sum(row[5] for row in payouts),
+            "bank_received_cents": sum(row[5] for row in banks),
             "status": "independently_verified_recurring_stages",
         }
     finally:
@@ -4259,6 +4292,34 @@ def _verified_recurring_payout_receipt(
             "recuravail_" + expected_hash[:24]):
         raise ValueError("recurring_payout_receipt_unverified")
     return payout
+
+
+def _verified_recurring_bank_receipt(connection, recurring_bank_receipt_id):
+    """Return recurring bank evidence only when its snapshot matches."""
+    bank = connection.execute(
+        """SELECT opportunity_id,recurring_payout_receipt_id,
+                  financial_institution,external_transfer_id,evidence_url,
+                  amount_cents,currency,received_at,receipt_hash
+           FROM recurring_bank_receipts WHERE receipt_id=?""",
+        (recurring_bank_receipt_id,)).fetchone()
+    if bank is None:
+        raise ValueError("recurring_bank_receipt_not_found")
+    snapshot = {
+        "opportunity_id": bank[0],
+        "recurring_payout_receipt_id": bank[1],
+        "financial_institution": bank[2],
+        "external_transfer_id": bank[3],
+        "evidence_url": bank[4],
+        "amount_cents": bank[5],
+        "currency": bank[6],
+        "received_at": bank[7],
+    }
+    serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    if bank[8] != expected_hash or recurring_bank_receipt_id != (
+            "recurbank_" + expected_hash[:24]):
+        raise ValueError("recurring_bank_receipt_unverified")
+    return bank
 
 
 def record_recurring_bank_receipt(
