@@ -2661,8 +2661,31 @@ def _verified_recurring_payout_receipt(
     }
     serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
     expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
-    if payout[8] != expected_hash or recurring_payout_receipt_id != (
-            "recuravail_" + expected_hash[:24]):
+    try:
+        provider = _proposal_text(
+            payout[2], "withdrawable_provider", 160)
+        external_id = _proposal_text(
+            payout[3], "external_balance_id", 500)
+        evidence_url = canonical_url(_proposal_text(
+            payout[4], "withdrawable_evidence_url", 2000))
+        available_at = parse_time(payout[7], "available_at")
+        semantics_valid = (
+            provider == payout[2]
+            and external_id == payout[3]
+            and evidence_url == payout[4]
+            and urlsplit(evidence_url).scheme == "https"
+            and isinstance(payout[5], int)
+            and not isinstance(payout[5], bool)
+            and payout[5] > 0
+            and re.fullmatch(r"[A-Z]{3}", str(payout[6] or "")) is not None
+            and available_at <= utc_now() + MAX_FUTURE_SKEW
+        )
+    except (TypeError, ValueError):
+        semantics_valid = False
+    if (payout[8] != expected_hash
+            or recurring_payout_receipt_id != (
+                "recuravail_" + expected_hash[:24])
+            or not semantics_valid):
         raise ValueError("recurring_payout_receipt_unverified")
     return payout
 
@@ -2689,8 +2712,31 @@ def _verified_recurring_bank_receipt(connection, recurring_bank_receipt_id):
     }
     serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
     expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
-    if bank[8] != expected_hash or recurring_bank_receipt_id != (
-            "recurbank_" + expected_hash[:24]):
+    try:
+        institution = _proposal_text(
+            bank[2], "financial_institution", 160)
+        external_id = _proposal_text(
+            bank[3], "external_transfer_id", 500)
+        evidence_url = canonical_url(_proposal_text(
+            bank[4], "bank_evidence_url", 2000))
+        received_at = parse_time(bank[7], "received_at")
+        semantics_valid = (
+            institution == bank[2]
+            and external_id == bank[3]
+            and evidence_url == bank[4]
+            and urlsplit(evidence_url).scheme == "https"
+            and isinstance(bank[5], int)
+            and not isinstance(bank[5], bool)
+            and bank[5] > 0
+            and re.fullmatch(r"[A-Z]{3}", str(bank[6] or "")) is not None
+            and received_at <= utc_now() + MAX_FUTURE_SKEW
+        )
+    except (TypeError, ValueError):
+        semantics_valid = False
+    if (bank[8] != expected_hash
+            or recurring_bank_receipt_id != (
+                "recurbank_" + expected_hash[:24])
+            or not semantics_valid):
         raise ValueError("recurring_bank_receipt_unverified")
     return bank
 
