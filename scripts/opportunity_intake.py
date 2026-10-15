@@ -857,6 +857,8 @@ def normalize(payload, *, now=None, max_age_days=DEFAULT_MAX_AGE_DAYS):
     source = str(payload.get("source") or "").strip()
     external_id = str(payload.get("external_id") or "").strip()
     url = canonical_url(payload.get("url"))
+    if urlsplit(url).scheme != "https":
+        raise ValueError("opportunity_url_https_required")
     if not title:
         raise ValueError("title_required")
     if not source:
