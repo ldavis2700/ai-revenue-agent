@@ -14,7 +14,7 @@ import re
 import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, urlsplit, urlunsplit
 
 
 DEFAULT_MAX_AGE_DAYS = 30
@@ -829,6 +829,16 @@ def canonical_url(value):
         raise ValueError("url_invalid")
     if parsed.username is not None or parsed.password is not None:
         raise ValueError("url_credentials_forbidden")
+    sensitive_query_keys = {
+        "access_token", "api_key", "apikey", "auth", "authorization",
+        "code", "credential", "credentials", "key", "password",
+        "signature", "signed", "secret", "token",
+    }
+    if any(
+        key.strip().lower() in sensitive_query_keys
+        for key, _value in parse_qsl(parsed.query, keep_blank_values=True)
+    ):
+        raise ValueError("url_sensitive_query_forbidden")
     host = parsed.hostname.lower() if parsed.hostname else ""
     port = f":{parsed.port}" if parsed.port else ""
     path = re.sub(r"/+", "/", parsed.path or "/").rstrip("/") or "/"
