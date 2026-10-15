@@ -220,6 +220,19 @@ class OpportunityIntakeTests(unittest.TestCase):
             now=NOW + timedelta(minutes=4))
         return opportunity_id, payment["receipt_id"]
 
+    def test_canonical_urls_reject_embedded_credentials(self):
+        result = opportunity_intake.ingest([
+            candidate(
+                external_id="credentialed-listing",
+                url="https://user:secret@example.com/jobs/credentialed",
+            )
+        ], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(
+            result["rejections"][0]["reason"],
+            "url_credentials_forbidden",
+        )
+
     def test_explicit_location_ineligibility_is_terminal(self):
         result = opportunity_intake.ingest(
             [candidate(external_id="location-blocked", location_eligible=False)],
