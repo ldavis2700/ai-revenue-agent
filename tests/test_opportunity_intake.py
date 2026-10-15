@@ -3517,7 +3517,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             withdrawable = (
                 opportunity_intake.record_recurring_withdrawable_balance(
                     path, opportunity_id, settled["receipt_id"], {
-                        "provider": "marketplace",
+                        "provider": "Marketplace",
                         "external_balance_id": "managed-balance-1",
                         "evidence_url":
                             "https://example.com/balances/managed-1",
@@ -3528,7 +3528,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             withdrawable_duplicate = (
                 opportunity_intake.record_recurring_withdrawable_balance(
                     path, opportunity_id, settled["receipt_id"], {
-                        "provider": "marketplace",
+                        "provider": "Marketplace",
                         "external_balance_id": "managed-balance-1",
                         "evidence_url":
                             "https://example.com/balances/managed-1",
