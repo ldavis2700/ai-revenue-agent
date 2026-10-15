@@ -1,5 +1,5 @@
-Warning: truncated output (original token count: 62612)
-Total output lines: 4795
+Warning: truncated output (original token count: 62619)
+Total output lines: 4796
 
 from datetime import datetime, timedelta, timezone
 import json
@@ -1963,8 +1963,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             proposal = opportunity_intake.prepare_proposal(path, opportunity_id, self.proposal(), now=NOW)
             submitted = opportunity_intake.record_submission(path, opportunity_id, proposal["proposal_id"], {
                 "provider": "marketplace", "external_submission_id": "application-456",
-                "sub…12612 tokens truncated…it()
-            connection.close()
+                "sub…12619 tokens truncated…se()
             payout_evidence = {
                 "provider": "Marketplace",
                 "external_balance_id": "balance-tampered-payment",
@@ -3848,6 +3847,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             "recurring_collected_net_cents": 14500,
             "withdrawable_cents": 14500,
             "bank_received_cents": 14500,
+            "currency": "USD",
             "status": "independently_verified_recurring_stages",
         })
         self.assertTrue(withdrawable["changed"])
