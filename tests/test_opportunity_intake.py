@@ -2,6 +2,7 @@ Warning: truncated output (original token count: 62619)
 Total output lines: 4796
 
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import os
 import sqlite3
@@ -3919,6 +3920,54 @@ class OpportunityIntakeTests(unittest.TestCase):
                 opportunity_intake.prepare_proposal(
                     path, opportunity_id, self.family_proposal(
                         family_id, recurring_base_fee_cents=15000), now=NOW)
+
+    def test_self_hashed_future_recurring_payment_is_not_verified(self):
+        snapshot = {
+            "opportunity_id": "opp_forged_future",
+            "contract_receipt_id": "contr_" + "a" * 24,
+            "term_id": "term_" + "b" * 24,
+            "provider": "authorized_marketplace",
+            "external_invoice_id": "future-invoice",
+            "invoice_url": "https://example.com/invoices/future",
+            "external_transaction_id": "future-transaction",
+            "transaction_url": "https://example.com/payments/future",
+            "gross_amount_cents": 15000,
+            "fee_amount_cents": 500,
+            "net_amount_cents": 14500,
+            "currency": "USD",
+            "service_period_start": "2099-01-01T00:00:00+00:00",
+            "service_period_end": "2099-02-01T00:00:00+00:00",
+            "invoiced_at": "2099-01-01T00:00:00+00:00",
+            "paid_at": "2099-01-01T00:01:00+00:00",
+            "settled_at": "2099-01-01T00:02:00+00:00",
+        }
+        serialized = json.dumps(
+            snapshot, sort_keys=True, separators=(",", ":"))
+        receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        receipt_id = "recurpay_" + receipt_hash[:24]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.open_ledger(path).close()
+            # Simulate an imported/directly written ledger row. The verifier
+            # must enforce semantics independently of the recording API.
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """INSERT INTO recurring_payment_receipts
+                   (receipt_id,opportunity_id,contract_receipt_id,term_id,
+                    provider,external_invoice_id,invoice_url,
+                    external_transaction_id,transaction_url,
+                    gross_amount_cents,fee_amount_cents,net_amount_cents,
+                    currency,service_period_start,service_period_end,
+                    invoiced_at,paid_at,settled_at,receipt_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (receipt_id, *snapshot.values(), receipt_hash,
+                 "2099-01-01T00:03:00+00:00"),
+            )
+            with self.assertRaisesRegex(
+                    ValueError, "recurring_payment_receipt_unverified"):
+                opportunity_intake._verified_recurring_payment_receipt(
+                    connection, receipt_id)
+            connection.close()
 
 
 if __name__ == "__main__":
