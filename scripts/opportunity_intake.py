@@ -5551,6 +5551,56 @@ def _verified_payout_receipt(connection, payout_receipt_id):
     return payout
 
 
+def _verified_bank_receipt(connection, bank_receipt_id):
+    """Return one-time bank evidence only when its snapshot matches."""
+    bank = connection.execute(
+        """SELECT opportunity_id,payout_availability_receipt_id,
+                  financial_institution,external_transfer_id,evidence_url,
+                  amount_cents,currency,received_at,receipt_hash
+           FROM bank_receipts WHERE receipt_id=?""",
+        (bank_receipt_id,)).fetchone()
+    if bank is None:
+        raise ValueError("bank_receipt_not_found")
+    snapshot = {
+        "opportunity_id": bank[0],
+        "payout_availability_receipt_id": bank[1],
+        "financial_institution": bank[2],
+        "external_transfer_id": bank[3],
+        "evidence_url": bank[4],
+        "amount_cents": bank[5],
+        "currency": bank[6],
+        "received_at": bank[7],
+    }
+    serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    try:
+        institution = _proposal_text(
+            bank[2], "financial_institution", 160)
+        external_id = _proposal_text(
+            bank[3], "external_transfer_id", 500)
+        evidence_url = canonical_url(_proposal_text(
+            bank[4], "bank_evidence_url", 2000))
+        received_at = parse_time(bank[7], "received_at")
+        semantics_valid = (
+            institution == bank[2]
+            and external_id == bank[3]
+            and evidence_url == bank[4]
+            and urlsplit(evidence_url).scheme == "https"
+            and isinstance(bank[5], int)
+            and not isinstance(bank[5], bool)
+            and bank[5] > 0
+            and re.fullmatch(r"[A-Z]{3}", str(bank[6] or "")) is not None
+            and received_at <= utc_now() + MAX_FUTURE_SKEW
+        )
+    except (TypeError, ValueError):
+        semantics_valid = False
+    if (bank[8] != expected_hash
+            or bank_receipt_id != ("bankr_" + expected_hash[:24])
+            or not semantics_valid):
+        raise ValueError("bank_receipt_unverified")
+    return bank
+
+
 def record_bank_receipt(path, opportunity_id, payout_receipt_id, evidence, *, now=None):
     """Record proof that one withdrawable payout reached the owner's bank account."""
     if not isinstance(opportunity_id, str) or not opportunity_id.strip():
@@ -5610,8 +5660,10 @@ def record_bank_receipt(path, opportunity_id, payout_receipt_id, evidence, *, no
             rid = "bankr_" + receipt_hash[:24]
             evidence_id = "bank_receipt:" + rid
             existing = connection.execute(
-                "SELECT 1 FROM bank_receipts WHERE receipt_id=?", (rid,)).fetchone()
+                "SELECT receipt_id FROM bank_receipts WHERE receipt_id=?", (rid,)
+            ).fetchone()
             if row[0] == "received" and existing:
+                _verified_bank_receipt(connection, existing[0])
                 return {"receipt_id": rid, "changed": False, "state": row[0],
                         "amount_cents": amount_cents}
             if row[0] != "withdrawable":
