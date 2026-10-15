@@ -233,6 +233,24 @@ class OpportunityIntakeTests(unittest.TestCase):
             "url_credentials_forbidden",
         )
 
+    def test_canonical_urls_reject_sensitive_query_credentials(self):
+        for key in (
+            "access_token", "api_key", "authorization", "credential",
+            "password", "signature", "secret", "token",
+        ):
+            result = opportunity_intake.ingest([
+                candidate(
+                    external_id=f"sensitive-query-{key}",
+                    url=f"https://example.com/jobs/123?{key}=do-not-store",
+                )
+            ], now=NOW)
+            with self.subTest(key=key):
+                self.assertEqual(result["opportunities"], [])
+                self.assertEqual(
+                    result["rejections"][0]["reason"],
+                    "url_sensitive_query_forbidden",
+                )
+
     def test_opportunity_source_requires_https(self):
         result = opportunity_intake.ingest([
             candidate(
