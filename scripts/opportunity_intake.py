@@ -831,8 +831,10 @@ def canonical_url(value):
         raise ValueError("url_credentials_forbidden")
     sensitive_query_keys = {
         "access_token", "api_key", "apikey", "auth", "authorization",
-        "code", "credential", "credentials", "key", "password",
-        "signature", "signed", "secret", "token",
+        "client_secret", "code", "credential", "credentials", "id_token",
+        "key", "password", "private_key", "refresh_token", "session_id",
+        "session_token", "signature", "signed", "secret", "token",
+        "webhook_secret",
     }
     if any(
         key.strip().lower() in sensitive_query_keys
