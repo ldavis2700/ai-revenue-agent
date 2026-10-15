@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 62513)
+Total output lines: 4788
+
 from datetime import datetime, timedelta, timezone
 import json
 import os
@@ -56,6 +59,53 @@ def spend_authorization(external_id="job-123", units=11, authorized_at=NOW):
 
 
 class OpportunityIntakeTests(unittest.TestCase):
+    def test_canonical_urls_reject_embedded_credentials(self):
+        result = opportunity_intake.ingest([
+            candidate(
+                external_id="credentialed-listing",
+                url="https://user:secret@example.com/jobs/credentialed",
+            )
+        ], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(
+            result["rejections"][0]["reason"],
+            "url_credentials_forbidden",
+        )
+
+    def test_opportunity_source_requires_https(self):
+        result = opportunity_intake.ingest([
+            candidate(
+                external_id="insecure-listing",
+                url="http://example.com/jobs/insecure",
+            )
+        ], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(
+            result["rejections"][0]["reason"],
+            "opportunity_url_https_required",
+        )
+
+    def test_canonical_urls_reject_sensitive_query_credentials(self):
+        for key in (
+            "access_token", "api_key", "authorization", "client_secret",
+            "credential", "id_token", "password", "private_key",
+            "refresh_token", "session_id", "session_token", "signature",
+            "secret", "token", "webhook_secret",
+            "x-api-key", "client-secret", "access.token", "api key",
+        ):
+            result = opportunity_intake.ingest([
+                candidate(
+                    external_id=f"sensitive-query-{key}",
+                    url=f"https://example.com/jobs/123?{key}=do-not-store",
+                )
+            ], now=NOW)
+            with self.subTest(key=key):
+                self.assertEqual(result["opportunities"], [])
+                self.assertEqual(
+                    result["rejections"][0]["reason"],
+                    "url_sensitive_query_forbidden",
+                )
+
     def proposal(self, **overrides):
         value = {
             "scope": "Build and validate the listed workflow automation.",
@@ -219,53 +269,6 @@ class OpportunityIntakeTests(unittest.TestCase):
                 "settled_at": (NOW + timedelta(minutes=4)).isoformat()},
             now=NOW + timedelta(minutes=4))
         return opportunity_id, payment["receipt_id"]
-
-    def test_canonical_urls_reject_embedded_credentials(self):
-        result = opportunity_intake.ingest([
-            candidate(
-                external_id="credentialed-listing",
-                url="https://user:secret@example.com/jobs/credentialed",
-            )
-        ], now=NOW)
-        self.assertEqual(result["opportunities"], [])
-        self.assertEqual(
-            result["rejections"][0]["reason"],
-            "url_credentials_forbidden",
-        )
-
-    def test_canonical_urls_reject_sensitive_query_credentials(self):
-        for key in (
-            "access_token", "api_key", "authorization", "client_secret",
-            "credential", "id_token", "password", "private_key",
-            "refresh_token", "session_id", "session_token", "signature",
-            "secret", "token", "webhook_secret",
-            "x-api-key", "client-secret", "access.token", "api key",
-        ):
-            result = opportunity_intake.ingest([
-                candidate(
-                    external_id=f"sensitive-query-{key}",
-                    url=f"https://example.com/jobs/123?{key}=do-not-store",
-                )
-            ], now=NOW)
-            with self.subTest(key=key):
-                self.assertEqual(result["opportunities"], [])
-                self.assertEqual(
-                    result["rejections"][0]["reason"],
-                    "url_sensitive_query_forbidden",
-                )
-
-    def test_opportunity_source_requires_https(self):
-        result = opportunity_intake.ingest([
-            candidate(
-                external_id="insecure-listing",
-                url="http://example.com/jobs/insecure",
-            )
-        ], now=NOW)
-        self.assertEqual(result["opportunities"], [])
-        self.assertEqual(
-            result["rejections"][0]["reason"],
-            "opportunity_url_https_required",
-        )
 
     def test_explicit_location_ineligibility_is_terminal(self):
         result = opportunity_intake.ingest(
@@ -479,9 +482,9 @@ class OpportunityIntakeTests(unittest.TestCase):
     def test_issue_164_active_buyer_evidence_rejects_url_credentials(self):
         credentialed = candidate(
             external_id="credentialed-buyer-evidence",
-            buyer_stage="offer",
+            buyer_stage="buyer_reply",
             buyer_stage_evidence_url=(
-                "https://user:secret@example.com/offers/credentialed"),
+                "https://user:secret@example.com/buyer-evidence"),
             buyer_stage_evidence_at=(NOW - timedelta(minutes=5)).isoformat(),
         )
         result = opportunity_intake.ingest([credentialed], now=NOW)
@@ -1960,876 +1963,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             proposal = opportunity_intake.prepare_proposal(path, opportunity_id, self.proposal(), now=NOW)
             submitted = opportunity_intake.record_submission(path, opportunity_id, proposal["proposal_id"], {
                 "provider": "marketplace", "external_submission_id": "application-456",
-                "submission_url": "https://example.com/applications/456",
-                "submitted_at": NOW.isoformat()}, now=NOW)
-            replied = opportunity_intake.record_response(path, opportunity_id, submitted["receipt_id"], {
-                "provider": "marketplace", "external_message_id": "message-789",
-                "message_url": "https://example.com/messages/789",
-                "received_at": NOW.isoformat()}, now=NOW)
-            valid = {"provider": "marketplace", "external_contract_id": "contract-321",
-                     "contract_url": "https://example.com/contracts/321",
-                     "amount_cents": 100000, "currency": "USD",
-                     "contracted_at": NOW.isoformat(),
-                     "terms_authority": "preapproved_standard_terms",
-                     "authority_evidence_url": "https://example.com/terms/standard-v1"}
-            with self.assertRaisesRegex(ValueError, "contract_receipt_required"):
-                opportunity_intake.record_transition(
-                    path, opportunity_id, "response_received", "contracted", "contract:free-form", now=NOW)
-            for changes, reason in (
-                    ({"terms_authority": "custom_terms"}, "terms_authority_invalid"),
-                    ({"amount_cents": 100001}, "contract_amount_exceeds_proposal"),
-                    ({"currency": "EUR"}, "contract_currency_mismatch"),
-                    ({"provider": "other-provider"}, "contract_provider_mismatch")):
-                invalid = dict(valid)
-                invalid.update(changes)
-                with self.assertRaisesRegex(ValueError, reason):
-                    opportunity_intake.record_contract(
-                        path, opportunity_id, replied["receipt_id"], invalid, now=NOW)
-            connection = sqlite3.connect(path)
-            count = connection.execute("SELECT COUNT(*) FROM contract_receipts").fetchone()[0]
-            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
-            connection.close()
-        self.assertEqual(count, 0)
-        self.assertEqual(state, "response_received")
-
-    def test_contract_rolls_back_if_transition_insert_fails(self):
-        result = opportunity_intake.ingest([candidate()], now=NOW)
-        opportunity_id = result["opportunities"][0]["id"]
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_intake.persist(result, path, now=NOW)
-            proposal = opportunity_intake.prepare_proposal(path, opportunity_id, self.proposal(), now=NOW)
-            submitted = opportunity_intake.record_submission(path, opportunity_id, proposal["proposal_id"], {
-                "provider": "marketplace", "external_submission_id": "application-456",
-                "submission_url": "https://example.com/applications/456",
-                "submitted_at": NOW.isoformat()}, now=NOW)
-            replied = opportunity_intake.record_response(path, opportunity_id, submitted["receipt_id"], {
-                "provider": "marketplace", "external_message_id": "message-789",
-                "message_url": "https://example.com/messages/789",
-                "received_at": NOW.isoformat()}, now=NOW)
-            connection = sqlite3.connect(path)
-            connection.execute("""CREATE TRIGGER reject_contract_transition BEFORE INSERT
-                                ON opportunity_transitions WHEN NEW.to_state = 'contracted'
-                                BEGIN SELECT RAISE(ABORT, 'transition failure'); END""")
-            connection.commit()
-            connection.close()
-            with self.assertRaises(sqlite3.IntegrityError):
-                opportunity_intake.record_contract(path, opportunity_id, replied["receipt_id"], {
-                    "provider": "marketplace", "external_contract_id": "contract-321",
-                    "contract_url": "https://example.com/contracts/321",
-                    "amount_cents": 100000, "currency": "USD",
-                    "contracted_at": NOW.isoformat(),
-                    "terms_authority": "owner_approved_terms",
-                    "authority_evidence_url": "https://example.com/approvals/owner-1"}, now=NOW)
-            connection = sqlite3.connect(path)
-            count = connection.execute("SELECT COUNT(*) FROM contract_receipts").fetchone()[0]
-            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
-            connection.close()
-        self.assertEqual(count, 0)
-        self.assertEqual(state, "response_received")
-
-    def test_execution_plan_atomically_advances_and_is_idempotent(self):
-        plan = {"execution_environment": "Isolated repository branch and test environment",
-                "started_at": NOW.isoformat(), "deliverables": [{
-                    "title": "Validated workflow", "description": "Build the contracted automation.",
-                    "acceptance_criteria": "Automated tests pass and deployment notes are complete.",
-                    "due_at": (NOW + timedelta(days=7)).isoformat()}]}
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, contract_id = self.advance_to_contract(path)
-            first = opportunity_intake.start_execution(
-                path, opportunity_id, contract_id, plan, now=NOW)
-            second = opportunity_intake.start_execution(
-                path, opportunity_id, contract_id, plan, now=NOW)
-            connection = sqlite3.connect(path)
-            artifact = json.loads(connection.execute(
-                "SELECT plan_json FROM execution_plans").fetchone()[0])
-            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
-            evidence = connection.execute(
-                "SELECT evidence_id FROM opportunity_transitions WHERE to_state='executing'"
-            ).fetchone()[0]
-            connection.close()
-        self.assertTrue(first["changed"])
-        self.assertFalse(second["changed"])
-        self.assertEqual(state, "executing")
-        self.assertEqual(artifact["contract_receipt_id"], contract_id)
-        self.assertEqual(len(artifact["deliverables"]), 1)
-        self.assertIn(first["plan_id"], evidence)
-
-    def test_execution_plan_rejects_bypass_or_invalid_deliverables(self):
-        valid = {"execution_environment": "Isolated test environment",
-                 "started_at": NOW.isoformat(), "deliverables": [{
-                     "title": "Workflow", "description": "Build it.",
-                     "acceptance_criteria": "Tests pass.",
-                     "due_at": (NOW + timedelta(days=7)).isoformat()}]}
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, contract_id = self.advance_to_contract(path)
-            with self.assertRaisesRegex(ValueError, "execution_plan_required"):
-                opportunity_intake.record_transition(
-                    path, opportunity_id, "contracted", "executing", "contract:free-form", now=NOW)
-            for plan, reason in (
-                    (dict(valid, deliverables=[]), "deliverables_invalid"),
-                    (dict(valid, deliverables=[{
-                        "title": "Workflow", "description": "Build it.",
-                        "acceptance_criteria": "Tests pass.",
-                        "due_at": NOW.isoformat()}]), "deliverable_due_at_invalid"),
-                    (dict(valid, started_at=(NOW + timedelta(minutes=6)).isoformat()),
-                     "started_at_future"),
-                    (dict(valid, started_at=(NOW - timedelta(seconds=1)).isoformat()),
-                     "execution_before_contract")):
-                with self.assertRaisesRegex(ValueError, reason):
-                    opportunity_intake.start_execution(
-                        path, opportunity_id, contract_id, plan, now=NOW)
-            connection = sqlite3.connect(path)
-            count = connection.execute("SELECT COUNT(*) FROM execution_plans").fetchone()[0]
-            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
-            connection.close()
-        self.assertEqual(count, 0)
-        self.assertEqual(state, "contracted")
-
-    def test_execution_plan_rolls_back_if_transition_insert_fails(self):
-        plan = {"execution_environment": "Isolated test environment",
-                "started_at": NOW.isoformat(), "deliverables": [{
-                    "title": "Workflow", "description": "Build it.",
-                    "acceptance_criteria": "Tests pass.",
-                    "due_at": (NOW + timedelta(days=7)).isoformat()}]}
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, contract_id = self.advance_to_contract(path)
-            connection = sqlite3.connect(path)
-            connection.execute("""CREATE TRIGGER reject_execution_transition BEFORE INSERT
-                                ON opportunity_transitions WHEN NEW.to_state = 'executing'
-                                BEGIN SELECT RAISE(ABORT, 'transition failure'); END""")
-            connection.commit()
-            connection.close()
-            with self.assertRaises(sqlite3.IntegrityError):
-                opportunity_intake.start_execution(
-                    path, opportunity_id, contract_id, plan, now=NOW)
-            connection = sqlite3.connect(path)
-            count = connection.execute("SELECT COUNT(*) FROM execution_plans").fetchone()[0]
-            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
-            connection.close()
-        self.assertEqual(count, 0)
-        self.assertEqual(state, "contracted")
-
-    def test_qa_report_atomically_advances_and_is_idempotent(self):
-        report = {"artifact_sha256": "a" * 64, "completed_at": NOW.isoformat(),
-                  "tests": [{"name": "Automated acceptance suite", "status": "passed",
-                             "evidence_url": "HTTPS://EXAMPLE.COM/runs/123/"}]}
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, plan_id = self.advance_to_execution(path)
-            first = opportunity_intake.pass_qa(path, opportunity_id, plan_id, report, now=NOW)
-            second = opportunity_intake.pass_qa(path, opportunity_id, plan_id, report, now=NOW)
-            connection = sqlite3.connect(path)
-            artifact = json.loads(connection.execute(
-                "SELECT report_json FROM qa_reports").fetchone()[0])
-            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
-            evidence = connection.execute(
-                "SELECT evidence_id FROM opportunity_transitions WHERE to_state='qa_passed'"
-            ).fetchone()[0]
-            connection.close()
-        self.assertTrue(first["changed"])
-        self.assertFalse(second["changed"])
-        self.assertEqual(state, "qa_passed")
-        self.assertEqual(artifact["execution_plan_id"], plan_id)
-        self.assertEqual(artifact["tests"][0]["evidence_url"], "https://example.com/runs/123")
-        self.assertEqual(evidence, "qa:" + first["report_id"])
-
-    def test_qa_rejects_bypass_failed_tests_and_weak_evidence(self):
-        valid = {"artifact_sha256": "a" * 64, "completed_at": NOW.isoformat(),
-                 "tests": [{"name": "Acceptance suite", "status": "passed",
-                            "evidence_url": "https://example.com/runs/123"}]}
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, plan_id = self.advance_to_execution(path)
-            with self.assertRaisesRegex(ValueError, "qa_report_required"):
-                opportunity_intake.record_transition(
-                    path, opportunity_id, "executing", "qa_passed", "qa:free-form", now=NOW)
-            for report, reason in (
-                    (dict(valid, artifact_sha256="not-a-checksum"), "artifact_sha256_invalid"),
-                    (dict(valid, tests=[{"name": "Acceptance suite", "status": "failed",
-                                        "evidence_url": "https://example.com/runs/123"}]),
-                     "qa_test_not_passed"),
-                    (dict(valid, tests=[{"name": "Acceptance suite", "status": "passed",
-                                        "evidence_url": "http://example.com/runs/123"}]),
-                     "qa_evidence_url_https_required"),
-                    (dict(valid, completed_at=(NOW - timedelta(seconds=1)).isoformat()),
-                     "qa_before_execution")):
-                with self.assertRaisesRegex(ValueError, reason):
-                    opportunity_intake.pass_qa(path, opportunity_id, plan_id, report, now=NOW)
-            connection = sqlite3.connect(path)
-            count = connection.execute("SELECT COUNT(*) FROM qa_reports").fetchone()[0]
-            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
-            connection.close()
-        self.assertEqual(count, 0)
-        self.assertEqual(state, "executing")
-
-    def test_qa_rolls_back_if_transition_insert_fails(self):
-        report = {"artifact_sha256": "a" * 64, "completed_at": NOW.isoformat(),
-                  "tests": [{"name": "Acceptance suite", "status": "passed",
-                             "evidence_url": "https://example.com/runs/123"}]}
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, plan_id = self.advance_to_execution(path)
-            connection = sqlite3.connect(path)
-            connection.execute("""CREATE TRIGGER reject_qa_transition BEFORE INSERT
-                                ON opportunity_transitions WHEN NEW.to_state = 'qa_passed'
-                                BEGIN SELECT RAISE(ABORT, 'transition failure'); END""")
-            connection.commit()
-            connection.close()
-            with self.assertRaises(sqlite3.IntegrityError):
-                opportunity_intake.pass_qa(path, opportunity_id, plan_id, report, now=NOW)
-            connection = sqlite3.connect(path)
-            count = connection.execute("SELECT COUNT(*) FROM qa_reports").fetchone()[0]
-            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
-            connection.close()
-        self.assertEqual(count, 0)
-        self.assertEqual(state, "executing")
-
-    def test_delivery_receipt_atomically_advances_and_is_idempotent(self):
-        delivery = {"provider": "Marketplace", "external_delivery_id": "delivery-654",
-                    "delivery_url": "HTTPS://EXAMPLE.COM/deliveries/654/",
-                    "artifact_sha256": "a" * 64,
-                    "delivered_at": (NOW + timedelta(minutes=1)).isoformat()}
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, qa_id = self.advance_to_qa(path)
-            first = opportunity_intake.record_delivery(
-                path, opportunity_id, qa_id, delivery, now=NOW + timedelta(minutes=1))
-            second = opportunity_intake.record_delivery(
-                path, opportunity_id, qa_id, delivery, now=NOW + timedelta(minutes=1))
-            connection = sqlite3.connect(path)
-            receipt = connection.execute(
-                "SELECT qa_report_id,delivery_url,artifact_sha256,receipt_hash FROM delivery_receipts"
-            ).fetchone()
-            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
-            evidence = connection.execute(
-                "SELECT evidence_id FROM opportunity_transitions WHERE to_state='delivered'"
-            ).fetchone()[0]
-            connection.close()
-        self.assertTrue(first["changed"])
-        self.assertFalse(second["changed"])
-        self.assertEqual(state, "delivered")
-        self.assertEqual(receipt[0], qa_id)
-        self.assertEqual(receipt[1], "https://example.com/deliveries/654")
-        self.assertEqual(receipt[2], "a" * 64)
-        self.assertEqual(len(receipt[3]), 64)
-        self.assertEqual(evidence, "delivery:" + first["receipt_id"])
-
-    def test_delivery_rejects_bypass_wrong_artifact_provider_or_timing(self):
-        valid = {"provider": "marketplace", "external_delivery_id": "delivery-654",
-                 "delivery_url": "https://example.com/deliveries/654",
-                 "artifact_sha256": "a" * 64,
-                 "delivered_at": (NOW + timedelta(minutes=1)).isoformat()}
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, qa_id = self.advance_to_qa(path)
-            with self.assertRaisesRegex(ValueError, "delivery_receipt_required"):
-                opportunity_intake.record_transition(
-                    path, opportunity_id, "qa_passed", "delivered", "delivery:free-form", now=NOW)
-            for delivery, reason in (
-                    (dict(valid, artifact_sha256="b" * 64), "delivery_artifact_mismatch"),
-                    (dict(valid, provider="other-provider"), "delivery_provider_mismatch"),
-                    (dict(valid, delivered_at=(NOW - timedelta(seconds=1)).isoformat()),
-                     "delivered_before_qa"),
-                    (dict(valid, delivery_url="http://example.com/deliveries/654"),
-                     "delivery_url_https_required")):
-                with self.assertRaisesRegex(ValueError, reason):
-                    opportunity_intake.record_delivery(
-                        path, opportunity_id, qa_id, delivery, now=NOW + timedelta(minutes=1))
-            connection = sqlite3.connect(path)
-            count = connection.execute("SELECT COUNT(*) FROM delivery_receipts").fetchone()[0]
-            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
-            connection.close()
-        self.assertEqual(count, 0)
-        self.assertEqual(state, "qa_passed")
-
-    def test_delivery_rolls_back_if_transition_insert_fails(self):
-        delivery = {"provider": "marketplace", "external_delivery_id": "delivery-654",
-                    "delivery_url": "https://example.com/deliveries/654",
-                    "artifact_sha256": "a" * 64,
-                    "delivered_at": (NOW + timedelta(minutes=1)).isoformat()}
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, qa_id = self.advance_to_qa(path)
-            connection = sqlite3.connect(path)
-            connection.execute("""CREATE TRIGGER reject_delivery_transition BEFORE INSERT
-                                ON opportunity_transitions WHEN NEW.to_state = 'delivered'
-                                BEGIN SELECT RAISE(ABORT, 'transition failure'); END""")
-            connection.commit()
-            connection.close()
-            with self.assertRaises(sqlite3.IntegrityError):
-                opportunity_intake.record_delivery(
-                    path, opportunity_id, qa_id, delivery, now=NOW + timedelta(minutes=1))
-            connection = sqlite3.connect(path)
-            count = connection.execute("SELECT COUNT(*) FROM delivery_receipts").fetchone()[0]
-            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
-            connection.close()
-        self.assertEqual(count, 0)
-        self.assertEqual(state, "qa_passed")
-
-    def test_invoice_receipt_atomically_advances_and_is_idempotent(self):
-        invoice = {"provider": "Marketplace", "external_invoice_id": "invoice-987",
-                   "invoice_url": "HTTPS://EXAMPLE.COM/invoices/987/",
-                   "amount_cents": 100000, "currency": "usd",
-                   "issued_at": (NOW + timedelta(minutes=2)).isoformat(),
-                   "due_at": (NOW + timedelta(days=7)).isoformat()}
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, delivery_id = self.advance_to_delivery(path)
-            first = opportunity_intake.record_invoice(
-                path, opportunity_id, delivery_id, invoice, now=NOW + timedelta(minutes=2))
-            second = opportunity_intake.record_invoice(
-                path, opportunity_id, delivery_id, invoice, now=NOW + timedelta(minutes=2))
-            connection = sqlite3.connect(path)
-            receipt = connection.execute(
-                "SELECT delivery_receipt_id,invoice_url,amount_cents,currency,receipt_hash FROM invoice_receipts"
-            ).fetchone()
-            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
-            evidence = connection.execute(
-                "SELECT evidence_id FROM opportunity_transitions WHERE to_state='invoiced'"
-            ).fetchone()[0]
-            connection.close()
-        self.assertTrue(first["changed"])
-        self.assertFalse(second["changed"])
-        self.assertEqual(state, "invoiced")
-        self.assertEqual(receipt[:4], (delivery_id, "https://example.com/invoices/987", 100000, "USD"))
-        self.assertEqual(len(receipt[4]), 64)
-        self.assertEqual(evidence, "invoice:" + first["receipt_id"])
-
-    def test_invoice_rejects_bypass_mismatch_and_invalid_timing(self):
-        valid = {"provider": "marketplace", "external_invoice_id": "invoice-987",
-                 "invoice_url": "https://example.com/invoices/987",
-                 "amount_cents": 100000, "currency": "USD",
-                 "issued_at": (NOW + timedelta(minutes=2)).isoformat(),
-                 "due_at": (NOW + timedelta(days=7)).isoformat()}
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, delivery_id = self.advance_to_delivery(path)
-            with self.assertRaisesRegex(ValueError, "invoice_receipt_required"):
-                opportunity_intake.record_transition(
-                    path, opportunity_id, "delivered", "invoiced", "invoice:free-form", now=NOW)
-            for invoice, reason in (
-                    (dict(valid, amount_cents=100001), "invoice_amount_exceeds_contract"),
-                    (dict(valid, currency="EUR"), "invoice_currency_mismatch"),
-                    (dict(valid, provider="other-provider"), "invoice_provider_mismatch"),
-                    (dict(valid, issued_at=NOW.isoformat()), "invoice_before_delivery"),
-                    (dict(valid, due_at=(NOW + timedelta(minutes=2)).isoformat()), "due_at_invalid")):
-                with self.assertRaisesRegex(ValueError, reason):
-                    opportunity_intake.record_invoice(
-                        path, opportunity_id, delivery_id, invoice,
-                        now=NOW + timedelta(minutes=2))
-            connection = sqlite3.connect(path)
-            count = connection.execute("SELECT COUNT(*) FROM invoice_receipts").fetchone()[0]
-            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
-            connection.close()
-        self.assertEqual(count, 0)
-        self.assertEqual(state, "delivered")
-
-    def test_invoice_rolls_back_if_transition_insert_fails(self):
-        invoice = {"provider": "marketplace", "external_invoice_id": "invoice-987",
-                   "invoice_url": "https://example.com/invoices/987",
-                   "amount_cents": 100000, "currency": "USD",
-                   "issued_at": (NOW + timedelta(minutes=2)).isoformat(),
-                   "due_at": (NOW + timedelta(days=7)).isoformat()}
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, delivery_id = self.advance_to_delivery(path)
-            connection = sqlite3.connect(path)
-            connection.execute("""CREATE TRIGGER reject_invoice_transition BEFORE INSERT
-                                ON opportunity_transitions WHEN NEW.to_state = 'invoiced'
-                                BEGIN SELECT RAISE(ABORT, 'transition failure'); END""")
-            connection.commit()
-            connection.close()
-            with self.assertRaises(sqlite3.IntegrityError):
-                opportunity_intake.record_invoice(
-                    path, opportunity_id, delivery_id, invoice,
-                    now=NOW + timedelta(minutes=2))
-            connection = sqlite3.connect(path)
-            count = connection.execute("SELECT COUNT(*) FROM invoice_receipts").fetchone()[0]
-            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
-            connection.close()
-        self.assertEqual(count, 0)
-        self.assertEqual(state, "delivered")
-
-    def test_settled_payment_atomically_advances_and_is_idempotent(self):
-        payment = {"provider": "Marketplace", "external_transaction_id": "payment-246",
-                   "transaction_url": "HTTPS://EXAMPLE.COM/payments/246/",
-                   "gross_amount_cents": 100000, "fee_amount_cents": 3000,
-                   "net_amount_cents": 97000, "currency": "usd",
-                   "paid_at": (NOW + timedelta(minutes=3)).isoformat(),
-                   "settled_at": (NOW + timedelta(minutes=4)).isoformat()}
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, invoice_id = self.advance_to_invoice(path)
-            first = opportunity_intake.record_collected_payment(
-                path, opportunity_id, invoice_id, payment, now=NOW + timedelta(minutes=4))
-            second = opportunity_intake.record_collected_payment(
-                path, opportunity_id, invoice_id, payment, now=NOW + timedelta(minutes=4))
-            connection = sqlite3.connect(path)
-            receipt = connection.execute("""SELECT invoice_receipt_id,transaction_url,
-                gross_amount_cents,fee_amount_cents,net_amount_cents,currency,receipt_hash
-                FROM payment_receipts""").fetchone()
-            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
-            evidence = connection.execute(
-                "SELECT evidence_id FROM opportunity_transitions WHERE to_state='collected'"
-            ).fetchone()[0]
-            connection.close()
-        self.assertTrue(first["changed"])
-        self.assertFalse(second["changed"])
-        self.assertEqual(first["net_amount_cents"], 97000)
-        self.assertEqual(state, "collected")
-        self.assertEqual(receipt[:6], (invoice_id, "https://example.com/payments/246",
-                                      100000, 3000, 97000, "USD"))
-        self.assertEqual(len(receipt[6]), 64)
-        self.assertEqual(evidence, "verified_payment:" + first["receipt_id"])
-
-    def test_settled_payment_rejects_mutated_invoice_receipt(self):
-        payment = {
-            "provider": "Marketplace",
-            "external_transaction_id": "payment-tampered-invoice",
-            "transaction_url":
-                "https://example.com/payments/tampered-invoice",
-            "gross_amount_cents": 100000,
-            "fee_amount_cents": 3000,
-            "net_amount_cents": 97000,
-            "currency": "USD",
-            "paid_at": (NOW + timedelta(minutes=3)).isoformat(),
-            "settled_at": (NOW + timedelta(minutes=4)).isoformat(),
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, invoice_id = self.advance_to_invoice(path)
-            connection = sqlite3.connect(path)
-            connection.execute(
-                "UPDATE invoice_receipts SET invoice_url=? WHERE receipt_id=?",
-                ("https://example.com/invoices/substituted", invoice_id))
-            connection.commit()
-            connection.close()
-            with self.assertRaisesRegex(
-                    ValueError, "invoice_receipt_unverified"):
-                opportunity_intake.record_collected_payment(
-                    path, opportunity_id, invoice_id, payment,
-                    now=NOW + timedelta(minutes=4))
-            connection = sqlite3.connect(path)
-            payment_count = connection.execute(
-                "SELECT COUNT(*) FROM payment_receipts").fetchone()[0]
-            state = connection.execute(
-                "SELECT pipeline_state FROM opportunities").fetchone()[0]
-            connection.close()
-        self.assertEqual(payment_count, 0)
-        self.assertEqual(state, "invoiced")
-
-    def test_issue_164_realized_economics_uses_settled_net_payment(self):
-        economics = {
-            "delivery_cost_cents": 20000,
-            "inference_cost_cents": 2000,
-            "cac_cents": 5000,
-            "human_operating_minutes": 120,
-            "delivery_cost_evidence_url": "https://example.com/costs/delivery",
-            "inference_cost_evidence_url": "https://example.com/costs/inference",
-            "cac_evidence_url": "https://example.com/costs/cac",
-            "human_time_evidence_url": "https://example.com/time/ledger",
-            "measured_at": (NOW + timedelta(minutes=5)).isoformat(),
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, payment_id = self.advance_to_collected(
-                path,
-                candidate_overrides={
-                    "delivery_cost_cents": 20000,
-                    "inference_cost_cents": 2000,
-                    "cac_cents": 5000,
-                },
-            )
-            first = opportunity_intake.record_realized_unit_economics(
-                path, opportunity_id, payment_id, economics,
-                now=NOW + timedelta(minutes=5))
-            second = opportunity_intake.record_realized_unit_economics(
-                path, opportunity_id, payment_id, economics,
-                now=NOW + timedelta(minutes=5))
-            connection = sqlite3.connect(path)
-            row = connection.execute(
-                """SELECT net_collected_cents,contribution_cents,
-                          contribution_margin,revenue_per_human_hour,
-                          contribution_per_human_hour,currency,
-                          LENGTH(evidence_hash)
-                   FROM realized_unit_economics""").fetchone()
-            state = connection.execute(
-                "SELECT pipeline_state FROM opportunities").fetchone()[0]
-            connection.close()
-        self.assertTrue(first["changed"])
-        self.assertFalse(second["changed"])
-        self.assertEqual(first["evidence_status"], "realized_from_settled_payment")
-        self.assertEqual(first["net_collected_cents"], 97000)
-        self.assertEqual(first["contribution_cents"], 70000)
-        self.assertEqual(first["contribution_margin"], 0.721649)
-        self.assertEqual(first["revenue_per_human_hour"], 485.0)
-        self.assertEqual(first["contribution_per_human_hour"], 350.0)
-        comparison = first["evidence"]["proposal_projection_comparison"]
-        self.assertEqual(comparison["projected_contribution_cents"], 73000)
-        self.assertEqual(comparison["realized_contribution_cents"], 70000)
-        self.assertEqual(comparison["contribution_variance_cents"], -3000)
-        self.assertEqual(comparison["projected_contribution_margin"], 0.73)
-        self.assertEqual(comparison["realized_contribution_margin"], 0.721649)
-        self.assertEqual(row, (
-            97000, 70000, 0.721649, 485.0, 350.0, "USD", 64))
-        self.assertEqual(state, "collected")
-
-    def test_issue_164_realized_economics_fails_closed_without_settlement_link(self):
-        economics = {
-            "delivery_cost_cents": 0,
-            "inference_cost_cents": 0,
-            "cac_cents": 0,
-            "human_operating_minutes": 60,
-            "delivery_cost_evidence_url": "https://example.com/costs/delivery",
-            "inference_cost_evidence_url": "https://example.com/costs/inference",
-            "cac_evidence_url": "https://example.com/costs/cac",
-            "human_time_evidence_url": "https://example.com/time/ledger",
-            "measured_at": (NOW + timedelta(minutes=5)).isoformat(),
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, payment_id = self.advance_to_collected(path)
-            with self.assertRaisesRegex(ValueError, "payment_receipt_not_found"):
-                opportunity_intake.record_realized_unit_economics(
-                    path, opportunity_id, "payr_missing", economics,
-                    now=NOW + timedelta(minutes=5))
-            early = dict(
-                economics,
-                measured_at=(NOW + timedelta(minutes=3)).isoformat())
-            with self.assertRaisesRegex(
-                    ValueError, "economics_measured_before_settlement"):
-                opportunity_intake.record_realized_unit_economics(
-                    path, opportunity_id, payment_id, early,
-                    now=NOW + timedelta(minutes=5))
-            opportunity_intake.record_realized_unit_economics(
-                path, opportunity_id, payment_id, economics,
-                now=NOW + timedelta(minutes=5))
-            changed = dict(economics, delivery_cost_cents=1)
-            with self.assertRaisesRegex(
-                    ValueError, "realized_economics_conflict"):
-                opportunity_intake.record_realized_unit_economics(
-                    path, opportunity_id, payment_id, changed,
-                    now=NOW + timedelta(minutes=5))
-
-    def test_realized_economics_verifier_rejects_forged_margin(self):
-        economics = {
-            "delivery_cost_cents": 20000,
-            "inference_cost_cents": 2000,
-            "cac_cents": 5000,
-            "human_operating_minutes": 120,
-            "delivery_cost_evidence_url": "https://example.com/costs/delivery",
-            "inference_cost_evidence_url": "https://example.com/costs/inference",
-            "cac_evidence_url": "https://example.com/costs/cac",
-            "human_time_evidence_url": "https://example.com/time/ledger",
-            "measured_at": (NOW + timedelta(minutes=5)).isoformat(),
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, payment_id = self.advance_to_collected(path)
-            realized = opportunity_intake.record_realized_unit_economics(
-                path, opportunity_id, payment_id, economics,
-                now=NOW + timedelta(minutes=5))
-            connection = sqlite3.connect(path)
-            connection.execute(
-                "UPDATE realized_unit_economics SET contribution_cents=? "
-                "WHERE economics_id=?",
-                (99999999, realized["economics_id"]),
-            )
-            connection.commit()
-            with self.assertRaisesRegex(
-                    ValueError, "realized_economics_unverified"):
-                opportunity_intake._verified_realized_economics(
-                    connection, realized["economics_id"])
-            connection.close()
-
-    def test_realized_economics_rejects_tampered_linked_proposal(self):
-        economics = {
-            "delivery_cost_cents": 20000,
-            "inference_cost_cents": 2000,
-            "cac_cents": 5000,
-            "human_operating_minutes": 120,
-            "delivery_cost_evidence_url":
-                "https://example.com/costs/delivery",
-            "inference_cost_evidence_url":
-                "https://example.com/costs/inference",
-            "cac_evidence_url": "https://example.com/costs/cac",
-            "human_time_evidence_url": "https://example.com/time/ledger",
-            "measured_at": (NOW + timedelta(minutes=5)).isoformat(),
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, payment_id = self.advance_to_collected(
-                path,
-                candidate_overrides={
-                    "delivery_cost_cents": 20000,
-                    "inference_cost_cents": 2000,
-                    "cac_cents": 5000,
-                },
-            )
-            realized = opportunity_intake.record_realized_unit_economics(
-                path, opportunity_id, payment_id, economics,
-                now=NOW + timedelta(minutes=5))
-            connection = sqlite3.connect(path)
-            proposal_id = connection.execute(
-                """SELECT c.proposal_id
-                   FROM payment_receipts p
-                   JOIN invoice_receipts i
-                     ON i.receipt_id=p.invoice_receipt_id
-                   JOIN delivery_receipts d
-                     ON d.receipt_id=i.delivery_receipt_id
-                   JOIN qa_reports q ON q.report_id=d.qa_report_id
-                   JOIN execution_plans e ON e.plan_id=q.execution_plan_id
-                   JOIN contract_receipts c
-                     ON c.receipt_id=e.contract_receipt_id
-                   WHERE p.receipt_id=?""",
-                (payment_id,),
-            ).fetchone()[0]
-            artifact = json.loads(connection.execute(
-                "SELECT artifact_json FROM proposal_artifacts "
-                "WHERE proposal_id=?",
-                (proposal_id,),
-            ).fetchone()[0])
-            artifact["proposal_unit_economics"][
-                "projected_contribution_cents"] = 99999999
-            connection.execute(
-                "UPDATE proposal_artifacts SET artifact_json=? "
-                "WHERE proposal_id=?",
-                (json.dumps(artifact, sort_keys=True, separators=(",", ":")),
-                 proposal_id),
-            )
-            connection.commit()
-            connection.close()
-            verification_connection = sqlite3.connect(path)
-            with self.assertRaisesRegex(
-                    ValueError, "realized_economics_unverified"):
-                opportunity_intake._verified_realized_economics(
-                    verification_connection, realized["economics_id"])
-            verification_connection.close()
-
-    def test_realized_economics_verifier_revalidates_payment_lineage(self):
-        economics = {
-            "delivery_cost_cents": 20000,
-            "inference_cost_cents": 2000,
-            "cac_cents": 5000,
-            "human_operating_minutes": 120,
-            "delivery_cost_evidence_url": "https://example.com/costs/delivery",
-            "inference_cost_evidence_url": "https://example.com/costs/inference",
-            "cac_evidence_url": "https://example.com/costs/cac",
-            "human_time_evidence_url": "https://example.com/time/ledger",
-            "measured_at": (NOW + timedelta(minutes=5)).isoformat(),
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, payment_id = self.advance_to_collected(path)
-            realized = opportunity_intake.record_realized_unit_economics(
-                path, opportunity_id, payment_id, economics,
-                now=NOW + timedelta(minutes=5))
-            connection = sqlite3.connect(path)
-            connection.execute(
-                "UPDATE payment_receipts SET net_amount_cents=? "
-                "WHERE receipt_id=?",
-                (99999999, payment_id),
-            )
-            connection.commit()
-            with self.assertRaisesRegex(
-                    ValueError, "realized_economics_unverified"):
-                opportunity_intake._verified_realized_economics(
-                    connection, realized["economics_id"])
-            connection.close()
-
-    def test_forecast_accuracy_uses_only_reverified_settled_economics(self):
-        economics = {
-            "delivery_cost_cents": 20000,
-            "inference_cost_cents": 2000,
-            "cac_cents": 5000,
-            "human_operating_minutes": 120,
-            "delivery_cost_evidence_url":
-                "https://example.com/costs/delivery",
-            "inference_cost_evidence_url":
-                "https://example.com/costs/inference",
-            "cac_evidence_url": "https://example.com/costs/cac",
-            "human_time_evidence_url": "https://example.com/time/ledger",
-            "measured_at": (NOW + timedelta(minutes=5)).isoformat(),
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, payment_id = self.advance_to_collected(
-                path,
-                candidate_overrides={
-                    "delivery_cost_cents": 20000,
-                    "inference_cost_cents": 2000,
-                    "cac_cents": 5000,
-                },
-            )
-            opportunity_intake.record_realized_unit_economics(
-                path, opportunity_id, payment_id, economics,
-                now=NOW + timedelta(minutes=5))
-            summary = opportunity_intake.summarize_verified_forecast_accuracy(
-                path)
-            connection = sqlite3.connect(path)
-            connection.execute(
-                "UPDATE payment_receipts SET net_amount_cents=? "
-                "WHERE receipt_id=?",
-                (99999999, payment_id),
-            )
-            connection.commit()
-            connection.close()
-            with self.assertRaisesRegex(
-                    ValueError, "realized_economics_unverified"):
-                opportunity_intake.summarize_verified_forecast_accuracy(path)
-        self.assertEqual(summary, {
-            "verified_comparison_count": 1,
-            "by_currency": {
-                "USD": {
-                    "comparison_count": 1,
-                    "projected_contribution_cents": 73000,
-                    "realized_contribution_cents": 70000,
-                    "net_variance_cents": -3000,
-                    "mean_absolute_error_cents": 3000.0,
-                },
-            },
-            "status": "verified_settled_forecast_accuracy",
-        })
-
-    def test_recurring_growth_receipt_reverification_detects_tampering(self):
-        normalized = {
-            "opportunity_id": "opp_1",
-            "recurring_payment_receipt_id": "recur_1",
-            "kind": "expansion",
-            "provider": "marketplace",
-            "external_event_id": "expand_1",
-            "evidence_url": "https://example.com/evidence/expand_1",
-            "occurred_at": NOW.isoformat(),
-            "recurring_economics_id": "econ_1",
-            "baseline_scope": "One workflow",
-            "expanded_scope": "Two workflows",
-            "baseline_value_cents": 50000,
-            "expanded_value_cents": 75000,
-        }
-        serialized = json.dumps(
-            normalized, sort_keys=True, separators=(",", ":"))
-        receipt_hash = opportunity_intake.hashlib.sha256(
-            serialized.encode()).hexdigest()
-        receipt_id = "rgrow_" + receipt_hash[:24]
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "growth.db")
-            connection = sqlite3.connect(path)
-            connection.execute('''CREATE TABLE recurring_growth_evidence_receipts (
-                receipt_id TEXT PRIMARY KEY, opportunity_id TEXT,
-                recurring_payment_receipt_id TEXT,
-                recurring_economics_id TEXT, kind TEXT, provider TEXT,
-                external_event_id TEXT, evidence_url TEXT,
-                prior_recurring_payment_receipt_id TEXT,
-                baseline_scope TEXT, expanded_scope TEXT,
-                baseline_value_cents INTEGER, expanded_value_cents INTEGER,
-                occurred_at TEXT, receipt_hash TEXT
-            )''')
-            connection.execute(
-                "INSERT INTO recurring_growth_evidence_receipts VALUES "
-                "(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (receipt_id, "opp_1", "recur_1", "econ_1", "expansion",
-                 "marketplace", "expand_1",
-                 "https://example.com/evidence/expand_1", None,
-                 "One workflow", "Two workflows", 50000, 75000,
-                 NOW.isoformat(), receipt_hash))
-            payment = [None] * 18
-            payment[0] = "opp_1"
-            payment[16] = (NOW - timedelta(minutes=1)).isoformat()
-            with patch.object(
-                    opportunity_intake,
-                    "_verified_recurring_payment_receipt",
-                    return_value=payment), patch.object(
-                        opportunity_intake, "_verified_realized_economics",
-                        return_value={
-                            "opportunity_id": "opp_1",
-                            "payment_receipt_id": "recur_1",
-                            "contribution_cents": 25000,
-                        }):
-                self.assertEqual(
-                    opportunity_intake._verified_recurring_growth_evidence(
-                        connection, receipt_id), normalized)
-                connection.execute(
-                    "UPDATE recurring_growth_evidence_receipts "
-                    "SET expanded_value_cents=999999 WHERE receipt_id=?",
-                    (receipt_id,))
-                connection.commit()
-                with self.assertRaisesRegex(
-                        ValueError, "recurring_growth_evidence_unverified"):
-                    opportunity_intake._verified_recurring_growth_evidence(
-                        connection, receipt_id)
-            connection.close()
-
-    def test_payment_rejects_bypass_mismatches_and_unsettled_evidence(self):
-        valid = {"provider": "marketplace", "external_transaction_id": "payment-246",
-                 "transaction_url": "https://example.com/payments/246",
-                 "gross_amount_cents": 100000, "fee_amount_cents": 3000,
-                 "net_amount_cents": 97000, "currency": "USD",
-                 "paid_at": (NOW + timedelta(minutes=3)).isoformat(),
-                 "settled_at": (NOW + timedelta(minutes=4)).isoformat()}
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, invoice_id = self.advance_to_invoice(path)
-            with self.assertRaisesRegex(ValueError, "payment_receipt_required"):
-                opportunity_intake.record_transition(
-                    path, opportunity_id, "invoiced", "collected",
-                    "verified_payment:free-form", now=NOW)
-            for payment, reason in (
-                    (dict(valid, gross_amount_cents=99999), "payment_net_amount_mismatch"),
-                    (dict(valid, gross_amount_cents=99999, fee_amount_cents=2999),
-                     "payment_amount_mismatch"),
-                    (dict(valid, net_amount_cents=96000), "payment_net_amount_mismatch"),
-                    (dict(valid, currency="EUR"), "payment_currency_mismatch"),
-                    (dict(valid, provider="other-provider"), "payment_provider_mismatch"),
-                    (dict(valid, transaction_url="http://example.com/payments/246"),
-                     "transaction_url_https_required"),
-                    (dict(valid, paid_at=NOW.isoformat()), "payment_before_invoice"),
-                    (dict(valid, settled_at=(NOW + timedelta(minutes=2)).isoformat()),
-                     "settled_before_paid")):
-                with self.assertRaisesRegex(ValueError, reason):
-                    opportunity_intake.record_collected_payment(
-                        path, opportunity_id, invoice_id, payment,
-                        now=NOW + timedelta(minutes=4))
-            connection = sqlite3.connect(path)
-            count = connection.execute("SELECT COUNT(*) FROM payment_receipts").fetchone()[0]
-            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
-            connection.close()
-        self.assertEqual(count, 0)
-        self.assertEqual(state, "invoiced")
-
-    def test_payment_rolls_back_if_transition_insert_fails(self):
-        payment = {"provider": "marketplace", "external_transaction_id": "payment-246",
-                   "transaction_url": "https://example.com/payments/246",
-                   "gross_amount_cents": 100000, "fee_amount_cents": 3000,
-                   "net_amount_cents": 97000, "currency": "USD",
-                   "paid_at": (NOW + timedelta(minutes=3)).isoformat(),
-                   "settled_at": (NOW + timedelta(minutes=4)).isoformat()}
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
-            opportunity_id, invoice_id = self.advance_to_invoice(path)
-            connection = sqlite3.connect(path)
-            connection.execute("""CREATE TRIGGER reject_payment_transition BEFORE INSERT
-                                ON opportunity_transitions WHEN NEW.to_state = 'collected'
-                                BEGIN SELECT RAISE(ABORT, 'transition failure'); END""")
-            connection.commit()
-            connection.close()
-            with self.assertRaises(sqlite3.IntegrityError):
-                opportunity_intake.record_collected_payment(
-                    path, opportunity_id, invoice_id, payment,
-                    now=NOW + timedelta(minutes=4))
-            connection = sqlite3.connect(path)
-            count = connection.execute("SELECT COUNT(*) FROM payment_receipts").fetchone()[0]
-            state = connection.execute("SELECT pipeline_state FROM opportunities").fetchone()[0]
-            connection.close()
-        self.assertEqual(count, 0)
-        self.assertEqual(state, "invoiced")
-
-    def test_downstream_revenue_rejects_mutated_payment_receipt(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "opportunities.db")
+                "sub…12513 tokens truncated…      path = os.path.join(directory, "opportunities.db")
             opportunity_id, payment_id = self.advance_to_collected(path)
             connection = sqlite3.connect(path)
             connection.execute(
@@ -4422,6 +3556,10 @@ class OpportunityIntakeTests(unittest.TestCase):
                         "currency": "USD",
                         "received_at": NOW.isoformat(),
                     }, now=NOW)
+            with self.assertRaisesRegex(
+                    ValueError, "recurring_payout_receipt_unverified"):
+                opportunity_intake.summarize_settled_recurring_revenue(
+                    path, opportunity_id)
             connection = sqlite3.connect(path)
             connection.execute(
                 """UPDATE recurring_payout_availability_receipts
@@ -4450,6 +3588,26 @@ class OpportunityIntakeTests(unittest.TestCase):
                     "currency": "USD",
                     "received_at": NOW.isoformat(),
                 }, now=NOW)
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE recurring_bank_receipts
+                   SET evidence_url=? WHERE receipt_id=?""",
+                ("https://example.com/bank/substituted",
+                 bank["receipt_id"]))
+            connection.commit()
+            connection.close()
+            with self.assertRaisesRegex(
+                    ValueError, "recurring_bank_receipt_unverified"):
+                opportunity_intake.summarize_settled_recurring_revenue(
+                    path, opportunity_id)
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """UPDATE recurring_bank_receipts
+                   SET evidence_url=? WHERE receipt_id=?""",
+                ("https://example.com/bank/managed-transfer-1",
+                 bank["receipt_id"]))
+            connection.commit()
+            connection.close()
             recurring_revenue = (
                 opportunity_intake.summarize_settled_recurring_revenue(
                     path, opportunity_id))
@@ -4494,6 +3652,10 @@ class OpportunityIntakeTests(unittest.TestCase):
                 (99999999, settled["receipt_id"]),
             )
             connection.commit()
+            with self.assertRaisesRegex(
+                    ValueError, "recurring_payment_receipt_unverified"):
+                opportunity_intake.summarize_settled_recurring_revenue(
+                    path, opportunity_id)
             with self.assertRaisesRegex(
                     ValueError, "realized_economics_unverified"):
                 opportunity_intake._verified_realized_economics(
