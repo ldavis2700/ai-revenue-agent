@@ -3842,6 +3842,8 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertFalse(duplicate["changed"])
         self.assertEqual(recurring_revenue, {
             "settled_receipt_count": 1,
+            "withdrawable_receipt_count": 1,
+            "bank_received_receipt_count": 1,
             "recurring_collected_gross_cents": 15000,
             "recurring_collected_fee_cents": 500,
             "recurring_collected_net_cents": 14500,
