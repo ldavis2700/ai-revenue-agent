@@ -235,8 +235,10 @@ class OpportunityIntakeTests(unittest.TestCase):
 
     def test_canonical_urls_reject_sensitive_query_credentials(self):
         for key in (
-            "access_token", "api_key", "authorization", "credential",
-            "password", "signature", "secret", "token",
+            "access_token", "api_key", "authorization", "client_secret",
+            "credential", "id_token", "password", "private_key",
+            "refresh_token", "session_id", "session_token", "signature",
+            "secret", "token", "webhook_secret",
         ):
             result = opportunity_intake.ingest([
                 candidate(
