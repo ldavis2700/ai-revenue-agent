@@ -2273,8 +2273,36 @@ def _verified_recurring_payment_receipt(
     }
     serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
     expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
-    if payment[17] != expected_hash or recurring_payment_receipt_id != (
-            "recurpay_" + expected_hash[:24]):
+    try:
+        period_start = parse_time(payment[12], "service_period_start")
+        period_end = parse_time(payment[13], "service_period_end")
+        invoiced_at = parse_time(payment[14], "invoiced_at")
+        paid_at = parse_time(payment[15], "paid_at")
+        settled_at = parse_time(payment[16], "settled_at")
+        amounts_valid = (
+            all(isinstance(payment[index], int)
+                and not isinstance(payment[index], bool)
+                for index in (8, 9, 10))
+            and payment[8] > 0
+            and payment[9] >= 0
+            and payment[10] > 0
+            and payment[10] == payment[8] - payment[9]
+        )
+        semantics_valid = (
+            amounts_valid
+            and re.fullmatch(r"[A-Z]{3}", str(payment[11] or "")) is not None
+            and urlsplit(str(payment[5] or "")).scheme == "https"
+            and urlsplit(str(payment[7] or "")).scheme == "https"
+            and period_start < period_end
+            and invoiced_at <= paid_at <= settled_at
+            and settled_at <= utc_now() + MAX_FUTURE_SKEW
+        )
+    except (TypeError, ValueError):
+        semantics_valid = False
+    if (payment[17] != expected_hash
+            or recurring_payment_receipt_id != (
+                "recurpay_" + expected_hash[:24])
+            or not semantics_valid):
         raise ValueError("recurring_payment_receipt_unverified")
     return payment
 
