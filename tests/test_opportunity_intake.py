@@ -1,5 +1,5 @@
-Warning: truncated output (original token count: 62513)
-Total output lines: 4788
+Warning: truncated output (original token count: 62612)
+Total output lines: 4795
 
 from datetime import datetime, timedelta, timezone
 import json
@@ -1963,13 +1963,7 @@ class OpportunityIntakeTests(unittest.TestCase):
             proposal = opportunity_intake.prepare_proposal(path, opportunity_id, self.proposal(), now=NOW)
             submitted = opportunity_intake.record_submission(path, opportunity_id, proposal["proposal_id"], {
                 "provider": "marketplace", "external_submission_id": "application-456",
-                "sub…12513 tokens truncated…      path = os.path.join(directory, "opportunities.db")
-            opportunity_id, payment_id = self.advance_to_collected(path)
-            connection = sqlite3.connect(path)
-            connection.execute(
-                "UPDATE payment_receipts SET transaction_url=? WHERE receipt_id=?",
-                ("https://example.com/payments/substituted", payment_id))
-            connection.commit()
+                "sub…12612 tokens truncated…it()
             connection.close()
             payout_evidence = {
                 "provider": "Marketplace",
@@ -3892,6 +3886,13 @@ class OpportunityIntakeTests(unittest.TestCase):
             retention["recurring_economics_id"],
             second_realized["economics_id"])
         self.assertEqual(state, "contracted")
+
+    def test_recurring_revenue_summary_rejects_unknown_opportunity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            with self.assertRaisesRegex(ValueError, "opportunity_not_found"):
+                opportunity_intake.summarize_settled_recurring_revenue(
+                    path, "missing-opportunity")
 
     def test_issue_164_recurring_terms_fail_closed_without_managed_contract(self):
         family_id = "crm_sales_ops_automation"
