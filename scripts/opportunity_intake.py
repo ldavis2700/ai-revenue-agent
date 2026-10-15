@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 72992)
-Total output lines: 5803
-
 #!/usr/bin/env python3
 """Normalize, screen, deduplicate, and rank paid-work opportunities.
 
@@ -2178,7 +2175,1676 @@ def prepare_proposal(path, opportunity_id, proposal, *, now=None):
             if artifact["price_cents"] > opportunity["payout_cents"]:
                 raise ValueError("price_exceeds_opportunity_payout")
             tid = transition_id(opportunity_id, "qualified", "proposal_ready", evidence_id)
-            con…22992 tokens truncated…             evidence["proposal_projection_comparison"] = {
+            connection.execute("""INSERT INTO proposal_artifacts
+                (proposal_id,opportunity_id,artifact_hash,artifact_json,created_at)
+                VALUES (?,?,?,?,?)""", (
+                    proposal_id, opportunity_id, artifact_hash, serialized, created_at))
+            if recurring_terms:
+                term_id = "rect_" + recurring_terms["terms_hash"][:24]
+                connection.execute(
+                    """INSERT INTO recurring_pricing_terms
+                       (term_id,opportunity_id,proposal_id,base_fee_cents,
+                        billing_cadence,included_services_json,
+                        included_usage_definition,support_boundaries,
+                        exception_boundaries,renewal_terms,termination_terms,
+                        terms_hash,recorded_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                        term_id, opportunity_id, proposal_id,
+                        recurring_terms["base_fee_cents"],
+                        recurring_terms["billing_cadence"],
+                        json.dumps(recurring_terms["included_services"],
+                                   sort_keys=True, separators=(",", ":")),
+                        recurring_terms["included_usage_definition"],
+                        recurring_terms["support_boundaries"],
+                        recurring_terms["exception_boundaries"],
+                        recurring_terms["renewal_terms"],
+                        recurring_terms["termination_terms"],
+                        recurring_terms["terms_hash"], created_at))
+            opportunity["pipeline_state"] = "proposal_ready"
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                ("proposal_ready", json.dumps(opportunity, sort_keys=True, separators=(",", ":")),
+                 created_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, "qualified", "proposal_ready", evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), created_at))
+        return {"proposal_id": proposal_id, "changed": True, "state": "proposal_ready"}
+    finally:
+        connection.close()
+
+
+def record_submission(path, opportunity_id, proposal_id, submission, *, now=None):
+    """Persist a provider receipt and advance a prepared proposal atomically.
+
+    This records an already completed submission; it does not contact a buyer or
+    bypass provider authentication. The proposal must be an artifact already
+    stored for this opportunity.
+    """
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(proposal_id, str) or not proposal_id.strip():
+        raise ValueError("proposal_id_required")
+    if not isinstance(submission, dict):
+        raise ValueError("submission_object_required")
+    opportunity_id = opportunity_id.strip()
+    proposal_id = proposal_id.strip()
+    provider = _proposal_text(submission.get("provider"), "submission_provider", 160)
+    external_id = _proposal_text(
+        submission.get("external_submission_id"), "external_submission_id", 500)
+    submission_url = canonical_url(
+        _proposal_text(submission.get("submission_url"), "submission_url", 2000))
+    if urlsplit(submission_url).scheme != "https":
+        raise ValueError("submission_url_https_required")
+    submitted_at = parse_time(submission.get("submitted_at"), "submitted_at")
+    recorded = now or utc_now()
+    if submitted_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("submitted_at_future")
+
+    receipt = {"opportunity_id": opportunity_id, "proposal_id": proposal_id,
+               "provider": provider, "external_submission_id": external_id,
+               "submission_url": submission_url, "submitted_at": submitted_at.isoformat()}
+    serialized = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+    receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    receipt_id = "subr_" + receipt_hash[:24]
+    evidence_id = "submission:" + receipt_id
+    recorded_at = recorded.isoformat()
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            proposal = connection.execute(
+                "SELECT opportunity_id,created_at FROM proposal_artifacts WHERE proposal_id=?",
+                (proposal_id,)).fetchone()
+            if proposal is None:
+                raise ValueError("proposal_not_found")
+            if proposal[0] != opportunity_id:
+                raise ValueError("proposal_opportunity_mismatch")
+            if submitted_at < parse_time(proposal[1], "proposal_created_at"):
+                raise ValueError("submission_before_proposal")
+            existing = connection.execute(
+                "SELECT 1 FROM submission_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
+            if row[0] == "submitted" and existing:
+                return {"receipt_id": receipt_id, "changed": False, "state": row[0]}
+            if row[0] != "proposal_ready":
+                raise ValueError("pipeline_state_conflict")
+            tid = transition_id(opportunity_id, "proposal_ready", "submitted", evidence_id)
+            connection.execute("""INSERT INTO submission_receipts
+                (receipt_id,opportunity_id,proposal_id,provider,external_submission_id,
+                 submission_url,submitted_at,receipt_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?,?,?)""", (
+                    receipt_id, opportunity_id, proposal_id, provider, external_id,
+                    submission_url, submitted_at.isoformat(), receipt_hash, recorded_at))
+            payload = json.loads(row[1])
+            payload["pipeline_state"] = "submitted"
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                ("submitted", json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                 recorded_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, "proposal_ready", "submitted", evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
+        return {"receipt_id": receipt_id, "changed": True, "state": "submitted"}
+    finally:
+        connection.close()
+
+
+def record_response(path, opportunity_id, submission_receipt_id, response, *, now=None):
+    """Persist a provider-backed buyer response and advance it atomically."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(submission_receipt_id, str) or not submission_receipt_id.strip():
+        raise ValueError("submission_receipt_id_required")
+    if not isinstance(response, dict):
+        raise ValueError("response_object_required")
+    opportunity_id = opportunity_id.strip()
+    submission_receipt_id = submission_receipt_id.strip()
+    provider = _proposal_text(response.get("provider"), "response_provider", 160)
+    external_id = _proposal_text(
+        response.get("external_message_id"), "external_message_id", 500)
+    message_url = canonical_url(
+        _proposal_text(response.get("message_url"), "message_url", 2000))
+    if urlsplit(message_url).scheme != "https":
+        raise ValueError("message_url_https_required")
+    received_at = parse_time(response.get("received_at"), "received_at")
+    target_state = str(
+        response.get("stage") or "response_received").strip().lower()
+    if target_state not in BUYER_EVENT_STATES:
+        raise ValueError("response_stage_invalid")
+    recorded = now or utc_now()
+    if received_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("received_at_future")
+
+    receipt = {"opportunity_id": opportunity_id,
+               "submission_receipt_id": submission_receipt_id,
+               "provider": provider, "external_message_id": external_id,
+               "message_url": message_url, "received_at": received_at.isoformat(),
+               "stage": target_state}
+    serialized = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+    receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    receipt_id = "respr_" + receipt_hash[:24]
+    evidence_prefix = {
+        "response_received": "reply:",
+        "buyer_reply": "reply:",
+        "interview": "interview:",
+        "offer": "offer:",
+    }[target_state]
+    evidence_id = evidence_prefix + receipt_id
+    recorded_at = recorded.isoformat()
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            submission = connection.execute(
+                "SELECT opportunity_id,provider,submitted_at FROM submission_receipts WHERE receipt_id=?",
+                (submission_receipt_id,)).fetchone()
+            if submission is None:
+                raise ValueError("submission_receipt_not_found")
+            if submission[0] != opportunity_id:
+                raise ValueError("submission_opportunity_mismatch")
+            if submission[1].casefold() != provider.casefold():
+                raise ValueError("response_provider_mismatch")
+            if received_at < parse_time(submission[2], "submission_submitted_at"):
+                raise ValueError("response_before_submission")
+            existing = connection.execute(
+                "SELECT 1 FROM response_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
+            if row[0] == target_state and existing:
+                return {"receipt_id": receipt_id, "changed": False, "state": row[0]}
+            source_state = row[0]
+            if target_state not in PIPELINE_TRANSITIONS.get(source_state, set()):
+                raise ValueError("pipeline_state_conflict")
+            tid = transition_id(opportunity_id, source_state, target_state, evidence_id)
+            connection.execute("""INSERT INTO response_receipts
+                (receipt_id,opportunity_id,submission_receipt_id,provider,external_message_id,
+                 message_url,received_at,receipt_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?,?,?)""", (
+                    receipt_id, opportunity_id, submission_receipt_id, provider, external_id,
+                    message_url, received_at.isoformat(), receipt_hash, recorded_at))
+            payload = json.loads(row[1])
+            payload["pipeline_state"] = target_state
+            payload["buyer_stage"] = (
+                "buyer_reply" if target_state == "response_received" else target_state)
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                (target_state, json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                 recorded_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, source_state, target_state, evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
+        return {"receipt_id": receipt_id, "changed": True, "state": target_state}
+    finally:
+        connection.close()
+
+
+def record_contract(path, opportunity_id, response_receipt_id, contract, *, now=None):
+    """Record an externally accepted, authorized contract without accepting it."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(response_receipt_id, str) or not response_receipt_id.strip():
+        raise ValueError("response_receipt_id_required")
+    if not isinstance(contract, dict):
+        raise ValueError("contract_object_required")
+    opportunity_id = opportunity_id.strip()
+    response_receipt_id = response_receipt_id.strip()
+    provider = _proposal_text(contract.get("provider"), "contract_provider", 160)
+    external_id = _proposal_text(
+        contract.get("external_contract_id"), "external_contract_id", 500)
+    contract_url = canonical_url(
+        _proposal_text(contract.get("contract_url"), "contract_url", 2000))
+    authority_url = canonical_url(_proposal_text(
+        contract.get("authority_evidence_url"), "authority_evidence_url", 2000))
+    if urlsplit(contract_url).scheme != "https":
+        raise ValueError("contract_url_https_required")
+    if urlsplit(authority_url).scheme != "https":
+        raise ValueError("authority_evidence_url_https_required")
+    amount_cents = finite_number(contract, "amount_cents", minimum=1)
+    if not amount_cents.is_integer():
+        raise ValueError("amount_cents_invalid")
+    currency = _proposal_text(contract.get("currency"), "contract_currency", 3).upper()
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        raise ValueError("contract_currency_invalid")
+    terms_authority = _proposal_text(
+        contract.get("terms_authority"), "terms_authority", 80)
+    if terms_authority not in {"preapproved_standard_terms", "owner_approved_terms"}:
+        raise ValueError("terms_authority_invalid")
+    contracted_at = parse_time(contract.get("contracted_at"), "contracted_at")
+    recorded = now or utc_now()
+    if contracted_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("contracted_at_future")
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            response = connection.execute("""SELECT rr.opportunity_id,rr.provider,sr.proposal_id,
+                rr.received_at
+                FROM response_receipts rr JOIN submission_receipts sr
+                ON sr.receipt_id=rr.submission_receipt_id WHERE rr.receipt_id=?""",
+                (response_receipt_id,)).fetchone()
+            if response is None:
+                raise ValueError("response_receipt_not_found")
+            if response[0] != opportunity_id:
+                raise ValueError("response_opportunity_mismatch")
+            if response[1].casefold() != provider.casefold():
+                raise ValueError("contract_provider_mismatch")
+            response_at = parse_time(response[3], "response_received_at")
+            if contracted_at < response_at:
+                raise ValueError("contract_before_response")
+            proposal_id = response[2]
+            proposal = json.loads(connection.execute(
+                "SELECT artifact_json FROM proposal_artifacts WHERE proposal_id=?",
+                (proposal_id,)).fetchone()[0])
+            opportunity = json.loads(row[1])
+            if int(amount_cents) > proposal["price_cents"]:
+                raise ValueError("contract_amount_exceeds_proposal")
+            if currency != opportunity["currency"]:
+                raise ValueError("contract_currency_mismatch")
+
+            recurring_binding = None
+            recurring_fields = (
+                "recurring_terms_hash", "recurring_base_fee_cents",
+                "recurring_terms_acceptance_url", "recurring_terms_accepted_at")
+            proposed_recurring = proposal.get("recurring_terms")
+            if proposed_recurring:
+                recurring = connection.execute(
+                    """SELECT term_id,terms_hash,base_fee_cents
+                       FROM recurring_pricing_terms WHERE proposal_id=?""",
+                    (proposal_id,)).fetchone()
+                if recurring is None:
+                    raise ValueError("recurring_pricing_terms_not_found")
+                accepted_hash = _proposal_text(
+                    contract.get("recurring_terms_hash"),
+                    "recurring_terms_hash", 64).lower()
+                if not re.fullmatch(r"[0-9a-f]{64}", accepted_hash):
+                    raise ValueError("recurring_terms_hash_invalid")
+                accepted_fee = finite_number(
+                    contract, "recurring_base_fee_cents", minimum=1)
+                if not accepted_fee.is_integer():
+                    raise ValueError("recurring_base_fee_cents_invalid")
+                acceptance_url = canonical_url(_proposal_text(
+                    contract.get("recurring_terms_acceptance_url"),
+                    "recurring_terms_acceptance_url", 2000))
+                if urlsplit(acceptance_url).scheme != "https":
+                    raise ValueError(
+                        "recurring_terms_acceptance_url_https_required")
+                accepted_at = parse_time(
+                    contract.get("recurring_terms_accepted_at"),
+                    "recurring_terms_accepted_at")
+                if accepted_at < response_at or accepted_at > contracted_at:
+                    raise ValueError("recurring_terms_acceptance_time_invalid")
+                if accepted_hash != recurring[1]:
+                    raise ValueError("recurring_terms_hash_mismatch")
+                if int(accepted_fee) != recurring[2]:
+                    raise ValueError("recurring_base_fee_mismatch")
+                recurring_binding = {
+                    "term_id": recurring[0],
+                    "accepted_terms_hash": accepted_hash,
+                    "accepted_base_fee_cents": int(accepted_fee),
+                    "acceptance_evidence_url": acceptance_url,
+                    "accepted_at": accepted_at.isoformat(),
+                }
+            elif any(contract.get(field) is not None for field in recurring_fields):
+                raise ValueError("recurring_pricing_not_configured")
+
+            outcome_binding = None
+            outcome_fields = (
+                "outcome_terms_hash", "outcome_fee_cap_cents",
+                "outcome_terms_acceptance_url", "outcome_terms_accepted_at")
+            if opportunity.get("outcome_pricing"):
+                terms = connection.execute(
+                    """SELECT term_id,terms_hash,fee_cap_cents
+                       FROM outcome_pricing_terms WHERE opportunity_id=?""",
+                    (opportunity_id,)).fetchone()
+                if terms is None:
+                    raise ValueError("outcome_pricing_terms_not_found")
+                accepted_hash = _proposal_text(
+                    contract.get("outcome_terms_hash"), "outcome_terms_hash", 64).lower()
+                if not re.fullmatch(r"[0-9a-f]{64}", accepted_hash):
+                    raise ValueError("outcome_terms_hash_invalid")
+                accepted_cap = finite_number(
+                    contract, "outcome_fee_cap_cents", minimum=1)
+                if not accepted_cap.is_integer():
+                    raise ValueError("outcome_fee_cap_cents_invalid")
+                acceptance_url = canonical_url(_proposal_text(
+                    contract.get("outcome_terms_acceptance_url"),
+                    "outcome_terms_acceptance_url", 2000))
+                if urlsplit(acceptance_url).scheme != "https":
+                    raise ValueError("outcome_terms_acceptance_url_https_required")
+                accepted_at = parse_time(
+                    contract.get("outcome_terms_accepted_at"),
+                    "outcome_terms_accepted_at")
+                if accepted_at < response_at or accepted_at > contracted_at:
+                    raise ValueError("outcome_terms_acceptance_time_invalid")
+                if accepted_hash != terms[1]:
+                    raise ValueError("outcome_terms_hash_mismatch")
+                if int(accepted_cap) != terms[2]:
+                    raise ValueError("outcome_fee_cap_mismatch")
+                outcome_binding = {
+                    "term_id": terms[0],
+                    "accepted_terms_hash": accepted_hash,
+                    "accepted_fee_cap_cents": int(accepted_cap),
+                    "acceptance_evidence_url": acceptance_url,
+                    "accepted_at": accepted_at.isoformat(),
+                }
+            elif any(contract.get(field) is not None for field in outcome_fields):
+                raise ValueError("outcome_pricing_not_configured")
+
+            receipt = {"opportunity_id": opportunity_id,
+                       "response_receipt_id": response_receipt_id,
+                       "proposal_id": proposal_id, "provider": provider,
+                       "external_contract_id": external_id, "contract_url": contract_url,
+                       "amount_cents": int(amount_cents), "currency": currency,
+                       "contracted_at": contracted_at.isoformat(),
+                       "terms_authority": terms_authority,
+                       "authority_evidence_url": authority_url,
+                       "recurring_terms_binding": recurring_binding,
+                       "outcome_terms_binding": outcome_binding}
+            serialized = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            receipt_id = "contr_" + receipt_hash[:24]
+            evidence_id = "contract:" + receipt_id
+            recorded_at = recorded.isoformat()
+            existing = connection.execute(
+                "SELECT 1 FROM contract_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
+            if row[0] == "contracted" and existing:
+                return {"receipt_id": receipt_id, "changed": False, "state": row[0]}
+            source_state = row[0]
+            if source_state not in {"response_received", "offer"}:
+                raise ValueError("pipeline_state_conflict")
+            tid = transition_id(opportunity_id, source_state, "contracted", evidence_id)
+            connection.execute("""INSERT INTO contract_receipts
+                (receipt_id,opportunity_id,response_receipt_id,proposal_id,provider,
+                 external_contract_id,contract_url,amount_cents,currency,contracted_at,
+                 terms_authority,authority_evidence_url,receipt_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                    receipt_id, opportunity_id, response_receipt_id, proposal_id, provider,
+                    external_id, contract_url, int(amount_cents), currency,
+                    contracted_at.isoformat(), terms_authority, authority_url,
+                    receipt_hash, recorded_at))
+            if outcome_binding:
+                binding = {
+                    "contract_receipt_id": receipt_id,
+                    "opportunity_id": opportunity_id,
+                    **outcome_binding,
+                }
+                binding_json = json.dumps(
+                    binding, sort_keys=True, separators=(",", ":"))
+                binding_hash = hashlib.sha256(binding_json.encode()).hexdigest()
+                connection.execute(
+                    """INSERT INTO contract_outcome_terms
+                       (contract_receipt_id,opportunity_id,term_id,
+                        accepted_terms_hash,accepted_fee_cap_cents,
+                        acceptance_evidence_url,accepted_at,binding_hash,recorded_at)
+                       VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (receipt_id, opportunity_id, outcome_binding["term_id"],
+                     outcome_binding["accepted_terms_hash"],
+                     outcome_binding["accepted_fee_cap_cents"],
+                     outcome_binding["acceptance_evidence_url"],
+                     outcome_binding["accepted_at"], binding_hash, recorded_at))
+            if recurring_binding:
+                binding = {
+                    "contract_receipt_id": receipt_id,
+                    "opportunity_id": opportunity_id,
+                    **recurring_binding,
+                }
+                binding_json = json.dumps(
+                    binding, sort_keys=True, separators=(",", ":"))
+                binding_hash = hashlib.sha256(binding_json.encode()).hexdigest()
+                connection.execute(
+                    """INSERT INTO contract_recurring_terms
+                       (contract_receipt_id,opportunity_id,term_id,
+                        accepted_terms_hash,accepted_base_fee_cents,
+                        acceptance_evidence_url,accepted_at,binding_hash,recorded_at)
+                       VALUES (?,?,?,?,?,?,?,?,?)""", (
+                        receipt_id, opportunity_id, recurring_binding["term_id"],
+                        recurring_binding["accepted_terms_hash"],
+                        recurring_binding["accepted_base_fee_cents"],
+                        recurring_binding["acceptance_evidence_url"],
+                        recurring_binding["accepted_at"], binding_hash, recorded_at))
+            opportunity["pipeline_state"] = "contracted"
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                ("contracted", json.dumps(opportunity, sort_keys=True, separators=(",", ":")),
+                 recorded_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, source_state, "contracted", evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
+        return {"receipt_id": receipt_id, "changed": True, "state": "contracted",
+                "recurring_terms_bound": bool(recurring_binding),
+                "outcome_terms_bound": bool(outcome_binding)}
+    finally:
+        connection.close()
+
+
+def start_execution(path, opportunity_id, contract_receipt_id, plan, *, now=None):
+    """Persist a bounded delivery plan before marking contracted work executing."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(contract_receipt_id, str) or not contract_receipt_id.strip():
+        raise ValueError("contract_receipt_id_required")
+    if not isinstance(plan, dict):
+        raise ValueError("execution_plan_object_required")
+    opportunity_id = opportunity_id.strip()
+    contract_receipt_id = contract_receipt_id.strip()
+    environment = _proposal_text(plan.get("execution_environment"), "execution_environment", 500)
+    deliverables = plan.get("deliverables")
+    if not isinstance(deliverables, list) or not 1 <= len(deliverables) <= 20:
+        raise ValueError("deliverables_invalid")
+    normalized_deliverables = []
+    for deliverable in deliverables:
+        if not isinstance(deliverable, dict):
+            raise ValueError("deliverable_invalid")
+        title = _proposal_text(deliverable.get("title"), "deliverable_title", 160)
+        description = _proposal_text(
+            deliverable.get("description"), "deliverable_description", 2000)
+        acceptance = _proposal_text(
+            deliverable.get("acceptance_criteria"), "acceptance_criteria", 2000)
+        due_at = parse_time(deliverable.get("due_at"), "deliverable_due_at")
+        normalized_deliverables.append({"title": title, "description": description,
+                                        "acceptance_criteria": acceptance,
+                                        "due_at": due_at.isoformat()})
+    started_at = parse_time(plan.get("started_at"), "started_at")
+    recorded = now or utc_now()
+    if started_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("started_at_future")
+    if any(parse_time(item["due_at"], "deliverable_due_at") <= started_at
+           for item in normalized_deliverables):
+        raise ValueError("deliverable_due_at_invalid")
+
+    artifact = {"opportunity_id": opportunity_id,
+                "contract_receipt_id": contract_receipt_id,
+                "execution_environment": environment,
+                "deliverables": normalized_deliverables,
+                "started_at": started_at.isoformat()}
+    serialized = json.dumps(artifact, sort_keys=True, separators=(",", ":"))
+    plan_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    plan_id = "execp_" + plan_hash[:24]
+    evidence_id = "contract:" + contract_receipt_id + ":plan:" + plan_id
+    recorded_at = recorded.isoformat()
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            contract = connection.execute(
+                "SELECT opportunity_id,contracted_at FROM contract_receipts WHERE receipt_id=?",
+                (contract_receipt_id,)).fetchone()
+            if contract is None:
+                raise ValueError("contract_receipt_not_found")
+            if contract[0] != opportunity_id:
+                raise ValueError("contract_opportunity_mismatch")
+            if started_at < parse_time(contract[1], "contract_contracted_at"):
+                raise ValueError("execution_before_contract")
+            existing = connection.execute(
+                "SELECT 1 FROM execution_plans WHERE plan_id=?", (plan_id,)).fetchone()
+            if row[0] == "executing" and existing:
+                return {"plan_id": plan_id, "changed": False, "state": row[0]}
+            if row[0] != "contracted":
+                raise ValueError("pipeline_state_conflict")
+            tid = transition_id(opportunity_id, "contracted", "executing", evidence_id)
+            connection.execute("""INSERT INTO execution_plans
+                (plan_id,opportunity_id,contract_receipt_id,plan_hash,plan_json,started_at,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    plan_id, opportunity_id, contract_receipt_id, plan_hash, serialized,
+                    started_at.isoformat(), recorded_at))
+            payload = json.loads(row[1])
+            payload["pipeline_state"] = "executing"
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                ("executing", json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                 recorded_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, "contracted", "executing", evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
+        return {"plan_id": plan_id, "changed": True, "state": "executing"}
+    finally:
+        connection.close()
+
+
+def pass_qa(path, opportunity_id, execution_plan_id, report, *, now=None):
+    """Persist objective passing QA evidence before marking work QA-passed."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(execution_plan_id, str) or not execution_plan_id.strip():
+        raise ValueError("execution_plan_id_required")
+    if not isinstance(report, dict):
+        raise ValueError("qa_report_object_required")
+    opportunity_id = opportunity_id.strip()
+    execution_plan_id = execution_plan_id.strip()
+    artifact_sha256 = _proposal_text(report.get("artifact_sha256"), "artifact_sha256", 64).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", artifact_sha256):
+        raise ValueError("artifact_sha256_invalid")
+    tests = report.get("tests")
+    if not isinstance(tests, list) or not 1 <= len(tests) <= 100:
+        raise ValueError("qa_tests_invalid")
+    normalized_tests = []
+    for test in tests:
+        if not isinstance(test, dict):
+            raise ValueError("qa_test_invalid")
+        name = _proposal_text(test.get("name"), "qa_test_name", 200)
+        if test.get("status") != "passed":
+            raise ValueError("qa_test_not_passed")
+        evidence_url = canonical_url(
+            _proposal_text(test.get("evidence_url"), "qa_evidence_url", 2000))
+        if urlsplit(evidence_url).scheme != "https":
+            raise ValueError("qa_evidence_url_https_required")
+        normalized_tests.append({"name": name, "status": "passed",
+                                 "evidence_url": evidence_url})
+    completed_at = parse_time(report.get("completed_at"), "qa_completed_at")
+    recorded = now or utc_now()
+    if completed_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("qa_completed_at_future")
+
+    artifact = {"opportunity_id": opportunity_id,
+                "execution_plan_id": execution_plan_id,
+                "artifact_sha256": artifact_sha256, "tests": normalized_tests,
+                "completed_at": completed_at.isoformat()}
+    serialized = json.dumps(artifact, sort_keys=True, separators=(",", ":"))
+    report_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    report_id = "qar_" + report_hash[:24]
+    evidence_id = "qa:" + report_id
+    recorded_at = recorded.isoformat()
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            plan = connection.execute(
+                "SELECT opportunity_id,started_at FROM execution_plans WHERE plan_id=?",
+                (execution_plan_id,)).fetchone()
+            if plan is None:
+                raise ValueError("execution_plan_not_found")
+            if plan[0] != opportunity_id:
+                raise ValueError("execution_plan_opportunity_mismatch")
+            if completed_at < parse_time(plan[1], "execution_started_at"):
+                raise ValueError("qa_before_execution")
+            existing = connection.execute(
+                "SELECT 1 FROM qa_reports WHERE report_id=?", (report_id,)).fetchone()
+            if row[0] == "qa_passed" and existing:
+                return {"report_id": report_id, "changed": False, "state": row[0]}
+            if row[0] != "executing":
+                raise ValueError("pipeline_state_conflict")
+            tid = transition_id(opportunity_id, "executing", "qa_passed", evidence_id)
+            connection.execute("""INSERT INTO qa_reports
+                (report_id,opportunity_id,execution_plan_id,artifact_sha256,report_hash,
+                 report_json,completed_at,recorded_at) VALUES (?,?,?,?,?,?,?,?)""", (
+                    report_id, opportunity_id, execution_plan_id, artifact_sha256,
+                    report_hash, serialized, completed_at.isoformat(), recorded_at))
+            payload = json.loads(row[1])
+            payload["pipeline_state"] = "qa_passed"
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                ("qa_passed", json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                 recorded_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, "executing", "qa_passed", evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
+        return {"report_id": report_id, "changed": True, "state": "qa_passed"}
+    finally:
+        connection.close()
+
+
+def record_delivery(path, opportunity_id, qa_report_id, delivery, *, now=None):
+    """Record provider delivery evidence for the exact QA-approved artifact."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(qa_report_id, str) or not qa_report_id.strip():
+        raise ValueError("qa_report_id_required")
+    if not isinstance(delivery, dict):
+        raise ValueError("delivery_object_required")
+    opportunity_id = opportunity_id.strip()
+    qa_report_id = qa_report_id.strip()
+    provider = _proposal_text(delivery.get("provider"), "delivery_provider", 160)
+    external_id = _proposal_text(
+        delivery.get("external_delivery_id"), "external_delivery_id", 500)
+    delivery_url = canonical_url(
+        _proposal_text(delivery.get("delivery_url"), "delivery_url", 2000))
+    if urlsplit(delivery_url).scheme != "https":
+        raise ValueError("delivery_url_https_required")
+    artifact_sha256 = _proposal_text(
+        delivery.get("artifact_sha256"), "artifact_sha256", 64).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", artifact_sha256):
+        raise ValueError("artifact_sha256_invalid")
+    delivered_at = parse_time(delivery.get("delivered_at"), "delivered_at")
+    recorded = now or utc_now()
+    if delivered_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("delivered_at_future")
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            qa = connection.execute("""SELECT q.opportunity_id,q.artifact_sha256,q.completed_at,
+                    c.provider
+                FROM qa_reports q
+                JOIN execution_plans e ON e.plan_id=q.execution_plan_id
+                JOIN contract_receipts c ON c.receipt_id=e.contract_receipt_id
+                WHERE q.report_id=?""", (qa_report_id,)).fetchone()
+            if qa is None:
+                raise ValueError("qa_report_not_found")
+            if qa[0] != opportunity_id:
+                raise ValueError("qa_report_opportunity_mismatch")
+            if qa[1] != artifact_sha256:
+                raise ValueError("delivery_artifact_mismatch")
+            if qa[3].casefold() != provider.casefold():
+                raise ValueError("delivery_provider_mismatch")
+            if delivered_at < parse_time(qa[2], "qa_completed_at"):
+                raise ValueError("delivered_before_qa")
+            receipt = {"opportunity_id": opportunity_id, "qa_report_id": qa_report_id,
+                       "provider": provider, "external_delivery_id": external_id,
+                       "delivery_url": delivery_url, "artifact_sha256": artifact_sha256,
+                       "delivered_at": delivered_at.isoformat()}
+            serialized = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            receipt_id = "delr_" + receipt_hash[:24]
+            evidence_id = "delivery:" + receipt_id
+            recorded_at = recorded.isoformat()
+            existing = connection.execute(
+                "SELECT 1 FROM delivery_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
+            if row[0] == "delivered" and existing:
+                return {"receipt_id": receipt_id, "changed": False, "state": row[0]}
+            if row[0] != "qa_passed":
+                raise ValueError("pipeline_state_conflict")
+            tid = transition_id(opportunity_id, "qa_passed", "delivered", evidence_id)
+            connection.execute("""INSERT INTO delivery_receipts
+                (receipt_id,opportunity_id,qa_report_id,provider,external_delivery_id,
+                 delivery_url,artifact_sha256,delivered_at,receipt_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""", (
+                    receipt_id, opportunity_id, qa_report_id, provider, external_id,
+                    delivery_url, artifact_sha256, delivered_at.isoformat(),
+                    receipt_hash, recorded_at))
+            payload = json.loads(row[1])
+            payload["pipeline_state"] = "delivered"
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                ("delivered", json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                 recorded_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, "qa_passed", "delivered", evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
+        return {"receipt_id": receipt_id, "changed": True, "state": "delivered"}
+    finally:
+        connection.close()
+
+
+def record_attributed_outcome(
+        path, opportunity_id, contract_receipt_id, event, *, now=None):
+    """Record one immutable, contract-linked outcome; never invoice or charge."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(contract_receipt_id, str) or not contract_receipt_id.strip():
+        raise ValueError("contract_receipt_id_required")
+    if not isinstance(event, dict):
+        raise ValueError("outcome_event_object_required")
+    opportunity_id = opportunity_id.strip()
+    contract_receipt_id = contract_receipt_id.strip()
+    provider = _proposal_text(event.get("provider"), "outcome_provider", 160)
+    external_id = _proposal_text(
+        event.get("external_event_id"), "outcome_external_event_id", 500)
+    evidence_url = canonical_url(
+        _proposal_text(event.get("evidence_url"), "outcome_evidence_url", 2000))
+    if urlsplit(evidence_url).scheme != "https":
+        raise ValueError("outcome_evidence_url_https_required")
+    artifact_sha256 = _proposal_text(
+        event.get("artifact_sha256"), "outcome_artifact_sha256", 64).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", artifact_sha256):
+        raise ValueError("outcome_artifact_sha256_invalid")
+    attribution_reference = _proposal_text(
+        event.get("attribution_reference"), "attribution_reference", 1000)
+    units = finite_number(event, "units", minimum=1, maximum=1000000)
+    unit_fee = finite_number(event, "unit_fee_cents", minimum=1)
+    if not units.is_integer() or not unit_fee.is_integer():
+        raise ValueError("outcome_event_amount_invalid")
+    units, unit_fee = int(units), int(unit_fee)
+    fee_cents = units * unit_fee
+    occurred_at = parse_time(event.get("occurred_at"), "outcome_occurred_at")
+    recorded = now or utc_now()
+    if occurred_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("outcome_occurred_at_future")
+
+    review = event.get("eligibility_review")
+    if not isinstance(review, dict):
+        raise ValueError("outcome_eligibility_review_required")
+    reviewed_terms_hash = _proposal_text(
+        review.get("reviewed_terms_hash"),
+        "reviewed_terms_hash", 64).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", reviewed_terms_hash):
+        raise ValueError("reviewed_terms_hash_invalid")
+    reviewed_exclusions_hash = _proposal_text(
+        review.get("reviewed_exclusions_hash"),
+        "reviewed_exclusions_hash", 64).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", reviewed_exclusions_hash):
+        raise ValueError("reviewed_exclusions_hash_invalid")
+    matched_exclusions = review.get("matched_exclusions")
+    if not isinstance(matched_exclusions, list) or len(matched_exclusions) > 20:
+        raise ValueError("matched_exclusions_invalid")
+    normalized_matches = []
+    for exclusion in matched_exclusions:
+        exclusion = _proposal_text(
+            exclusion, "matched_exclusion", 500)
+        if exclusion not in normalized_matches:
+            normalized_matches.append(exclusion)
+    review_evidence_url = canonical_url(_proposal_text(
+        review.get("evidence_url"), "eligibility_review_evidence_url", 2000))
+    if urlsplit(review_evidence_url).scheme != "https":
+        raise ValueError("eligibility_review_evidence_url_https_required")
+    review_artifact_sha256 = _proposal_text(
+        review.get("artifact_sha256"),
+        "eligibility_review_artifact_sha256", 64).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", review_artifact_sha256):
+        raise ValueError("eligibility_review_artifact_sha256_invalid")
+    reviewed_at = parse_time(
+        review.get("reviewed_at"), "eligibility_reviewed_at")
+    if reviewed_at < occurred_at or reviewed_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("eligibility_review_time_invalid")
+    requires_escalation = boolean_flag(
+        review, "requires_human_escalation")
+    escalation = review.get("human_escalation_decision")
+    normalized_escalation = None
+    if requires_escalation:
+        if not isinstance(escalation, dict):
+            raise ValueError("human_escalation_decision_required")
+        decision = str(escalation.get("decision") or "").strip().lower()
+        if decision not in {"approved", "rejected"}:
+            raise ValueError("human_escalation_decision_invalid")
+        decision_url = canonical_url(_proposal_text(
+            escalation.get("evidence_url"),
+            "human_escalation_evidence_url", 2000))
+        if urlsplit(decision_url).scheme != "https":
+            raise ValueError("human_escalation_evidence_url_https_required")
+        decision_artifact_sha256 = _proposal_text(
+            escalation.get("artifact_sha256"),
+            "human_escalation_artifact_sha256", 64).lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", decision_artifact_sha256):
+            raise ValueError("human_escalation_artifact_sha256_invalid")
+        decided_at = parse_time(
+            escalation.get("decided_at"), "human_escalation_decided_at")
+        if decided_at < reviewed_at or decided_at > recorded + MAX_FUTURE_SKEW:
+            raise ValueError("human_escalation_time_invalid")
+        normalized_escalation = {
+            "decision": decision,
+            "evidence_url": decision_url,
+            "artifact_sha256": decision_artifact_sha256,
+            "decided_at": decided_at.isoformat(),
+        }
+        if decision != "approved":
+            raise ValueError("human_escalation_not_approved")
+    elif escalation is not None:
+        raise ValueError("unexpected_human_escalation_decision")
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            terms = connection.execute(
+                """SELECT term_id,fee_cap_cents,exclusions_json,
+                          human_escalation_rule
+                   FROM outcome_pricing_terms WHERE opportunity_id=?""",
+                (opportunity_id,)).fetchone()
+            if terms is None:
+                raise ValueError("outcome_pricing_terms_not_found")
+            contract = connection.execute(
+                """SELECT opportunity_id,provider,contracted_at
+                   FROM contract_receipts WHERE receipt_id=?""",
+                (contract_receipt_id,)).fetchone()
+            if contract is None:
+                raise ValueError("contract_receipt_not_found")
+            if contract[0] != opportunity_id:
+                raise ValueError("outcome_event_opportunity_mismatch")
+            if contract[1].casefold() != provider.casefold():
+                raise ValueError("outcome_event_provider_mismatch")
+            if occurred_at < parse_time(contract[2], "contracted_at"):
+                raise ValueError("outcome_event_before_contract")
+            binding = connection.execute(
+                """SELECT term_id,accepted_terms_hash,accepted_fee_cap_cents
+                   FROM contract_outcome_terms WHERE contract_receipt_id=?""",
+                (contract_receipt_id,)).fetchone()
+            if binding is None:
+                raise ValueError("outcome_contract_terms_not_accepted")
+            current_terms = connection.execute(
+                """SELECT terms_hash,fee_cap_cents FROM outcome_pricing_terms
+                   WHERE term_id=? AND opportunity_id=?""",
+                (binding[0], opportunity_id)).fetchone()
+            if (binding[0] != terms[0] or current_terms is None
+                    or binding[1] != current_terms[0]
+                    or binding[2] != current_terms[1]):
+                raise ValueError("outcome_contract_terms_mismatch")
+            opportunity_row = connection.execute(
+                "SELECT payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            configured_unit_fee = (
+                json.loads(opportunity_row[0]).get("outcome_unit_fee_cents")
+                if opportunity_row else None)
+            if not isinstance(configured_unit_fee, int) or configured_unit_fee <= 0:
+                raise ValueError("outcome_unit_fee_terms_not_found")
+            if unit_fee != configured_unit_fee:
+                raise ValueError("outcome_unit_fee_mismatch")
+            accepted_exclusions = json.loads(terms[2])
+            if reviewed_terms_hash != current_terms[0]:
+                raise ValueError("outcome_terms_review_mismatch")
+            if reviewed_exclusions_hash != payload_hash(accepted_exclusions):
+                raise ValueError("outcome_exclusions_review_mismatch")
+            if any(value not in accepted_exclusions
+                   for value in normalized_matches):
+                raise ValueError("matched_exclusion_not_in_terms")
+            if normalized_matches:
+                raise ValueError("outcome_event_excluded")
+            normalized_review = {
+                "reviewed_terms_hash": reviewed_terms_hash,
+                "reviewed_exclusions_hash": reviewed_exclusions_hash,
+                "matched_exclusions": normalized_matches,
+                "evidence_url": review_evidence_url,
+                "artifact_sha256": review_artifact_sha256,
+                "reviewed_at": reviewed_at.isoformat(),
+                "requires_human_escalation": requires_escalation,
+                "human_escalation_decision": normalized_escalation,
+            }
+            normalized = {
+                "opportunity_id": opportunity_id,
+                "term_id": terms[0],
+                "contract_receipt_id": contract_receipt_id,
+                "provider": provider,
+                "external_event_id": external_id,
+                "evidence_url": evidence_url,
+                "artifact_sha256": artifact_sha256,
+                "attribution_reference": attribution_reference,
+                "eligibility_review": normalized_review,
+                "units": units,
+                "unit_fee_cents": unit_fee,
+                "fee_cents": fee_cents,
+                "occurred_at": occurred_at.isoformat(),
+            }
+            serialized = json.dumps(
+                normalized, sort_keys=True, separators=(",", ":"))
+            event_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            event_id = "oute_" + event_hash[:24]
+            existing = connection.execute(
+                """SELECT event_id,event_hash FROM attributed_outcome_events
+                   WHERE provider=? AND external_event_id=?""",
+                (provider, external_id)).fetchone()
+            if existing:
+                if existing[1] != event_hash:
+                    raise ValueError("outcome_event_conflict")
+                return {"event_id": existing[0], "changed": False, **normalized}
+            existing_total = connection.execute(
+                """SELECT COALESCE(SUM(fee_cents),0)
+                   FROM attributed_outcome_events WHERE opportunity_id=?""",
+                (opportunity_id,)).fetchone()[0]
+            if existing_total + fee_cents > terms[1]:
+                raise ValueError("outcome_fee_cap_exceeded")
+            connection.execute(
+                """INSERT INTO attributed_outcome_events
+                   (event_id,opportunity_id,term_id,contract_receipt_id,provider,
+                    external_event_id,evidence_url,artifact_sha256,
+                    attribution_reference,eligibility_review_json,units,
+                    unit_fee_cents,fee_cents,occurred_at,event_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (event_id, opportunity_id, terms[0], contract_receipt_id,
+                 provider, external_id, evidence_url, artifact_sha256,
+                 attribution_reference,
+                 json.dumps(normalized_review, sort_keys=True, separators=(",", ":")),
+                 units, unit_fee, fee_cents, occurred_at.isoformat(),
+                 event_hash, recorded.isoformat()))
+            return {"event_id": event_id, "changed": True, **normalized}
+    finally:
+        connection.close()
+
+
+def record_invoice(path, opportunity_id, delivery_receipt_id, invoice, *, now=None):
+    """Record a delivery-linked invoice; outcome fees require attributed events."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(delivery_receipt_id, str) or not delivery_receipt_id.strip():
+        raise ValueError("delivery_receipt_id_required")
+    if not isinstance(invoice, dict):
+        raise ValueError("invoice_object_required")
+    opportunity_id = opportunity_id.strip()
+    delivery_receipt_id = delivery_receipt_id.strip()
+    provider = _proposal_text(invoice.get("provider"), "invoice_provider", 160)
+    external_id = _proposal_text(
+        invoice.get("external_invoice_id"), "external_invoice_id", 500)
+    invoice_url = canonical_url(
+        _proposal_text(invoice.get("invoice_url"), "invoice_url", 2000))
+    if urlsplit(invoice_url).scheme != "https":
+        raise ValueError("invoice_url_https_required")
+    amount_cents = finite_number(invoice, "amount_cents", minimum=1)
+    outcome_fee = finite_number(
+        invoice, "outcome_fee_cents", minimum=0, required=False)
+    if not amount_cents.is_integer() or (
+            outcome_fee is not None and not outcome_fee.is_integer()):
+        raise ValueError("amount_cents_invalid")
+    amount_cents = int(amount_cents)
+    outcome_fee_cents = int(outcome_fee or 0)
+    event_ids = invoice.get("outcome_event_ids", [])
+    if not isinstance(event_ids, list) or len(event_ids) > 100 or any(
+            not isinstance(value, str) or not value.strip() for value in event_ids):
+        raise ValueError("outcome_event_ids_invalid")
+    event_ids = [value.strip() for value in event_ids]
+    if len(set(event_ids)) != len(event_ids):
+        raise ValueError("outcome_event_ids_duplicate")
+    if bool(outcome_fee_cents) != bool(event_ids):
+        raise ValueError("outcome_fee_event_mismatch")
+    currency = _proposal_text(invoice.get("currency"), "invoice_currency", 3).upper()
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        raise ValueError("invoice_currency_invalid")
+    issued_at = parse_time(invoice.get("issued_at"), "issued_at")
+    due_at = parse_time(invoice.get("due_at"), "due_at")
+    recorded = now or utc_now()
+    if issued_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("issued_at_future")
+    if due_at <= issued_at:
+        raise ValueError("due_at_invalid")
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            delivery = connection.execute("""SELECT d.opportunity_id,d.provider,d.delivered_at,
+                    c.amount_cents,c.currency
+                FROM delivery_receipts d
+                JOIN qa_reports q ON q.report_id=d.qa_report_id
+                JOIN execution_plans e ON e.plan_id=q.execution_plan_id
+                JOIN contract_receipts c ON c.receipt_id=e.contract_receipt_id
+                WHERE d.receipt_id=?""", (delivery_receipt_id,)).fetchone()
+            if delivery is None:
+                raise ValueError("delivery_receipt_not_found")
+            if delivery[0] != opportunity_id:
+                raise ValueError("delivery_opportunity_mismatch")
+            if delivery[1].casefold() != provider.casefold():
+                raise ValueError("invoice_provider_mismatch")
+            if issued_at < parse_time(delivery[2], "delivered_at"):
+                raise ValueError("invoice_before_delivery")
+            if amount_cents > delivery[3]:
+                raise ValueError("invoice_amount_exceeds_contract")
+            if currency != delivery[4]:
+                raise ValueError("invoice_currency_mismatch")
+
+            outcome_rows = []
+            if event_ids:
+                placeholders = ",".join("?" for _ in event_ids)
+                outcome_rows = connection.execute(
+                    f"""SELECT event_id,fee_cents,artifact_sha256,
+                               eligibility_review_json,term_id,
+                               contract_receipt_id,provider,external_event_id,
+                               evidence_url,attribution_reference,units,
+                               unit_fee_cents,occurred_at,event_hash
+                        FROM attributed_outcome_events
+                        WHERE opportunity_id=? AND event_id IN ({placeholders})""",
+                    (opportunity_id, *event_ids)).fetchall()
+                if len(outcome_rows) != len(event_ids):
+                    raise ValueError("attributed_outcome_event_not_found")
+                terms = connection.execute(
+                    """SELECT fee_cap_cents,terms_hash,exclusions_json
+                       FROM outcome_pricing_terms WHERE opportunity_id=?""",
+                    (opportunity_id,)).fetchone()
+                if terms is None:
+                    raise ValueError("outcome_pricing_terms_not_found")
+                expected_exclusions_hash = payload_hash(json.loads(terms[2]))
+                for outcome_row in outcome_rows:
+                    artifact_sha256, review_json = outcome_row[2], outcome_row[3]
+                    if not isinstance(artifact_sha256, str) or not re.fullmatch(
+                            r"[0-9a-f]{64}", artifact_sha256):
+                        raise ValueError("outcome_event_evidence_unverified")
+                    try:
+                        review = json.loads(review_json)
+                    except (TypeError, json.JSONDecodeError):
+                        raise ValueError("outcome_event_evidence_unverified")
+                    if not isinstance(review, dict) or not re.fullmatch(
+                            r"[0-9a-f]{64}",
+                            str(review.get("artifact_sha256") or "")):
+                        raise ValueError("outcome_event_evidence_unverified")
+                    if review.get("reviewed_terms_hash") != terms[1] or (
+                            review.get("reviewed_exclusions_hash")
+                            != expected_exclusions_hash):
+                        raise ValueError("outcome_event_evidence_unverified")
+                    if review.get("requires_human_escalation"):
+                        decision = review.get("human_escalation_decision")
+                        if not isinstance(decision, dict) or (
+                                decision.get("decision") != "approved") or (
+                                not re.fullmatch(
+                                    r"[0-9a-f]{64}",
+                                    str(decision.get("artifact_sha256") or ""))):
+                            raise ValueError("outcome_event_evidence_unverified")
+                    normalized_event = {
+                        "opportunity_id": opportunity_id,
+                        "term_id": outcome_row[4],
+                        "contract_receipt_id": outcome_row[5],
+                        "provider": outcome_row[6],
+                        "external_event_id": outcome_row[7],
+                        "evidence_url": outcome_row[8],
+                        "artifact_sha256": artifact_sha256,
+                        "attribution_reference": outcome_row[9],
+                        "eligibility_review": review,
+                        "units": outcome_row[10],
+                        "unit_fee_cents": outcome_row[11],
+                        "fee_cents": outcome_row[1],
+                        "occurred_at": outcome_row[12],
+                    }
+                    normalized_json = json.dumps(
+                        normalized_event, sort_keys=True, separators=(",", ":"))
+                    if hashlib.sha256(
+                            normalized_json.encode()).hexdigest() != outcome_row[13]:
+                        raise ValueError("outcome_event_evidence_unverified")
+                if sum(value[1] for value in outcome_rows) != outcome_fee_cents:
+                    raise ValueError("outcome_fee_event_mismatch")
+                already_invoiced = connection.execute(
+                    f"""SELECT 1 FROM invoice_outcome_events
+                        WHERE event_id IN ({placeholders}) LIMIT 1""",
+                    tuple(event_ids)).fetchone()
+                if already_invoiced:
+                    raise ValueError("outcome_event_already_invoiced")
+                prior = connection.execute(
+                    """SELECT COALESCE(SUM(ioe.outcome_fee_cents),0)
+                       FROM invoice_outcome_events ioe
+                       JOIN invoice_receipts ir
+                         ON ir.receipt_id=ioe.invoice_receipt_id
+                       WHERE ir.opportunity_id=?""", (opportunity_id,)).fetchone()[0]
+                if terms is None or prior + outcome_fee_cents > terms[0]:
+                    raise ValueError("outcome_fee_cap_exceeded")
+
+            receipt = {"opportunity_id": opportunity_id,
+                       "delivery_receipt_id": delivery_receipt_id,
+                       "provider": provider, "external_invoice_id": external_id,
+                       "invoice_url": invoice_url, "amount_cents": amount_cents,
+                       "outcome_fee_cents": outcome_fee_cents,
+                       "outcome_event_ids": sorted(event_ids),
+                       "outcome_event_hashes": sorted([
+                           {"event_id": value[0], "event_hash": value[13]}
+                           for value in outcome_rows
+                       ], key=lambda value: value["event_id"]),
+                       "currency": currency, "issued_at": issued_at.isoformat(),
+                       "due_at": due_at.isoformat()}
+            serialized = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            receipt_id = "invr_" + receipt_hash[:24]
+            evidence_id = "invoice:" + receipt_id
+            recorded_at = recorded.isoformat()
+            existing = connection.execute(
+                "SELECT 1 FROM invoice_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
+            if row[0] == "invoiced" and existing:
+                return {"receipt_id": receipt_id, "changed": False, "state": row[0]}
+            if row[0] != "delivered":
+                raise ValueError("pipeline_state_conflict")
+            tid = transition_id(opportunity_id, "delivered", "invoiced", evidence_id)
+            connection.execute("""INSERT INTO invoice_receipts
+                (receipt_id,opportunity_id,delivery_receipt_id,provider,external_invoice_id,
+                 invoice_url,amount_cents,currency,issued_at,due_at,receipt_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                    receipt_id, opportunity_id, delivery_receipt_id, provider, external_id,
+                    invoice_url, amount_cents, currency, issued_at.isoformat(),
+                    due_at.isoformat(), receipt_hash, recorded_at))
+            for outcome_row in outcome_rows:
+                event_id, fee = outcome_row[0], outcome_row[1]
+                connection.execute(
+                    """INSERT INTO invoice_outcome_events
+                       (invoice_receipt_id,event_id,outcome_fee_cents)
+                       VALUES (?,?,?)""", (receipt_id, event_id, fee))
+            payload = json.loads(row[1])
+            payload["pipeline_state"] = "invoiced"
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                ("invoiced", json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                 recorded_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, "delivered", "invoiced", evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
+        return {"receipt_id": receipt_id, "changed": True, "state": "invoiced",
+                "outcome_fee_cents": outcome_fee_cents}
+    finally:
+        connection.close()
+
+
+def record_collected_payment(path, opportunity_id, invoice_receipt_id, payment, *, now=None):
+    """Record a settled provider payment linked to an invoice; never initiate a charge."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(invoice_receipt_id, str) or not invoice_receipt_id.strip():
+        raise ValueError("invoice_receipt_id_required")
+    if not isinstance(payment, dict):
+        raise ValueError("payment_object_required")
+    opportunity_id = opportunity_id.strip()
+    invoice_receipt_id = invoice_receipt_id.strip()
+    provider = _proposal_text(payment.get("provider"), "payment_provider", 160)
+    external_id = _proposal_text(
+        payment.get("external_transaction_id"), "external_transaction_id", 500)
+    transaction_url = canonical_url(
+        _proposal_text(payment.get("transaction_url"), "transaction_url", 2000))
+    if urlsplit(transaction_url).scheme != "https":
+        raise ValueError("transaction_url_https_required")
+    amounts = {}
+    for field, minimum in (("gross_amount_cents", 1), ("fee_amount_cents", 0),
+                           ("net_amount_cents", 1)):
+        amount = finite_number(payment, field, minimum=minimum)
+        if not amount.is_integer():
+            raise ValueError(f"{field}_invalid")
+        amounts[field] = int(amount)
+    if amounts["net_amount_cents"] != (
+            amounts["gross_amount_cents"] - amounts["fee_amount_cents"]):
+        raise ValueError("payment_net_amount_mismatch")
+    currency = _proposal_text(payment.get("currency"), "payment_currency", 3).upper()
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        raise ValueError("payment_currency_invalid")
+    paid_at = parse_time(payment.get("paid_at"), "paid_at")
+    settled_at = parse_time(payment.get("settled_at"), "settled_at")
+    recorded = now or utc_now()
+    if paid_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("paid_at_future")
+    if settled_at < paid_at:
+        raise ValueError("settled_before_paid")
+    if settled_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("settled_at_future")
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            row = connection.execute(
+                "SELECT pipeline_state,payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if row is None:
+                raise ValueError("opportunity_not_found")
+            invoice = connection.execute(
+                """SELECT opportunity_id,provider,amount_cents,currency,issued_at,
+                          delivery_receipt_id,external_invoice_id,invoice_url,
+                          due_at,receipt_hash
+                   FROM invoice_receipts WHERE receipt_id=?""",
+                (invoice_receipt_id,)).fetchone()
+            if invoice is None:
+                raise ValueError("invoice_receipt_not_found")
+            if invoice[0] != opportunity_id:
+                raise ValueError("payment_opportunity_mismatch")
+            if invoice[1].casefold() != provider.casefold():
+                raise ValueError("payment_provider_mismatch")
+            if amounts["gross_amount_cents"] != invoice[2]:
+                raise ValueError("payment_amount_mismatch")
+            if currency != invoice[3]:
+                raise ValueError("payment_currency_mismatch")
+            if paid_at < parse_time(invoice[4], "invoice_issued_at"):
+                raise ValueError("payment_before_invoice")
+
+            allocation_rows = connection.execute(
+                """SELECT ioe.event_id,ioe.outcome_fee_cents,
+                          aoe.fee_cents,aoe.event_hash
+                   FROM invoice_outcome_events ioe
+                   JOIN attributed_outcome_events aoe
+                     ON aoe.event_id=ioe.event_id
+                   WHERE ioe.invoice_receipt_id=?
+                   ORDER BY ioe.event_id""",
+                (invoice_receipt_id,)).fetchall()
+            if any(row[1] != row[2] for row in allocation_rows):
+                raise ValueError("invoice_receipt_unverified")
+            invoice_snapshot = {
+                "opportunity_id": invoice[0],
+                "delivery_receipt_id": invoice[5],
+                "provider": invoice[1],
+                "external_invoice_id": invoice[6],
+                "invoice_url": invoice[7],
+                "amount_cents": invoice[2],
+                "outcome_fee_cents": sum(row[1] for row in allocation_rows),
+                "outcome_event_ids": [row[0] for row in allocation_rows],
+                "outcome_event_hashes": [
+                    {"event_id": row[0], "event_hash": row[3]}
+                    for row in allocation_rows
+                ],
+                "currency": invoice[3],
+                "issued_at": invoice[4],
+                "due_at": invoice[8],
+            }
+            invoice_serialized = json.dumps(
+                invoice_snapshot, sort_keys=True, separators=(",", ":"))
+            expected_invoice_hash = hashlib.sha256(
+                invoice_serialized.encode()).hexdigest()
+            if invoice[9] != expected_invoice_hash or invoice_receipt_id != (
+                    "invr_" + expected_invoice_hash[:24]):
+                raise ValueError("invoice_receipt_unverified")
+
+            receipt = {"opportunity_id": opportunity_id,
+                       "invoice_receipt_id": invoice_receipt_id,
+                       "provider": provider, "external_transaction_id": external_id,
+                       "transaction_url": transaction_url, **amounts,
+                       "currency": currency, "paid_at": paid_at.isoformat(),
+                       "settled_at": settled_at.isoformat()}
+            serialized = json.dumps(receipt, sort_keys=True, separators=(",", ":"))
+            receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            receipt_id = "payr_" + receipt_hash[:24]
+            evidence_id = "verified_payment:" + receipt_id
+            recorded_at = recorded.isoformat()
+            existing = connection.execute(
+                "SELECT 1 FROM payment_receipts WHERE receipt_id=?", (receipt_id,)).fetchone()
+            if row[0] == "collected" and existing:
+                return {"receipt_id": receipt_id, "changed": False, "state": row[0],
+                        "net_amount_cents": amounts["net_amount_cents"]}
+            if row[0] != "invoiced":
+                raise ValueError("pipeline_state_conflict")
+            tid = transition_id(opportunity_id, "invoiced", "collected", evidence_id)
+            connection.execute("""INSERT INTO payment_receipts
+                (receipt_id,opportunity_id,invoice_receipt_id,provider,external_transaction_id,
+                 transaction_url,gross_amount_cents,fee_amount_cents,net_amount_cents,currency,
+                 paid_at,settled_at,receipt_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                    receipt_id, opportunity_id, invoice_receipt_id, provider, external_id,
+                    transaction_url, amounts["gross_amount_cents"], amounts["fee_amount_cents"],
+                    amounts["net_amount_cents"], currency, paid_at.isoformat(),
+                    settled_at.isoformat(), receipt_hash, recorded_at))
+            payload = json.loads(row[1])
+            payload["pipeline_state"] = "collected"
+            connection.execute(
+                "UPDATE opportunities SET pipeline_state=?,payload_json=?,updated_at=? WHERE id=?",
+                ("collected", json.dumps(payload, sort_keys=True, separators=(",", ":")),
+                 recorded_at, opportunity_id))
+            connection.execute("""INSERT INTO opportunity_transitions
+                (transition_id,opportunity_id,from_state,to_state,evidence_id,evidence_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?)""", (
+                    tid, opportunity_id, "invoiced", "collected", evidence_id,
+                    hashlib.sha256(evidence_id.encode()).hexdigest(), recorded_at))
+        return {"receipt_id": receipt_id, "changed": True, "state": "collected",
+                "net_amount_cents": amounts["net_amount_cents"]}
+    finally:
+        connection.close()
+
+
+def record_settled_recurring_payment(
+        path, opportunity_id, contract_receipt_id, payment, *, now=None):
+    """Record one settled recurring base-fee period; never invoice or charge."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(contract_receipt_id, str) or not contract_receipt_id.strip():
+        raise ValueError("contract_receipt_id_required")
+    if not isinstance(payment, dict):
+        raise ValueError("recurring_payment_object_required")
+    opportunity_id = opportunity_id.strip()
+    contract_receipt_id = contract_receipt_id.strip()
+    provider = _proposal_text(
+        payment.get("provider"), "recurring_payment_provider", 160)
+    external_invoice_id = _proposal_text(
+        payment.get("external_invoice_id"), "external_invoice_id", 500)
+    invoice_url = canonical_url(_proposal_text(
+        payment.get("invoice_url"), "invoice_url", 2000))
+    external_transaction_id = _proposal_text(
+        payment.get("external_transaction_id"),
+        "external_transaction_id", 500)
+    transaction_url = canonical_url(_proposal_text(
+        payment.get("transaction_url"), "transaction_url", 2000))
+    if urlsplit(invoice_url).scheme != "https":
+        raise ValueError("invoice_url_https_required")
+    if urlsplit(transaction_url).scheme != "https":
+        raise ValueError("transaction_url_https_required")
+    amounts = {}
+    for field, minimum in (("gross_amount_cents", 1), ("fee_amount_cents", 0),
+                           ("net_amount_cents", 1)):
+        value = finite_number(payment, field, minimum=minimum)
+        if not value.is_integer():
+            raise ValueError(f"{field}_invalid")
+        amounts[field] = int(value)
+    if amounts["net_amount_cents"] != (
+            amounts["gross_amount_cents"] - amounts["fee_amount_cents"]):
+        raise ValueError("payment_net_amount_mismatch")
+    currency = _proposal_text(
+        payment.get("currency"), "payment_currency", 3).upper()
+    if not re.fullmatch(r"[A-Z]{3}", currency):
+        raise ValueError("payment_currency_invalid")
+    period_start = parse_time(
+        payment.get("service_period_start"), "service_period_start")
+    period_end = parse_time(
+        payment.get("service_period_end"), "service_period_end")
+    invoiced_at = parse_time(payment.get("invoiced_at"), "invoiced_at")
+    paid_at = parse_time(payment.get("paid_at"), "paid_at")
+    settled_at = parse_time(payment.get("settled_at"), "settled_at")
+    recorded = now or utc_now()
+    if period_end <= period_start:
+        raise ValueError("service_period_invalid")
+    if not (invoiced_at <= paid_at <= settled_at):
+        raise ValueError("recurring_payment_time_order_invalid")
+    if any(value > recorded + MAX_FUTURE_SKEW for value in (
+            invoiced_at, paid_at, settled_at)):
+        raise ValueError("recurring_payment_time_future")
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            binding = connection.execute(
+                """SELECT crt.opportunity_id,crt.term_id,
+                          crt.accepted_base_fee_cents,rpt.billing_cadence,
+                          cr.provider,cr.currency,cr.contracted_at
+                   FROM contract_recurring_terms crt
+                   JOIN recurring_pricing_terms rpt ON rpt.term_id=crt.term_id
+                   JOIN contract_receipts cr
+                     ON cr.receipt_id=crt.contract_receipt_id
+                   WHERE crt.contract_receipt_id=?""",
+                (contract_receipt_id,)).fetchone()
+            if binding is None:
+                raise ValueError("accepted_recurring_terms_not_found")
+            if binding[0] != opportunity_id:
+                raise ValueError("recurring_payment_opportunity_mismatch")
+            if binding[4].casefold() != provider.casefold():
+                raise ValueError("recurring_payment_provider_mismatch")
+            if amounts["gross_amount_cents"] != binding[2]:
+                raise ValueError("recurring_payment_base_fee_mismatch")
+            if currency != binding[5]:
+                raise ValueError("recurring_payment_currency_mismatch")
+            contracted_at = parse_time(binding[6], "contracted_at")
+            if period_start < contracted_at or invoiced_at < contracted_at:
+                raise ValueError("recurring_payment_before_contract")
+            receipt = {
+                "opportunity_id": opportunity_id,
+                "contract_receipt_id": contract_receipt_id,
+                "term_id": binding[1],
+                "provider": provider,
+                "external_invoice_id": external_invoice_id,
+                "invoice_url": invoice_url,
+                "external_transaction_id": external_transaction_id,
+                "transaction_url": transaction_url,
+                **amounts,
+                "currency": currency,
+                "service_period_start": period_start.isoformat(),
+                "service_period_end": period_end.isoformat(),
+                "invoiced_at": invoiced_at.isoformat(),
+                "paid_at": paid_at.isoformat(),
+                "settled_at": settled_at.isoformat(),
+            }
+            serialized = json.dumps(
+                receipt, sort_keys=True, separators=(",", ":"))
+            receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            receipt_id = "recurpay_" + receipt_hash[:24]
+            existing = connection.execute(
+                """SELECT receipt_id,receipt_hash FROM recurring_payment_receipts
+                   WHERE provider=? AND
+                         (external_invoice_id=? OR external_transaction_id=?)""",
+                (provider, external_invoice_id,
+                 external_transaction_id)).fetchone()
+            if existing:
+                if existing[1] != receipt_hash:
+                    raise ValueError("recurring_payment_provider_id_conflict")
+                return {
+                    "receipt_id": existing[0], "changed": False,
+                    "status": "settled_recurring_collected",
+                    "gross_amount_cents": amounts["gross_amount_cents"],
+                    "net_amount_cents": amounts["net_amount_cents"],
+                }
+            overlap = connection.execute(
+                """SELECT 1 FROM recurring_payment_receipts
+                   WHERE contract_receipt_id=?
+                     AND service_period_start < ?
+                     AND service_period_end > ?""",
+                (contract_receipt_id, period_end.isoformat(),
+                 period_start.isoformat())).fetchone()
+            if overlap:
+                raise ValueError("recurring_service_period_overlap")
+            recorded_at = recorded.isoformat()
+            connection.execute(
+                """INSERT INTO recurring_payment_receipts
+                   (receipt_id,opportunity_id,contract_receipt_id,term_id,
+                    provider,external_invoice_id,invoice_url,
+                    external_transaction_id,transaction_url,
+                    gross_amount_cents,fee_amount_cents,net_amount_cents,currency,
+                    service_period_start,service_period_end,invoiced_at,paid_at,
+                    settled_at,receipt_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+                    receipt_id, opportunity_id, contract_receipt_id, binding[1],
+                    provider, external_invoice_id, invoice_url,
+                    external_transaction_id, transaction_url,
+                    amounts["gross_amount_cents"], amounts["fee_amount_cents"],
+                    amounts["net_amount_cents"], currency,
+                    period_start.isoformat(), period_end.isoformat(),
+                    invoiced_at.isoformat(), paid_at.isoformat(),
+                    settled_at.isoformat(), receipt_hash, recorded_at))
+            return {
+                "receipt_id": receipt_id, "changed": True,
+                "status": "settled_recurring_collected",
+                "gross_amount_cents": amounts["gross_amount_cents"],
+                "net_amount_cents": amounts["net_amount_cents"],
+            }
+    finally:
+        connection.close()
+
+
+def summarize_settled_recurring_revenue(path, opportunity_id):
+    """Expose recurring revenue only after every receipt snapshot re-verifies."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    connection = open_ledger(path)
+    try:
+        opportunity_id = opportunity_id.strip()
+        if connection.execute(
+                "SELECT 1 FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone() is None:
+            raise ValueError("opportunity_not_found")
+        payment_ids = connection.execute(
+            """SELECT receipt_id FROM recurring_payment_receipts
+               WHERE opportunity_id=?""", (opportunity_id,)).fetchall()
+        payments = [
+            _verified_recurring_payment_receipt(connection, row[0])
+            for row in payment_ids
+        ]
+        if any(payment[0] != opportunity_id for payment in payments):
+            raise ValueError("recurring_revenue_opportunity_mismatch")
+
+        payout_ids = connection.execute(
+            """SELECT receipt_id FROM recurring_payout_availability_receipts
+               WHERE opportunity_id=?""", (opportunity_id,)).fetchall()
+        payouts = []
+        for row in payout_ids:
+            payout = _verified_recurring_payout_receipt(connection, row[0])
+            payment = _verified_recurring_payment_receipt(
+                connection, payout[1])
+            if (
+                payout[0] != opportunity_id
+                or payment[0] != opportunity_id
+                or payout[2].casefold() != payment[3].casefold()
+                or payout[5] != payment[10]
+                or payout[6] != payment[11]
+                or parse_time(payout[7], "recurring_payout_available_at")
+                < parse_time(payment[16], "recurring_payment_settled_at")
+            ):
+                raise ValueError("recurring_payout_lineage_unverified")
+            payouts.append(payout)
+
+        bank_ids = connection.execute(
+            """SELECT receipt_id FROM recurring_bank_receipts
+               WHERE opportunity_id=?""", (opportunity_id,)).fetchall()
+        banks = []
+        for row in bank_ids:
+            bank = _verified_recurring_bank_receipt(connection, row[0])
+            payout = _verified_recurring_payout_receipt(connection, bank[1])
+            if (
+                bank[0] != opportunity_id
+                or payout[0] != opportunity_id
+                or bank[5] != payout[5]
+                or bank[6] != payout[6]
+                or parse_time(bank[7], "recurring_bank_received_at")
+                < parse_time(payout[7], "recurring_payout_available_at")
+            ):
+                raise ValueError("recurring_bank_lineage_unverified")
+            banks.append(bank)
+        currencies = (
+            {row[11] for row in payments}
+            | {row[6] for row in payouts}
+            | {row[6] for row in banks}
+        )
+        if len(currencies) > 1:
+            raise ValueError("recurring_revenue_currency_mismatch")
+        return {
+            "settled_receipt_count": len(payments),
+            "withdrawable_receipt_count": len(payouts),
+            "bank_received_receipt_count": len(banks),
+            "recurring_collected_gross_cents": sum(row[8] for row in payments),
+            "recurring_collected_fee_cents": sum(row[9] for row in payments),
+            "recurring_collected_net_cents": sum(row[10] for row in payments),
+            "withdrawable_cents": sum(row[5] for row in payouts),
+            "bank_received_cents": sum(row[5] for row in banks),
+            "currency": next(iter(currencies), None),
+            "status": "independently_verified_recurring_stages",
+        }
+    finally:
+        connection.close()
+
+
+def _verified_payment_receipt(connection, payment_receipt_id):
+    """Return a payment receipt only when its immutable snapshot still matches."""
+    payment = connection.execute(
+        """SELECT opportunity_id,invoice_receipt_id,provider,
+                  external_transaction_id,transaction_url,gross_amount_cents,
+                  fee_amount_cents,net_amount_cents,currency,paid_at,settled_at,
+                  receipt_hash
+           FROM payment_receipts WHERE receipt_id=?""",
+        (payment_receipt_id,)).fetchone()
+    if payment is None:
+        raise ValueError("payment_receipt_not_found")
+    snapshot = {
+        "opportunity_id": payment[0],
+        "invoice_receipt_id": payment[1],
+        "provider": payment[2],
+        "external_transaction_id": payment[3],
+        "transaction_url": payment[4],
+        "gross_amount_cents": payment[5],
+        "fee_amount_cents": payment[6],
+        "net_amount_cents": payment[7],
+        "currency": payment[8],
+        "paid_at": payment[9],
+        "settled_at": payment[10],
+    }
+    serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    if payment[11] != expected_hash or payment_receipt_id != (
+            "payr_" + expected_hash[:24]):
+        raise ValueError("payment_receipt_unverified")
+    return payment
+
+
+def _verified_linked_proposal_for_payment(connection, payment):
+    """Resolve and verify the proposal bound to a settled payment's delivery."""
+    proposal = connection.execute(
+        """SELECT p.proposal_id,p.opportunity_id,p.artifact_hash,
+                  p.artifact_json
+           FROM invoice_receipts i
+           JOIN delivery_receipts d ON d.receipt_id=i.delivery_receipt_id
+           JOIN qa_reports q ON q.report_id=d.qa_report_id
+           JOIN execution_plans e ON e.plan_id=q.execution_plan_id
+           JOIN contract_receipts c ON c.receipt_id=e.contract_receipt_id
+           JOIN proposal_artifacts p ON p.proposal_id=c.proposal_id
+           WHERE i.receipt_id=?""",
+        (payment[1],),
+    ).fetchone()
+    if proposal is None or proposal[1] != payment[0]:
+        raise ValueError("payment_proposal_lineage_unverified")
+    try:
+        artifact = json.loads(proposal[3])
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("payment_proposal_lineage_unverified") from exc
+    expected_hash = hashlib.sha256(proposal[3].encode()).hexdigest()
+    if (
+        not isinstance(artifact, dict)
+        or artifact.get("opportunity_id") != payment[0]
+        or proposal[2] != expected_hash
+        or proposal[0] != "prop_" + expected_hash[:24]
+    ):
+        raise ValueError("payment_proposal_lineage_unverified")
+    return proposal[0], artifact
+
+
+def record_realized_unit_economics(
+        path, opportunity_id, payment_receipt_id, economics, *, now=None):
+    """Record realized economics derived from one settled payment receipt."""
+    if not isinstance(opportunity_id, str) or not opportunity_id.strip():
+        raise ValueError("opportunity_id_required")
+    if not isinstance(payment_receipt_id, str) or not payment_receipt_id.strip():
+        raise ValueError("payment_receipt_id_required")
+    if not isinstance(economics, dict):
+        raise ValueError("realized_economics_object_required")
+    opportunity_id = opportunity_id.strip()
+    payment_receipt_id = payment_receipt_id.strip()
+
+    costs = {}
+    for field in ("delivery_cost_cents", "inference_cost_cents", "cac_cents"):
+        value = finite_number(economics, field, minimum=0)
+        if not value.is_integer():
+            raise ValueError(f"{field}_invalid")
+        costs[field] = int(value)
+    minutes = finite_number(
+        economics, "human_operating_minutes", minimum=1, maximum=600000)
+    if not minutes.is_integer():
+        raise ValueError("human_operating_minutes_invalid")
+    minutes = int(minutes)
+
+    evidence = {}
+    for field in (
+            "delivery_cost_evidence_url", "inference_cost_evidence_url",
+            "cac_evidence_url", "human_time_evidence_url"):
+        url = canonical_url(_proposal_text(economics.get(field), field, 2000))
+        if urlsplit(url).scheme != "https":
+            raise ValueError(f"{field}_https_required")
+        evidence[field] = url
+    measured_at = parse_time(economics.get("measured_at"), "measured_at")
+    recorded = now or utc_now()
+    if measured_at > recorded + MAX_FUTURE_SKEW:
+        raise ValueError("measured_at_future")
+
+    connection = open_ledger(path)
+    try:
+        with connection:
+            opportunity = connection.execute(
+                "SELECT pipeline_state FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            if opportunity is None:
+                raise ValueError("opportunity_not_found")
+            payment = _verified_payment_receipt(
+                connection, payment_receipt_id)
+            if payment[0] != opportunity_id:
+                raise ValueError("realized_economics_opportunity_mismatch")
+            if measured_at < parse_time(payment[10], "payment_settled_at"):
+                raise ValueError("economics_measured_before_settlement")
+
+            net_collected = payment[7]
+            total_cost = sum(costs.values())
+            contribution = net_collected - total_cost
+            hours = minutes / 60
+            margin = contribution / net_collected
+            revenue_per_hour = net_collected / 100 / hours
+            contribution_per_hour = contribution / 100 / hours
+            proposal_id, proposal_artifact = (
+                _verified_linked_proposal_for_payment(connection, payment))
+            projected = proposal_artifact.get("proposal_unit_economics") or {}
+            if projected.get("evidence_status") == "projected_not_collected":
+                evidence["proposal_projection_comparison"] = {
                     "proposal_id": proposal_id,
                     "projected_contribution_cents": projected[
                         "projected_contribution_cents"],
@@ -3857,8 +5523,30 @@ def _verified_payout_receipt(connection, payout_receipt_id):
     }
     serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
     expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
-    if payout[8] != expected_hash or payout_receipt_id != (
-            "pavr_" + expected_hash[:24]):
+    try:
+        provider = _proposal_text(
+            payout[2], "withdrawable_provider", 160)
+        external_id = _proposal_text(
+            payout[3], "external_balance_id", 500)
+        evidence_url = canonical_url(_proposal_text(
+            payout[4], "withdrawable_evidence_url", 2000))
+        available_at = parse_time(payout[7], "available_at")
+        semantics_valid = (
+            provider == payout[2]
+            and external_id == payout[3]
+            and evidence_url == payout[4]
+            and urlsplit(evidence_url).scheme == "https"
+            and isinstance(payout[5], int)
+            and not isinstance(payout[5], bool)
+            and payout[5] > 0
+            and re.fullmatch(r"[A-Z]{3}", str(payout[6] or "")) is not None
+            and available_at <= utc_now() + MAX_FUTURE_SKEW
+        )
+    except (TypeError, ValueError):
+        semantics_valid = False
+    if (payout[8] != expected_hash
+            or payout_receipt_id != ("pavr_" + expected_hash[:24])
+            or not semantics_valid):
         raise ValueError("payout_receipt_unverified")
     return payout
 
