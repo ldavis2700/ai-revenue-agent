@@ -233,6 +233,19 @@ class OpportunityIntakeTests(unittest.TestCase):
             "url_credentials_forbidden",
         )
 
+    def test_opportunity_source_requires_https(self):
+        result = opportunity_intake.ingest([
+            candidate(
+                external_id="insecure-listing",
+                url="http://example.com/jobs/insecure",
+            )
+        ], now=NOW)
+        self.assertEqual(result["opportunities"], [])
+        self.assertEqual(
+            result["rejections"][0]["reason"],
+            "opportunity_url_https_required",
+        )
+
     def test_explicit_location_ineligibility_is_terminal(self):
         result = opportunity_intake.ingest(
             [candidate(external_id="location-blocked", location_eligible=False)],
