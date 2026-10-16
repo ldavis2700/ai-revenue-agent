@@ -4119,34 +4119,31 @@ def _verified_recurring_payment_receipt(
     if not lineage_valid:
         raise ValueError("recurring_payment_lineage_unverified")
     buyer_lineage = connection.execute(
-        """SELECT cr.proposal_id,rr.opportunity_id,rr.provider,
-                  sr.proposal_id,p.opportunity_id,p.artifact_hash,
-                  p.artifact_json
+        """SELECT cr.proposal_id,cr.response_receipt_id,
+                  p.opportunity_id,p.artifact_hash,p.artifact_json
            FROM contract_receipts cr
-           JOIN response_receipts rr
-             ON rr.receipt_id=cr.response_receipt_id
-           JOIN submission_receipts sr
-             ON sr.receipt_id=rr.submission_receipt_id
            JOIN proposal_artifacts p ON p.proposal_id=cr.proposal_id
            WHERE cr.receipt_id=?""",
         (payment[1],),
     ).fetchone()
     if buyer_lineage is None:
         raise ValueError("recurring_payment_buyer_lineage_unverified")
+    response = _verified_response_receipt(connection, buyer_lineage[1])
+    submission = _verified_submission_receipt(connection, response[1])
     try:
-        proposal_artifact = json.loads(buyer_lineage[6])
+        proposal_artifact = json.loads(buyer_lineage[4])
     except (TypeError, json.JSONDecodeError) as exc:
         raise ValueError(
             "recurring_payment_buyer_lineage_unverified") from exc
-    proposal_hash = hashlib.sha256(buyer_lineage[6].encode()).hexdigest()
+    proposal_hash = hashlib.sha256(buyer_lineage[4].encode()).hexdigest()
     if (
-        buyer_lineage[0] != buyer_lineage[3]
-        or payment[0] != buyer_lineage[1]
-        or payment[0] != buyer_lineage[4]
-        or str(payment[3]).casefold() != str(buyer_lineage[2]).casefold()
+        buyer_lineage[0] != submission[1]
+        or payment[0] != response[0]
+        or payment[0] != buyer_lineage[2]
+        or str(payment[3]).casefold() != str(response[2]).casefold()
         or not isinstance(proposal_artifact, dict)
         or proposal_artifact.get("opportunity_id") != payment[0]
-        or buyer_lineage[5] != proposal_hash
+        or buyer_lineage[3] != proposal_hash
         or buyer_lineage[0] != "prop_" + proposal_hash[:24]
     ):
         raise ValueError("recurring_payment_buyer_lineage_unverified")
