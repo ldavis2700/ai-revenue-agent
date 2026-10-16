@@ -4419,6 +4419,27 @@ class OpportunityIntakeTests(unittest.TestCase):
             )
             connection.commit()
             connection.close()
+            connection = sqlite3.connect(path)
+            response_url = connection.execute(
+                "SELECT message_url FROM response_receipts WHERE receipt_id=?",
+                (replied["receipt_id"],),
+            ).fetchone()[0]
+            connection.execute(
+                "UPDATE response_receipts SET message_url=? WHERE receipt_id=?",
+                ("https://example.com/messages/substituted",
+                 replied["receipt_id"]),
+            )
+            connection.commit()
+            with self.assertRaisesRegex(
+                    ValueError, "response_receipt_unverified"):
+                opportunity_intake._verified_recurring_payment_receipt(
+                    connection, settled["receipt_id"])
+            connection.execute(
+                "UPDATE response_receipts SET message_url=? WHERE receipt_id=?",
+                (response_url, replied["receipt_id"]),
+            )
+            connection.commit()
+            connection.close()
             withdrawable = (
                 opportunity_intake.record_recurring_withdrawable_balance(
                     path, opportunity_id, settled["receipt_id"], {
