@@ -3730,6 +3730,64 @@ def summarize_settled_recurring_revenue(path, opportunity_id):
         connection.close()
 
 
+def _verified_invoice_receipt(connection, invoice_receipt_id):
+    """Rebuild an invoice and its outcome allocations before trusting it."""
+    invoice = connection.execute(
+        """SELECT opportunity_id,delivery_receipt_id,provider,
+                  external_invoice_id,invoice_url,amount_cents,currency,
+                  issued_at,due_at,receipt_hash
+           FROM invoice_receipts WHERE receipt_id=?""",
+        (invoice_receipt_id,)).fetchone()
+    if invoice is None:
+        raise ValueError("invoice_receipt_not_found")
+    allocation_rows = connection.execute(
+        """SELECT ioe.event_id,ioe.outcome_fee_cents,
+                  aoe.fee_cents,aoe.event_hash
+           FROM invoice_outcome_events ioe
+           JOIN attributed_outcome_events aoe ON aoe.event_id=ioe.event_id
+           WHERE ioe.invoice_receipt_id=? ORDER BY ioe.event_id""",
+        (invoice_receipt_id,)).fetchall()
+    snapshot = {
+        "opportunity_id": invoice[0],
+        "delivery_receipt_id": invoice[1],
+        "provider": invoice[2],
+        "external_invoice_id": invoice[3],
+        "invoice_url": invoice[4],
+        "amount_cents": invoice[5],
+        "outcome_fee_cents": sum(row[1] for row in allocation_rows),
+        "outcome_event_ids": [row[0] for row in allocation_rows],
+        "outcome_event_hashes": [
+            {"event_id": row[0], "event_hash": row[3]}
+            for row in allocation_rows
+        ],
+        "currency": invoice[6],
+        "issued_at": invoice[7],
+        "due_at": invoice[8],
+    }
+    serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    try:
+        issued_at = parse_time(invoice[7], "invoice_issued_at")
+        due_at = parse_time(invoice[8], "invoice_due_at")
+        semantics_valid = (
+            isinstance(invoice[5], int)
+            and not isinstance(invoice[5], bool)
+            and invoice[5] > 0
+            and all(row[1] == row[2] for row in allocation_rows)
+            and urlsplit(str(invoice[4] or "")).scheme == "https"
+            and re.fullmatch(r"[A-Z]{3}", str(invoice[6] or "")) is not None
+            and issued_at <= due_at
+            and issued_at <= utc_now() + MAX_FUTURE_SKEW
+        )
+    except (TypeError, ValueError):
+        semantics_valid = False
+    if (invoice[9] != expected_hash
+            or invoice_receipt_id != ("invr_" + expected_hash[:24])
+            or not semantics_valid):
+        raise ValueError("invoice_receipt_unverified")
+    return invoice
+
+
 def _verified_payment_receipt(connection, payment_receipt_id):
     """Return a payment receipt only when its immutable snapshot still matches."""
     payment = connection.execute(
@@ -3780,6 +3838,19 @@ def _verified_payment_receipt(connection, payment_receipt_id):
     if (payment[11] != expected_hash
             or payment_receipt_id != ("payr_" + expected_hash[:24])
             or not semantics_valid):
+        raise ValueError("payment_receipt_unverified")
+    try:
+        invoice = _verified_invoice_receipt(connection, payment[1])
+        lineage_valid = (
+            payment[0] == invoice[0]
+            and payment[2].casefold() == invoice[2].casefold()
+            and payment[5] == invoice[5]
+            and payment[8] == invoice[6]
+            and paid_at >= parse_time(invoice[7], "invoice_issued_at")
+        )
+    except (AttributeError, TypeError, ValueError):
+        lineage_valid = False
+    if not lineage_valid:
         raise ValueError("payment_receipt_unverified")
     return payment
 
