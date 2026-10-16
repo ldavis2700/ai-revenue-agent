@@ -1669,12 +1669,23 @@ def open_ledger(path):
         external_message_id TEXT NOT NULL,
         message_url TEXT NOT NULL,
         received_at TEXT NOT NULL,
+        stage TEXT NOT NULL,
         receipt_hash TEXT NOT NULL,
         recorded_at TEXT NOT NULL,
         FOREIGN KEY(opportunity_id) REFERENCES opportunities(id),
         FOREIGN KEY(submission_receipt_id) REFERENCES submission_receipts(receipt_id),
         UNIQUE(provider, external_message_id)
     )""")
+    response_receipt_columns = {
+        row[1] for row in connection.execute(
+            "PRAGMA table_info(response_receipts)").fetchall()
+    }
+    if "stage" not in response_receipt_columns:
+        # Legacy rows cannot be cryptographically reconstructed because the
+        # stage was included in their hash but not persisted. Leave them null
+        # so strict verification fails closed rather than inventing evidence.
+        connection.execute(
+            "ALTER TABLE response_receipts ADD COLUMN stage TEXT")
     connection.execute("""CREATE TABLE IF NOT EXISTS contract_receipts (
         receipt_id TEXT PRIMARY KEY,
         opportunity_id TEXT NOT NULL,
@@ -2367,10 +2378,11 @@ def record_response(path, opportunity_id, submission_receipt_id, response, *, no
             tid = transition_id(opportunity_id, source_state, target_state, evidence_id)
             connection.execute("""INSERT INTO response_receipts
                 (receipt_id,opportunity_id,submission_receipt_id,provider,external_message_id,
-                 message_url,received_at,receipt_hash,recorded_at)
-                VALUES (?,?,?,?,?,?,?,?,?)""", (
+                 message_url,received_at,stage,receipt_hash,recorded_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""", (
                     receipt_id, opportunity_id, submission_receipt_id, provider, external_id,
-                    message_url, received_at.isoformat(), receipt_hash, recorded_at))
+                    message_url, received_at.isoformat(), target_state,
+                    receipt_hash, recorded_at))
             payload = json.loads(row[1])
             payload["pipeline_state"] = target_state
             payload["buyer_stage"] = (
