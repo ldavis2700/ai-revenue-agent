@@ -4430,6 +4430,15 @@ def _verified_recurring_payment_receipt(
     serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
     expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
     try:
+        provider = _proposal_text(payment[3], "provider", 160)
+        external_invoice_id = _proposal_text(
+            payment[4], "external_invoice_id", 500)
+        invoice_url = canonical_url(_proposal_text(
+            payment[5], "invoice_url", 2000))
+        external_transaction_id = _proposal_text(
+            payment[6], "external_transaction_id", 500)
+        transaction_url = canonical_url(_proposal_text(
+            payment[7], "transaction_url", 2000))
         period_start = parse_time(payment[12], "service_period_start")
         period_end = parse_time(payment[13], "service_period_end")
         invoiced_at = parse_time(payment[14], "invoiced_at")
@@ -4446,9 +4455,14 @@ def _verified_recurring_payment_receipt(
         )
         semantics_valid = (
             amounts_valid
+            and provider == payment[3]
+            and external_invoice_id == payment[4]
+            and invoice_url == payment[5]
+            and external_transaction_id == payment[6]
+            and transaction_url == payment[7]
             and re.fullmatch(r"[A-Z]{3}", str(payment[11] or "")) is not None
-            and urlsplit(str(payment[5] or "")).scheme == "https"
-            and urlsplit(str(payment[7] or "")).scheme == "https"
+            and urlsplit(invoice_url).scheme == "https"
+            and urlsplit(transaction_url).scheme == "https"
             and period_start < period_end
             and invoiced_at <= paid_at <= settled_at
             and settled_at <= utc_now() + MAX_FUTURE_SKEW
