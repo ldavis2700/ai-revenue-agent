@@ -5084,6 +5084,91 @@ class OpportunityIntakeTests(unittest.TestCase):
                     connection, response_id)
             connection.close()
 
+    def test_self_hashed_contract_requires_external_id(self):
+        proposal_id = "prop_" + "b" * 24
+        submission = {
+            "opportunity_id": "opp_contract_evidence",
+            "proposal_id": proposal_id,
+            "provider": "authorized_marketplace",
+            "external_submission_id": "submission-2",
+            "submission_url": "https://example.com/submissions/2",
+            "submitted_at": NOW.isoformat(),
+        }
+        submission_hash = hashlib.sha256(json.dumps(
+            submission, sort_keys=True, separators=(",", ":")
+        ).encode()).hexdigest()
+        submission_id = "subr_" + submission_hash[:24]
+        response = {
+            "opportunity_id": submission["opportunity_id"],
+            "submission_receipt_id": submission_id,
+            "provider": submission["provider"],
+            "external_message_id": "message-2",
+            "message_url": "https://example.com/messages/2",
+            "received_at": NOW.isoformat(),
+            "stage": "buyer_reply",
+        }
+        response_hash = hashlib.sha256(json.dumps(
+            response, sort_keys=True, separators=(",", ":")
+        ).encode()).hexdigest()
+        response_id = "respr_" + response_hash[:24]
+        contract = {
+            "opportunity_id": submission["opportunity_id"],
+            "response_receipt_id": response_id,
+            "proposal_id": proposal_id,
+            "provider": submission["provider"],
+            "external_contract_id": "",
+            "contract_url": "https://example.com/contracts/2",
+            "amount_cents": 100000,
+            "currency": "USD",
+            "contracted_at": NOW.isoformat(),
+            "terms_authority": "preapproved_standard_terms",
+            "authority_evidence_url": "https://example.com/terms/standard-v1",
+            "recurring_terms_binding": None,
+            "outcome_terms_binding": None,
+        }
+        contract_hash = hashlib.sha256(json.dumps(
+            contract, sort_keys=True, separators=(",", ":")
+        ).encode()).hexdigest()
+        contract_id = "contr_" + contract_hash[:24]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.open_ledger(path).close()
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """INSERT INTO submission_receipts
+                   (receipt_id,opportunity_id,proposal_id,provider,
+                    external_submission_id,submission_url,submitted_at,
+                    receipt_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (submission_id, *submission.values(), submission_hash,
+                 NOW.isoformat()),
+            )
+            connection.execute(
+                """INSERT INTO response_receipts
+                   (receipt_id,opportunity_id,submission_receipt_id,provider,
+                    external_message_id,message_url,received_at,stage,
+                    receipt_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (response_id, *response.values(), response_hash,
+                 NOW.isoformat()),
+            )
+            connection.execute(
+                """INSERT INTO contract_receipts
+                   (receipt_id,opportunity_id,response_receipt_id,proposal_id,
+                    provider,external_contract_id,contract_url,amount_cents,
+                    currency,contracted_at,terms_authority,
+                    authority_evidence_url,receipt_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (contract_id, *list(contract.values())[:11], contract_hash,
+                 NOW.isoformat()),
+            )
+            with self.assertRaisesRegex(
+                    ValueError, "contract_receipt_unverified"):
+                opportunity_intake._verified_contract_receipt(
+                    connection, contract_id)
+            connection.close()
+
+
     def test_self_hashed_payment_without_transaction_id_is_not_verified(self):
         snapshot = {
             "opportunity_id": "opp_forged_payment_id",
