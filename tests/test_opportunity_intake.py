@@ -5030,6 +5030,60 @@ class OpportunityIntakeTests(unittest.TestCase):
                     connection, receipt_id)
             connection.close()
 
+    def test_self_hashed_buyer_evidence_requires_external_ids(self):
+        submission = {
+            "opportunity_id": "opp_buyer_evidence",
+            "proposal_id": "prop_" + "a" * 24,
+            "provider": "authorized_marketplace",
+            "external_submission_id": "submission-1",
+            "submission_url": "https://example.com/submissions/1",
+            "submitted_at": NOW.isoformat(),
+        }
+        submission_json = json.dumps(
+            submission, sort_keys=True, separators=(",", ":"))
+        submission_hash = hashlib.sha256(submission_json.encode()).hexdigest()
+        submission_id = "subr_" + submission_hash[:24]
+        response = {
+            "opportunity_id": submission["opportunity_id"],
+            "submission_receipt_id": submission_id,
+            "provider": submission["provider"],
+            "external_message_id": "",
+            "message_url": "https://example.com/messages/1",
+            "received_at": NOW.isoformat(),
+            "stage": "buyer_reply",
+        }
+        response_json = json.dumps(
+            response, sort_keys=True, separators=(",", ":"))
+        response_hash = hashlib.sha256(response_json.encode()).hexdigest()
+        response_id = "respr_" + response_hash[:24]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.open_ledger(path).close()
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """INSERT INTO submission_receipts
+                   (receipt_id,opportunity_id,proposal_id,provider,
+                    external_submission_id,submission_url,submitted_at,
+                    receipt_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?)""",
+                (submission_id, *submission.values(), submission_hash,
+                 NOW.isoformat()),
+            )
+            connection.execute(
+                """INSERT INTO response_receipts
+                   (receipt_id,opportunity_id,submission_receipt_id,provider,
+                    external_message_id,message_url,received_at,stage,
+                    receipt_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (response_id, *response.values(), response_hash,
+                 NOW.isoformat()),
+            )
+            with self.assertRaisesRegex(
+                    ValueError, "response_receipt_unverified"):
+                opportunity_intake._verified_response_receipt(
+                    connection, response_id)
+            connection.close()
+
     def test_self_hashed_payment_without_transaction_id_is_not_verified(self):
         snapshot = {
             "opportunity_id": "opp_forged_payment_id",
