@@ -4973,6 +4973,7 @@ def _verified_recurring_bank_receipt(connection, recurring_bank_receipt_id):
         evidence_url = canonical_url(_proposal_text(
             bank[4], "bank_evidence_url", 2000))
         received_at = parse_time(bank[7], "received_at")
+        payout = _verified_recurring_payout_receipt(connection, bank[1])
         semantics_valid = (
             institution == bank[2]
             and external_id == bank[3]
@@ -4983,6 +4984,11 @@ def _verified_recurring_bank_receipt(connection, recurring_bank_receipt_id):
             and bank[5] > 0
             and re.fullmatch(r"[A-Z]{3}", str(bank[6] or "")) is not None
             and received_at <= utc_now() + MAX_FUTURE_SKEW
+            and payout[0] == bank[0]
+            and payout[5] == bank[5]
+            and payout[6] == bank[6]
+            and received_at >= parse_time(
+                payout[7], "recurring_payout_available_at")
         )
     except (TypeError, ValueError):
         semantics_valid = False
