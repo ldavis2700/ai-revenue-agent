@@ -4225,14 +4225,27 @@ def _verified_contract_receipt(connection, contract_receipt_id):
     serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
     expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
     try:
+        provider = _proposal_text(contract[3], "provider", 160)
+        external_contract_id = _proposal_text(
+            contract[4], "external_contract_id", 500)
+        contract_url = canonical_url(_proposal_text(
+            contract[5], "contract_url", 2000))
+        currency = _proposal_text(contract[7], "currency", 3)
+        authority_evidence_url = canonical_url(_proposal_text(
+            contract[10], "authority_evidence_url", 2000))
         contracted_at = parse_time(contract[8], "contracted_at")
         semantics_valid = (
-            isinstance(contract[6], int)
+            provider == contract[3]
+            and external_contract_id == contract[4]
+            and contract_url == contract[5]
+            and currency == contract[7]
+            and re.fullmatch(r"[A-Z]{3}", currency) is not None
+            and authority_evidence_url == contract[10]
+            and urlsplit(contract_url).scheme == "https"
+            and urlsplit(authority_evidence_url).scheme == "https"
+            and isinstance(contract[6], int)
             and not isinstance(contract[6], bool)
             and contract[6] > 0
-            and re.fullmatch(r"[A-Z]{3}", str(contract[7] or "")) is not None
-            and urlsplit(str(contract[5] or "")).scheme == "https"
-            and urlsplit(str(contract[10] or "")).scheme == "https"
             and contract[9] in {
                 "preapproved_standard_terms", "owner_approved_terms"}
             and contracted_at <= utc_now() + MAX_FUTURE_SKEW
