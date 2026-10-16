@@ -3762,6 +3762,89 @@ def _verified_payment_receipt(connection, payment_receipt_id):
     return payment
 
 
+def _verified_submission_receipt(connection, submission_receipt_id):
+    """Rebuild provider submission evidence before trusting its lineage."""
+    submission = connection.execute(
+        """SELECT opportunity_id,proposal_id,provider,
+                  external_submission_id,submission_url,submitted_at,
+                  receipt_hash
+           FROM submission_receipts WHERE receipt_id=?""",
+        (submission_receipt_id,),
+    ).fetchone()
+    if submission is None:
+        raise ValueError("submission_receipt_not_found")
+    snapshot = {
+        "opportunity_id": submission[0],
+        "proposal_id": submission[1],
+        "provider": submission[2],
+        "external_submission_id": submission[3],
+        "submission_url": submission[4],
+        "submitted_at": submission[5],
+    }
+    serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    try:
+        submitted_at = parse_time(submission[5], "submitted_at")
+        semantics_valid = (
+            urlsplit(str(submission[4] or "")).scheme == "https"
+            and submitted_at <= utc_now() + MAX_FUTURE_SKEW
+        )
+    except (TypeError, ValueError):
+        semantics_valid = False
+    if (
+        submission[6] != expected_hash
+        or submission_receipt_id != "subr_" + expected_hash[:24]
+        or not semantics_valid
+    ):
+        raise ValueError("submission_receipt_unverified")
+    return submission
+
+
+def _verified_response_receipt(connection, response_receipt_id):
+    """Rebuild buyer-response evidence and verify its submission parent."""
+    response = connection.execute(
+        """SELECT opportunity_id,submission_receipt_id,provider,
+                  external_message_id,message_url,received_at,stage,
+                  receipt_hash
+           FROM response_receipts WHERE receipt_id=?""",
+        (response_receipt_id,),
+    ).fetchone()
+    if response is None:
+        raise ValueError("response_receipt_not_found")
+    snapshot = {
+        "opportunity_id": response[0],
+        "submission_receipt_id": response[1],
+        "provider": response[2],
+        "external_message_id": response[3],
+        "message_url": response[4],
+        "received_at": response[5],
+        "stage": response[6],
+    }
+    serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    submission = _verified_submission_receipt(connection, response[1])
+    try:
+        received_at = parse_time(response[5], "received_at")
+        submitted_at = parse_time(submission[5], "submitted_at")
+        semantics_valid = (
+            response[6] in BUYER_EVENT_STATES
+            and urlsplit(str(response[4] or "")).scheme == "https"
+            and received_at <= utc_now() + MAX_FUTURE_SKEW
+            and submitted_at <= received_at
+            and response[0] == submission[0]
+            and str(response[2]).casefold() == str(submission[2]).casefold()
+        )
+    except (TypeError, ValueError):
+        semantics_valid = False
+    if (
+        response[7] != expected_hash
+        or response_receipt_id != "respr_" + expected_hash[:24]
+        or not semantics_valid
+    ):
+        raise ValueError("response_receipt_unverified")
+    return response
+
+
 def _verified_linked_proposal_for_payment(connection, payment):
     """Resolve and verify the proposal bound to a settled payment's delivery."""
     proposal = connection.execute(
