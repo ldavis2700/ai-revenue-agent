@@ -3756,8 +3756,30 @@ def _verified_payment_receipt(connection, payment_receipt_id):
     }
     serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
     expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
-    if payment[11] != expected_hash or payment_receipt_id != (
-            "payr_" + expected_hash[:24]):
+    try:
+        paid_at = parse_time(payment[9], "paid_at")
+        settled_at = parse_time(payment[10], "settled_at")
+        amounts_valid = (
+            all(isinstance(payment[index], int)
+                and not isinstance(payment[index], bool)
+                for index in (5, 6, 7))
+            and payment[5] > 0
+            and payment[6] >= 0
+            and payment[7] > 0
+            and payment[7] == payment[5] - payment[6]
+        )
+        semantics_valid = (
+            amounts_valid
+            and urlsplit(str(payment[4] or "")).scheme == "https"
+            and re.fullmatch(r"[A-Z]{3}", str(payment[8] or "")) is not None
+            and paid_at <= settled_at
+            and settled_at <= utc_now() + MAX_FUTURE_SKEW
+        )
+    except (TypeError, ValueError):
+        semantics_valid = False
+    if (payment[11] != expected_hash
+            or payment_receipt_id != ("payr_" + expected_hash[:24])
+            or not semantics_valid):
         raise ValueError("payment_receipt_unverified")
     return payment
 
