@@ -3894,6 +3894,22 @@ class OpportunityIntakeTests(unittest.TestCase):
                 """SELECT eligibility_review_json
                    FROM attributed_outcome_events WHERE event_id=?""",
                 (escalated_event["event_id"],)).fetchone()[0])
+            connection.execute(
+                """UPDATE attributed_outcome_events SET artifact_sha256=?
+                   WHERE event_id=?""",
+                ("5" * 64, event["event_id"]))
+            connection.commit()
+            with self.assertRaisesRegex(
+                    ValueError, "invoice_receipt_unverified"):
+                opportunity_intake._verified_invoice_receipt(
+                    connection, invoice["receipt_id"])
+            connection.execute(
+                """UPDATE attributed_outcome_events SET artifact_sha256=?
+                   WHERE event_id=?""",
+                ("2" * 64, event["event_id"]))
+            connection.commit()
+            opportunity_intake._verified_invoice_receipt(
+                connection, invoice["receipt_id"])
             connection.close()
 
         self.assertEqual(terms[:2], (
