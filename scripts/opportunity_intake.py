@@ -3784,6 +3784,51 @@ def _verified_attributed_outcome_event(connection, event_id):
     return event
 
 
+def _verified_qa_report(connection, report_id):
+    """Rebuild objective QA evidence before trusting delivery lineage."""
+    report = connection.execute(
+        """SELECT opportunity_id,execution_plan_id,artifact_sha256,
+                  report_hash,report_json,completed_at
+           FROM qa_reports WHERE report_id=?""",
+        (report_id,),
+    ).fetchone()
+    if report is None:
+        raise ValueError("qa_report_not_found")
+    try:
+        artifact = json.loads(report[4])
+        tests = artifact.get("tests") if isinstance(artifact, dict) else None
+        expected_hash = hashlib.sha256(report[4].encode()).hexdigest()
+        semantics_valid = (
+            isinstance(tests, list)
+            and bool(tests)
+            and all(
+                isinstance(test, dict)
+                and test.get("status") == "passed"
+                and urlsplit(str(test.get("evidence_url") or "")).scheme
+                == "https"
+                for test in tests
+            )
+            and artifact.get("opportunity_id") == report[0]
+            and artifact.get("execution_plan_id") == report[1]
+            and artifact.get("artifact_sha256") == report[2]
+            and artifact.get("completed_at") == report[5]
+            and re.fullmatch(r"[0-9a-f]{64}", str(report[2] or ""))
+            is not None
+            and parse_time(report[5], "qa_completed_at")
+            <= utc_now() + MAX_FUTURE_SKEW
+        )
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError):
+        expected_hash = ""
+        semantics_valid = False
+    if (
+        report[3] != expected_hash
+        or report_id != "qar_" + expected_hash[:24]
+        or not semantics_valid
+    ):
+        raise ValueError("qa_report_unverified")
+    return report
+
+
 def _verified_delivery_receipt(connection, delivery_receipt_id):
     """Rebuild delivery evidence before trusting a downstream invoice."""
     delivery = connection.execute(
@@ -3798,6 +3843,10 @@ def _verified_delivery_receipt(connection, delivery_receipt_id):
     ).fetchone()
     if delivery is None:
         raise ValueError("delivery_receipt_not_found")
+    try:
+        qa_report = _verified_qa_report(connection, delivery[1])
+    except ValueError as exc:
+        raise ValueError("delivery_receipt_unverified") from exc
     snapshot = {
         "opportunity_id": delivery[0],
         "qa_report_id": delivery[1],
@@ -3820,8 +3869,11 @@ def _verified_delivery_receipt(connection, delivery_receipt_id):
             and urlsplit(str(delivery[4] or "")).scheme == "https"
             and re.fullmatch(r"[0-9a-f]{64}", str(delivery[5] or ""))
             is not None
-            and delivery[0] == delivery[8]
-            and delivery[5] == delivery[9]
+            and delivery[0] == delivery[8] == qa_report[0]
+            and delivery[5] == delivery[9] == qa_report[2]
+            and qa_completed_at == parse_time(
+                qa_report[5], "qa_completed_at"
+            )
             and qa_completed_at <= delivered_at
             and delivered_at <= utc_now() + MAX_FUTURE_SKEW
         )
