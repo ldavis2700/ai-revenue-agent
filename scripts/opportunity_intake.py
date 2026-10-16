@@ -3970,6 +3970,59 @@ def _verified_recurring_payment_receipt(
                 "recurpay_" + expected_hash[:24])
             or not semantics_valid):
         raise ValueError("recurring_payment_receipt_unverified")
+    binding = connection.execute(
+        """SELECT crt.opportunity_id,crt.term_id,
+                  crt.accepted_terms_hash,crt.accepted_base_fee_cents,
+                  crt.acceptance_evidence_url,crt.accepted_at,
+                  crt.binding_hash,rpt.terms_hash,rpt.base_fee_cents,
+                  rpt.opportunity_id,cr.opportunity_id,cr.provider,
+                  cr.currency,cr.contracted_at
+           FROM contract_recurring_terms crt
+           JOIN recurring_pricing_terms rpt ON rpt.term_id=crt.term_id
+           JOIN contract_receipts cr
+             ON cr.receipt_id=crt.contract_receipt_id
+           WHERE crt.contract_receipt_id=?""",
+        (payment[1],),
+    ).fetchone()
+    if binding is None:
+        raise ValueError("recurring_payment_lineage_unverified")
+    binding_snapshot = {
+        "contract_receipt_id": payment[1],
+        "opportunity_id": binding[0],
+        "term_id": binding[1],
+        "accepted_terms_hash": binding[2],
+        "accepted_base_fee_cents": binding[3],
+        "acceptance_evidence_url": binding[4],
+        "accepted_at": binding[5],
+    }
+    binding_serialized = json.dumps(
+        binding_snapshot, sort_keys=True, separators=(",", ":"))
+    expected_binding_hash = hashlib.sha256(
+        binding_serialized.encode()).hexdigest()
+    try:
+        accepted_at = parse_time(binding[5], "recurring_terms_accepted_at")
+        contracted_at = parse_time(binding[13], "contracted_at")
+        lineage_valid = (
+            binding[6] == expected_binding_hash
+            and payment[0] == binding[0] == binding[9] == binding[10]
+            and payment[2] == binding[1]
+            and binding[2] == binding[7]
+            and binding[3] == binding[8] == payment[8]
+            and isinstance(binding[3], int)
+            and not isinstance(binding[3], bool)
+            and re.fullmatch(r"[0-9a-f]{64}", str(binding[2] or ""))
+            is not None
+            and urlsplit(str(binding[4] or "")).scheme == "https"
+            and str(payment[3]).casefold() == str(binding[11]).casefold()
+            and payment[11] == binding[12]
+            and accepted_at <= contracted_at <= period_start
+            and contracted_at <= invoiced_at
+            and accepted_at <= utc_now() + MAX_FUTURE_SKEW
+        )
+    except (TypeError, ValueError):
+        lineage_valid = False
+    if not lineage_valid:
+        raise ValueError("recurring_payment_lineage_unverified")
     return payment
 
 
