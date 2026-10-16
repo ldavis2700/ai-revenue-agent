@@ -1,11 +1,35 @@
 #!/usr/bin/env python3
 """Emit revenue metrics without promoting unverified sales claims to revenue."""
 
+import importlib.util
 import json
 import os
 import sqlite3
+from pathlib import Path
 
 DB_PATH = os.getenv("REVENUE_DB_PATH", "/files/data/revenue_agent.db")
+
+
+def _load_intake_verifiers():
+    """Load the sibling ledger module regardless of the caller's sys.path."""
+    path = Path(__file__).with_name("opportunity_intake.py")
+    spec = importlib.util.spec_from_file_location(
+        "revenue_report_opportunity_intake", path
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return (
+        module._verified_payment_receipt,
+        module._verified_payout_receipt,
+        module._verified_bank_receipt,
+    )
+
+
+(
+    _verified_payment_receipt,
+    _verified_payout_receipt,
+    _verified_bank_receipt,
+) = _load_intake_verifiers()
 
 
 def table_exists(conn, table):
@@ -32,31 +56,62 @@ def sum_event_value(conn, event_type):
     ).fetchone()[0]
 
 
-def stage_totals(conn, table, amount_columns):
-    """Return receipt counts and integer cents by currency for an evidence table."""
+def verified_stage_totals(
+    conn,
+    table,
+    amount_columns,
+    verifier,
+    currency_index,
+    amount_indexes,
+):
+    """Aggregate only receipts whose immutable snapshot and lineage re-verify."""
     if not table_exists(conn, table):
-        return {"receipt_count": 0, "by_currency": {}}
-    select_amounts = ", ".join(
-        f"COALESCE(SUM({column}),0)" for column in amount_columns
-    )
-    rows = conn.execute(
-        f"""SELECT currency, COUNT(*), {select_amounts}
-            FROM {table}
-            GROUP BY currency
-            ORDER BY currency"""
+        return {
+            "receipt_count": 0,
+            "unverified_receipt_count": 0,
+            "by_currency": {},
+        }
+
+    receipt_ids = conn.execute(
+        f"SELECT receipt_id FROM {table} ORDER BY receipt_id"
     ).fetchall()
     by_currency = {}
-    receipt_count = 0
-    for row in rows:
-        currency = row[0]
-        count = int(row[1])
-        receipt_count += count
-        values = {"receipt_count": count}
-        values.update(
-            {column: int(row[index + 2]) for index, column in enumerate(amount_columns)}
+    verified_count = 0
+    unverified_count = 0
+    for (receipt_id,) in receipt_ids:
+        try:
+            receipt = verifier(conn, receipt_id)
+            currency = receipt[currency_index]
+            amounts = [
+                int(receipt[index])
+                for index in amount_indexes
+            ]
+        except (
+            IndexError,
+            TypeError,
+            ValueError,
+            sqlite3.DatabaseError,
+        ):
+            unverified_count += 1
+            continue
+
+        verified_count += 1
+        totals = by_currency.setdefault(
+            currency,
+            {
+                "receipt_count": 0,
+                **{column: 0 for column in amount_columns},
+            },
         )
-        by_currency[currency] = values
-    return {"receipt_count": receipt_count, "by_currency": by_currency}
+        totals["receipt_count"] += 1
+        for column, amount in zip(amount_columns, amounts):
+            totals[column] += amount
+
+    return {
+        "receipt_count": verified_count,
+        "unverified_receipt_count": unverified_count,
+        "by_currency": dict(sorted(by_currency.items())),
+    }
 
 
 def pipeline_counts(conn):
@@ -114,16 +169,29 @@ def build_report(conn, min_lead_score=55):
             "claimed_net_value": claimed_gross - claimed_refunds,
             "status": "unverified_not_collected_revenue",
         },
-        "verified_collected_revenue": stage_totals(
+        "verified_collected_revenue": verified_stage_totals(
             conn,
             "payment_receipts",
             ("gross_amount_cents", "fee_amount_cents", "net_amount_cents"),
+            _verified_payment_receipt,
+            8,
+            (5, 6, 7),
         ),
-        "verified_withdrawable_balance": stage_totals(
-            conn, "payout_availability_receipts", ("amount_cents",)
+        "verified_withdrawable_balance": verified_stage_totals(
+            conn,
+            "payout_availability_receipts",
+            ("amount_cents",),
+            _verified_payout_receipt,
+            6,
+            (5,),
         ),
-        "verified_money_received": stage_totals(
-            conn, "bank_receipts", ("amount_cents",)
+        "verified_money_received": verified_stage_totals(
+            conn,
+            "bank_receipts",
+            ("amount_cents",),
+            _verified_bank_receipt,
+            6,
+            (5,),
         ),
         "pipeline_state_counts": pipeline_counts(conn),
     }
