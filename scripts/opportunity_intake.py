@@ -3784,6 +3784,58 @@ def _verified_attributed_outcome_event(connection, event_id):
     return event
 
 
+def _verified_delivery_receipt(connection, delivery_receipt_id):
+    """Rebuild delivery evidence before trusting a downstream invoice."""
+    delivery = connection.execute(
+        """SELECT d.opportunity_id,d.qa_report_id,d.provider,
+                  d.external_delivery_id,d.delivery_url,d.artifact_sha256,
+                  d.delivered_at,d.receipt_hash,q.opportunity_id,
+                  q.artifact_sha256,q.completed_at
+           FROM delivery_receipts d
+           JOIN qa_reports q ON q.report_id=d.qa_report_id
+           WHERE d.receipt_id=?""",
+        (delivery_receipt_id,),
+    ).fetchone()
+    if delivery is None:
+        raise ValueError("delivery_receipt_not_found")
+    snapshot = {
+        "opportunity_id": delivery[0],
+        "qa_report_id": delivery[1],
+        "provider": delivery[2],
+        "external_delivery_id": delivery[3],
+        "delivery_url": delivery[4],
+        "artifact_sha256": delivery[5],
+        "delivered_at": delivery[6],
+    }
+    serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    try:
+        delivered_at = parse_time(delivery[6], "delivered_at")
+        qa_completed_at = parse_time(delivery[10], "qa_completed_at")
+        semantics_valid = (
+            isinstance(delivery[2], str)
+            and bool(delivery[2].strip())
+            and isinstance(delivery[3], str)
+            and bool(delivery[3].strip())
+            and urlsplit(str(delivery[4] or "")).scheme == "https"
+            and re.fullmatch(r"[0-9a-f]{64}", str(delivery[5] or ""))
+            is not None
+            and delivery[0] == delivery[8]
+            and delivery[5] == delivery[9]
+            and qa_completed_at <= delivered_at
+            and delivered_at <= utc_now() + MAX_FUTURE_SKEW
+        )
+    except (TypeError, ValueError):
+        semantics_valid = False
+    if (
+        delivery[7] != expected_hash
+        or delivery_receipt_id != "delr_" + expected_hash[:24]
+        or not semantics_valid
+    ):
+        raise ValueError("delivery_receipt_unverified")
+    return delivery
+
+
 def _verified_invoice_receipt(connection, invoice_receipt_id):
     """Rebuild an invoice and its outcome allocations before trusting it."""
     invoice = connection.execute(
@@ -3794,6 +3846,16 @@ def _verified_invoice_receipt(connection, invoice_receipt_id):
         (invoice_receipt_id,)).fetchone()
     if invoice is None:
         raise ValueError("invoice_receipt_not_found")
+    try:
+        delivery = _verified_delivery_receipt(connection, invoice[1])
+        delivery_valid = (
+            delivery[0] == invoice[0]
+            and delivery[2].casefold() == str(invoice[2]).casefold()
+            and parse_time(delivery[6], "delivered_at")
+            <= parse_time(invoice[7], "invoice_issued_at")
+        )
+    except (AttributeError, TypeError, ValueError):
+        delivery_valid = False
     allocation_rows = connection.execute(
         """SELECT ioe.event_id,ioe.outcome_fee_cents,
                   aoe.fee_cents,aoe.event_hash
@@ -3837,6 +3899,7 @@ def _verified_invoice_receipt(connection, invoice_receipt_id):
             isinstance(invoice[5], int)
             and not isinstance(invoice[5], bool)
             and invoice[5] > 0
+            and delivery_valid
             and events_valid
             and all(row[1] == row[2] for row in allocation_rows)
             and urlsplit(str(invoice[4] or "")).scheme == "https"
