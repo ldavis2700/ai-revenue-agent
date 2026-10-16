@@ -3995,6 +3995,11 @@ def _verified_payment_receipt(connection, payment_receipt_id):
     serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
     expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
     try:
+        provider = _proposal_text(payment[2], "provider", 160)
+        external_transaction_id = _proposal_text(
+            payment[3], "external_transaction_id", 500)
+        transaction_url = canonical_url(_proposal_text(
+            payment[4], "transaction_url", 2000))
         paid_at = parse_time(payment[9], "paid_at")
         settled_at = parse_time(payment[10], "settled_at")
         amounts_valid = (
@@ -4008,7 +4013,10 @@ def _verified_payment_receipt(connection, payment_receipt_id):
         )
         semantics_valid = (
             amounts_valid
-            and urlsplit(str(payment[4] or "")).scheme == "https"
+            and provider == payment[2]
+            and external_transaction_id == payment[3]
+            and transaction_url == payment[4]
+            and urlsplit(transaction_url).scheme == "https"
             and re.fullmatch(r"[A-Z]{3}", str(payment[8] or "")) is not None
             and paid_at <= settled_at
             and settled_at <= utc_now() + MAX_FUTURE_SKEW
