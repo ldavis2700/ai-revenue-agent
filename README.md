@@ -50,6 +50,12 @@ receipt to that exact QA-approved artifact checksum before advancing to
 `delivered`. `record_invoice` requires a delivery-linked provider invoice whose
 amount and currency remain within the verified contract and whose dates follow
 delivery; it records evidence but never creates a charge. Finally,
+Opportunity ranking treats an active buyer stage as a strict priority band before
+the numeric opportunity score. Any non-prospect `buyer_stage` requires a canonical
+HTTP(S) `buyer_stage_evidence_url` plus a fresh, non-future
+`buyer_stage_evidence_at`; unsupported or stale reply, invitation, interview,
+offer, or contract claims fail closed instead of outranking verified prospects.
+
 Opportunity intake can also carry explicit `required_execution_capabilities` and
 `available_execution_capabilities` lists. APEX fails closed when any requirement
 is unavailable, preventing technically open jobs from reaching proposal work when
@@ -209,7 +215,7 @@ Legacy APEX deployments remain supported by leaving `APEX_AUTH_MODE=bearer` and 
 
 ## Referral / partner attribution (prepared, disabled by default)
 
-`scripts/referral_program.py` provides referral-code creation and attribution for clicks, leads, meetings, sales, and attributed revenue. It does **not** send messages, modify pricing, or create/pay commissions.
+`scripts/referral_program.py` provides referral-code creation and attribution for clicks, leads, meetings, and self-reported sale claims. Its report labels sale values as unverified attribution claims; they are never collected revenue without an authorized payment receipt. It does **not** send messages, modify pricing, or create/pay commissions.
 
 Write actions stay disabled unless the server environment explicitly contains:
 
@@ -226,7 +232,7 @@ REFERRAL_PROGRAM_ENABLED=true python3 scripts/referral_program.py record PARTNER
 python3 scripts/referral_program.py report
 ```
 
-Referral payouts remain disabled in this implementation. Any commission amount, partner agreement, automatic outreach, or payment action requires a separate business decision and authorization.
+Referral payouts remain disabled in this implementation. Any commission amount, partner agreement, automatic outreach, or payment action requires a separate business decision and authorization. Use verified payment receipts—not referral `sale` events—to recognize collected revenue.
 
 ## Record lifecycle and revenue events
 
@@ -245,7 +251,7 @@ Generate the current funnel report:
 python3 scripts/revenue_report.py
 ```
 
-The report includes lead counts, qualified prospects, sent messages, replies, interested leads, meetings, sales, reply/interest/close rates, gross and net revenue, and revenue per sent message.
+The report separates unverified sale claims from verified collected, withdrawable, and bank-received payment stages. Only receipt-backed stages are revenue; raw `sale` events remain lifecycle claims.
 
 ## n8n
 

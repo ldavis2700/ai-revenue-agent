@@ -105,7 +105,8 @@ def report(_args):
         SUM(CASE WHEN event_type='sale' THEN 1 ELSE 0 END),
         SUM(CASE WHEN event_type='sale' THEN value ELSE 0 END)
         FROM referral_events''').fetchone()
-    clicks, leads, meetings, sales, revenue = [x or 0 for x in row]
+    clicks, leads, meetings, claimed_sales, claimed_value = [
+        x or 0 for x in row]
     print(json.dumps({
         'ok': True,
         'program_enabled': PROGRAM_ENABLED,
@@ -113,8 +114,9 @@ def report(_args):
         'clicks': clicks,
         'leads': leads,
         'meetings': meetings,
-        'sales': sales,
-        'attributed_revenue': revenue,
+        'claimed_sales': claimed_sales,
+        'claimed_attributed_value': claimed_value,
+        'claim_status': 'unverified_not_collected_revenue',
         'payouts_enabled': False,
     }))
 

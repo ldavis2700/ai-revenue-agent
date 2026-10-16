@@ -34,7 +34,7 @@ class MissionControlExperimentQueueTests(unittest.TestCase):
         self.assertTrue(second['zero_cost_validation_queue']['experiment']['duplicate_active'])
         self.assertEqual(second['zero_cost_validation_queue']['queue']['queued'], 1)
 
-    def test_existing_measured_champion_causes_distinct_challenger_to_be_queued(self):
+    def test_unverified_measured_evidence_cannot_manufacture_a_champion(self):
         conn = mission_control.connect(self.path)
         baseline = mission_control.business_model_snapshot(conn)
         champion_seed = baseline['top_candidates'][0]
@@ -54,11 +54,13 @@ class MissionControlExperimentQueueTests(unittest.TestCase):
         competition = result['business_model_intelligence']['portfolio_competition']
         champion = competition.get('champion')
         challenger = competition.get('challenger')
-        self.assertIsNotNone(champion)
+        self.assertIsNone(champion)
         self.assertIsNotNone(challenger)
-        self.assertEqual(champion['id'], champion_seed['id'])
-        self.assertNotEqual(champion['id'], challenger['id'])
-        self.assertEqual(result['zero_cost_validation_queue']['candidate_id'], challenger['id'])
+        self.assertEqual(challenger['id'], champion_seed['id'])
+        self.assertEqual(
+            result['zero_cost_validation_queue']['candidate_id'],
+            challenger['id'],
+        )
         self.assertEqual(result['zero_cost_validation_queue']['experiment']['max_cost'], 0)
 
 
