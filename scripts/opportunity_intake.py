@@ -4335,6 +4335,8 @@ def _verified_recurring_payout_receipt(
         evidence_url = canonical_url(_proposal_text(
             payout[4], "withdrawable_evidence_url", 2000))
         available_at = parse_time(payout[7], "available_at")
+        payment = _verified_recurring_payment_receipt(
+            connection, payout[1])
         semantics_valid = (
             provider == payout[2]
             and external_id == payout[3]
@@ -4345,6 +4347,12 @@ def _verified_recurring_payout_receipt(
             and payout[5] > 0
             and re.fullmatch(r"[A-Z]{3}", str(payout[6] or "")) is not None
             and available_at <= utc_now() + MAX_FUTURE_SKEW
+            and payment[0] == payout[0]
+            and payment[3].casefold() == provider.casefold()
+            and payment[10] == payout[5]
+            and payment[11] == payout[6]
+            and available_at >= parse_time(
+                payment[16], "recurring_payment_settled_at")
         )
     except (TypeError, ValueError):
         semantics_valid = False
