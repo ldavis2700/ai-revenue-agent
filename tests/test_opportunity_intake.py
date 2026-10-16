@@ -4876,6 +4876,40 @@ class OpportunityIntakeTests(unittest.TestCase):
                     connection, receipt_id)
             connection.close()
 
+    def test_self_hashed_recurring_payout_without_payment_lineage_is_not_verified(self):
+        snapshot = {
+            "opportunity_id": "opp_missing_recurring_payment_lineage",
+            "recurring_payment_receipt_id": "recurpay_" + "a" * 24,
+            "provider": "authorized_marketplace",
+            "external_balance_id": "valid-looking-recurring-balance",
+            "evidence_url": "https://example.com/balances/valid-recurring",
+            "amount_cents": 14500,
+            "currency": "USD",
+            "available_at": "2026-01-01T00:03:00+00:00",
+        }
+        serialized = json.dumps(
+            snapshot, sort_keys=True, separators=(",", ":"))
+        receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        receipt_id = "recuravail_" + receipt_hash[:24]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.open_ledger(path).close()
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """INSERT INTO recurring_payout_availability_receipts
+                   (receipt_id,opportunity_id,recurring_payment_receipt_id,
+                    provider,external_balance_id,evidence_url,amount_cents,
+                    currency,available_at,receipt_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (receipt_id, *snapshot.values(), receipt_hash,
+                 "2026-01-01T00:04:00+00:00"),
+            )
+            with self.assertRaisesRegex(
+                    ValueError, "recurring_payout_receipt_unverified"):
+                opportunity_intake._verified_recurring_payout_receipt(
+                    connection, receipt_id)
+            connection.close()
+
     def test_self_hashed_future_one_time_payout_is_not_verified(self):
         snapshot = {
             "opportunity_id": "opp_forged_future",
