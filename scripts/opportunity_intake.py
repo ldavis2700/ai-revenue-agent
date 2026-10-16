@@ -4065,9 +4065,17 @@ def _verified_submission_receipt(connection, submission_receipt_id):
     serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
     expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
     try:
+        provider = _proposal_text(submission[2], "provider", 160)
+        external_submission_id = _proposal_text(
+            submission[3], "external_submission_id", 500)
+        submission_url = canonical_url(_proposal_text(
+            submission[4], "submission_url", 2000))
         submitted_at = parse_time(submission[5], "submitted_at")
         semantics_valid = (
-            urlsplit(str(submission[4] or "")).scheme == "https"
+            provider == submission[2]
+            and external_submission_id == submission[3]
+            and submission_url == submission[4]
+            and urlsplit(submission_url).scheme == "https"
             and submitted_at <= utc_now() + MAX_FUTURE_SKEW
         )
     except (TypeError, ValueError):
@@ -4105,11 +4113,19 @@ def _verified_response_receipt(connection, response_receipt_id):
     expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
     submission = _verified_submission_receipt(connection, response[1])
     try:
+        provider = _proposal_text(response[2], "provider", 160)
+        external_message_id = _proposal_text(
+            response[3], "external_message_id", 500)
+        message_url = canonical_url(_proposal_text(
+            response[4], "message_url", 2000))
         received_at = parse_time(response[5], "received_at")
         submitted_at = parse_time(submission[5], "submitted_at")
         semantics_valid = (
             response[6] in BUYER_EVENT_STATES
-            and urlsplit(str(response[4] or "")).scheme == "https"
+            and provider == response[2]
+            and external_message_id == response[3]
+            and message_url == response[4]
+            and urlsplit(message_url).scheme == "https"
             and received_at <= utc_now() + MAX_FUTURE_SKEW
             and submitted_at <= received_at
             and response[0] == submission[0]
