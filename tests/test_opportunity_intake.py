@@ -4389,7 +4389,7 @@ class OpportunityIntakeTests(unittest.TestCase):
                 (accepted["receipt_id"],))
             connection.commit()
             with self.assertRaisesRegex(
-                    ValueError, "recurring_payment_lineage_unverified"):
+                    ValueError, "contract_receipt_unverified"):
                 opportunity_intake._verified_recurring_payment_receipt(
                     connection, settled["receipt_id"])
             connection.execute(
@@ -4437,6 +4437,27 @@ class OpportunityIntakeTests(unittest.TestCase):
             connection.execute(
                 "UPDATE response_receipts SET message_url=? WHERE receipt_id=?",
                 (response_url, replied["receipt_id"]),
+            )
+            connection.commit()
+            connection.close()
+            connection = sqlite3.connect(path)
+            contract_url = connection.execute(
+                "SELECT contract_url FROM contract_receipts WHERE receipt_id=?",
+                (accepted["receipt_id"],),
+            ).fetchone()[0]
+            connection.execute(
+                "UPDATE contract_receipts SET contract_url=? WHERE receipt_id=?",
+                ("https://example.com/contracts/substituted",
+                 accepted["receipt_id"]),
+            )
+            connection.commit()
+            with self.assertRaisesRegex(
+                    ValueError, "contract_receipt_unverified"):
+                opportunity_intake._verified_recurring_payment_receipt(
+                    connection, settled["receipt_id"])
+            connection.execute(
+                "UPDATE contract_receipts SET contract_url=? WHERE receipt_id=?",
+                (contract_url, accepted["receipt_id"]),
             )
             connection.commit()
             connection.close()
