@@ -2,6 +2,7 @@ import importlib.util
 import sqlite3
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts" / "revenue_report.py"
@@ -48,7 +49,11 @@ class RevenueReportIntegrityTests(unittest.TestCase):
         )
         self.assertEqual(
             report["verified_collected_revenue"],
-            {"receipt_count": 0, "by_currency": {}},
+            {
+                "receipt_count": 0,
+                "unverified_receipt_count": 0,
+                "by_currency": {},
+            },
         )
         self.assertNotIn("gross_revenue", report)
         self.assertNotIn("net_revenue", report)
@@ -89,7 +94,49 @@ class RevenueReportIntegrityTests(unittest.TestCase):
             """
         )
 
-        report = revenue_report.build_report(connection)
+        def verified_payment(conn, receipt_id):
+            gross, fee, net, currency = conn.execute(
+                """SELECT gross_amount_cents,fee_amount_cents,
+                          net_amount_cents,currency
+                   FROM payment_receipts WHERE receipt_id=?""",
+                (receipt_id,),
+            ).fetchone()
+            return (None, None, None, None, None, gross, fee, net, currency)
+
+        def verified_payout(conn, receipt_id):
+            amount, currency = conn.execute(
+                """SELECT amount_cents,currency
+                   FROM payout_availability_receipts WHERE receipt_id=?""",
+                (receipt_id,),
+            ).fetchone()
+            return (None, None, None, None, None, amount, currency)
+
+        def verified_bank(conn, receipt_id):
+            amount, currency = conn.execute(
+                """SELECT amount_cents,currency
+                   FROM bank_receipts WHERE receipt_id=?""",
+                (receipt_id,),
+            ).fetchone()
+            return (None, None, None, None, None, amount, currency)
+
+        with (
+            patch.object(
+                revenue_report,
+                "_verified_payment_receipt",
+                side_effect=verified_payment,
+            ),
+            patch.object(
+                revenue_report,
+                "_verified_payout_receipt",
+                side_effect=verified_payout,
+            ),
+            patch.object(
+                revenue_report,
+                "_verified_bank_receipt",
+                side_effect=verified_bank,
+            ),
+        ):
+            report = revenue_report.build_report(connection)
 
         self.assertEqual(report["verified_collected_revenue"]["receipt_count"], 3)
         self.assertEqual(
@@ -122,6 +169,32 @@ class RevenueReportIntegrityTests(unittest.TestCase):
         self.assertEqual(
             report["pipeline_state_counts"],
             {"collected": 1, "received": 1, "withdrawable": 1},
+        )
+
+    def test_unverified_receipt_rows_fail_closed_out_of_reported_revenue(self):
+        connection = self.connection()
+        connection.execute(
+            """CREATE TABLE payment_receipts (
+                receipt_id TEXT PRIMARY KEY,
+                currency TEXT NOT NULL,
+                gross_amount_cents INTEGER NOT NULL,
+                fee_amount_cents INTEGER NOT NULL,
+                net_amount_cents INTEGER NOT NULL
+            )"""
+        )
+        connection.execute(
+            "INSERT INTO payment_receipts VALUES ('forged','USD',999999,0,999999)"
+        )
+
+        report = revenue_report.build_report(connection)
+
+        self.assertEqual(
+            report["verified_collected_revenue"],
+            {
+                "receipt_count": 0,
+                "unverified_receipt_count": 1,
+                "by_currency": {},
+            },
         )
 
 
