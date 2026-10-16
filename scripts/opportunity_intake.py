@@ -3730,6 +3730,60 @@ def summarize_settled_recurring_revenue(path, opportunity_id):
         connection.close()
 
 
+def _verified_attributed_outcome_event(connection, event_id):
+    """Rebuild an attributed outcome before trusting it in an invoice."""
+    event = connection.execute(
+        """SELECT opportunity_id,term_id,contract_receipt_id,provider,
+                  external_event_id,evidence_url,artifact_sha256,
+                  attribution_reference,eligibility_review_json,units,
+                  unit_fee_cents,fee_cents,occurred_at,event_hash
+           FROM attributed_outcome_events WHERE event_id=?""",
+        (event_id,)).fetchone()
+    if event is None:
+        raise ValueError("attributed_outcome_event_not_found")
+    try:
+        review = json.loads(event[8])
+        snapshot = {
+            "opportunity_id": event[0],
+            "term_id": event[1],
+            "contract_receipt_id": event[2],
+            "provider": event[3],
+            "external_event_id": event[4],
+            "evidence_url": event[5],
+            "artifact_sha256": event[6],
+            "attribution_reference": event[7],
+            "eligibility_review": review,
+            "units": event[9],
+            "unit_fee_cents": event[10],
+            "fee_cents": event[11],
+            "occurred_at": event[12],
+        }
+        serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+        expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        semantics_valid = (
+            isinstance(review, dict)
+            and isinstance(event[9], int)
+            and not isinstance(event[9], bool)
+            and event[9] > 0
+            and isinstance(event[10], int)
+            and not isinstance(event[10], bool)
+            and event[10] > 0
+            and event[11] == event[9] * event[10]
+            and urlsplit(str(event[5] or "")).scheme == "https"
+            and re.fullmatch(r"[0-9a-f]{64}", str(event[6] or "")) is not None
+            and parse_time(event[12], "outcome_occurred_at")
+            <= utc_now() + MAX_FUTURE_SKEW
+        )
+    except (TypeError, ValueError, json.JSONDecodeError):
+        semantics_valid = False
+        expected_hash = ""
+    if (event[13] != expected_hash
+            or event_id != ("oute_" + expected_hash[:24])
+            or not semantics_valid):
+        raise ValueError("outcome_event_evidence_unverified")
+    return event
+
+
 def _verified_invoice_receipt(connection, invoice_receipt_id):
     """Rebuild an invoice and its outcome allocations before trusting it."""
     invoice = connection.execute(
@@ -3747,6 +3801,16 @@ def _verified_invoice_receipt(connection, invoice_receipt_id):
            JOIN attributed_outcome_events aoe ON aoe.event_id=ioe.event_id
            WHERE ioe.invoice_receipt_id=? ORDER BY ioe.event_id""",
         (invoice_receipt_id,)).fetchall()
+    try:
+        events_valid = all(
+            (event := _verified_attributed_outcome_event(connection, row[0]))
+            and event[0] == invoice[0]
+            and event[11] == row[2]
+            and event[13] == row[3]
+            for row in allocation_rows
+        )
+    except ValueError:
+        events_valid = False
     snapshot = {
         "opportunity_id": invoice[0],
         "delivery_receipt_id": invoice[1],
@@ -3773,6 +3837,7 @@ def _verified_invoice_receipt(connection, invoice_receipt_id):
             isinstance(invoice[5], int)
             and not isinstance(invoice[5], bool)
             and invoice[5] > 0
+            and events_valid
             and all(row[1] == row[2] for row in allocation_rows)
             and urlsplit(str(invoice[4] or "")).scheme == "https"
             and re.fullmatch(r"[A-Z]{3}", str(invoice[6] or "")) is not None
