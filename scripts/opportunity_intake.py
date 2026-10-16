@@ -3845,6 +3845,128 @@ def _verified_response_receipt(connection, response_receipt_id):
     return response
 
 
+def _verified_contract_receipt(connection, contract_receipt_id):
+    """Rebuild accepted-contract evidence and verify its buyer lineage."""
+    contract = connection.execute(
+        """SELECT opportunity_id,response_receipt_id,proposal_id,provider,
+                  external_contract_id,contract_url,amount_cents,currency,
+                  contracted_at,terms_authority,authority_evidence_url,
+                  receipt_hash
+           FROM contract_receipts WHERE receipt_id=?""",
+        (contract_receipt_id,),
+    ).fetchone()
+    if contract is None:
+        raise ValueError("contract_receipt_not_found")
+
+    recurring_row = connection.execute(
+        """SELECT opportunity_id,term_id,accepted_terms_hash,
+                  accepted_base_fee_cents,acceptance_evidence_url,
+                  accepted_at,binding_hash
+           FROM contract_recurring_terms WHERE contract_receipt_id=?""",
+        (contract_receipt_id,),
+    ).fetchone()
+    recurring_binding = None
+    if recurring_row is not None:
+        recurring_binding = {
+            "term_id": recurring_row[1],
+            "accepted_terms_hash": recurring_row[2],
+            "accepted_base_fee_cents": recurring_row[3],
+            "acceptance_evidence_url": recurring_row[4],
+            "accepted_at": recurring_row[5],
+        }
+        binding_snapshot = {
+            "contract_receipt_id": contract_receipt_id,
+            "opportunity_id": recurring_row[0],
+            **recurring_binding,
+        }
+        binding_json = json.dumps(
+            binding_snapshot, sort_keys=True, separators=(",", ":"))
+        if recurring_row[6] != hashlib.sha256(binding_json.encode()).hexdigest():
+            raise ValueError("contract_receipt_unverified")
+
+    outcome_row = connection.execute(
+        """SELECT opportunity_id,term_id,accepted_terms_hash,
+                  accepted_fee_cap_cents,acceptance_evidence_url,
+                  accepted_at,binding_hash
+           FROM contract_outcome_terms WHERE contract_receipt_id=?""",
+        (contract_receipt_id,),
+    ).fetchone()
+    outcome_binding = None
+    if outcome_row is not None:
+        outcome_binding = {
+            "term_id": outcome_row[1],
+            "accepted_terms_hash": outcome_row[2],
+            "accepted_fee_cap_cents": outcome_row[3],
+            "acceptance_evidence_url": outcome_row[4],
+            "accepted_at": outcome_row[5],
+        }
+        binding_snapshot = {
+            "contract_receipt_id": contract_receipt_id,
+            "opportunity_id": outcome_row[0],
+            **outcome_binding,
+        }
+        binding_json = json.dumps(
+            binding_snapshot, sort_keys=True, separators=(",", ":"))
+        if outcome_row[6] != hashlib.sha256(binding_json.encode()).hexdigest():
+            raise ValueError("contract_receipt_unverified")
+
+    snapshot = {
+        "opportunity_id": contract[0],
+        "response_receipt_id": contract[1],
+        "proposal_id": contract[2],
+        "provider": contract[3],
+        "external_contract_id": contract[4],
+        "contract_url": contract[5],
+        "amount_cents": contract[6],
+        "currency": contract[7],
+        "contracted_at": contract[8],
+        "terms_authority": contract[9],
+        "authority_evidence_url": contract[10],
+        "recurring_terms_binding": recurring_binding,
+        "outcome_terms_binding": outcome_binding,
+    }
+    serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+    expected_hash = hashlib.sha256(serialized.encode()).hexdigest()
+    try:
+        contracted_at = parse_time(contract[8], "contracted_at")
+        semantics_valid = (
+            isinstance(contract[6], int)
+            and not isinstance(contract[6], bool)
+            and contract[6] > 0
+            and re.fullmatch(r"[A-Z]{3}", str(contract[7] or "")) is not None
+            and urlsplit(str(contract[5] or "")).scheme == "https"
+            and urlsplit(str(contract[10] or "")).scheme == "https"
+            and contract[9] in {
+                "preapproved_standard_terms", "owner_approved_terms"}
+            and contracted_at <= utc_now() + MAX_FUTURE_SKEW
+        )
+    except (TypeError, ValueError):
+        semantics_valid = False
+    if (
+        contract[11] != expected_hash
+        or contract_receipt_id != "contr_" + expected_hash[:24]
+        or not semantics_valid
+    ):
+        raise ValueError("contract_receipt_unverified")
+
+    response = _verified_response_receipt(connection, contract[1])
+    submission = _verified_submission_receipt(connection, response[1])
+    try:
+        lineage_valid = (
+            contract[0] == response[0]
+            and contract[2] == submission[1]
+            and str(contract[3]).casefold() == str(response[2]).casefold()
+            and parse_time(response[5], "response_received_at") <= contracted_at
+        )
+    except (TypeError, ValueError):
+        lineage_valid = False
+    if not lineage_valid:
+        raise ValueError("contract_lineage_unverified")
+    return contract
+
+
+
+
 def _verified_linked_proposal_for_payment(connection, payment):
     """Resolve and verify the proposal bound to a settled payment's delivery."""
     proposal = connection.execute(
@@ -4065,6 +4187,13 @@ def _verified_recurring_payment_receipt(
                 "recurpay_" + expected_hash[:24])
             or not semantics_valid):
         raise ValueError("recurring_payment_receipt_unverified")
+    contract = _verified_contract_receipt(connection, payment[1])
+    if (
+        payment[0] != contract[0]
+        or str(payment[3]).casefold() != str(contract[3]).casefold()
+        or payment[11] != contract[7]
+    ):
+        raise ValueError("recurring_payment_lineage_unverified")
     binding = connection.execute(
         """SELECT crt.opportunity_id,crt.term_id,
                   crt.accepted_terms_hash,crt.accepted_base_fee_cents,
