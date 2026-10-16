@@ -4399,6 +4399,26 @@ class OpportunityIntakeTests(unittest.TestCase):
                 (accepted["receipt_id"],))
             connection.commit()
             connection.close()
+            connection = sqlite3.connect(path)
+            proposal_json = connection.execute(
+                "SELECT artifact_json FROM proposal_artifacts WHERE proposal_id=?",
+                (prepared["proposal_id"],),
+            ).fetchone()[0]
+            connection.execute(
+                "UPDATE proposal_artifacts SET artifact_json=? WHERE proposal_id=?",
+                (proposal_json + " ", prepared["proposal_id"]),
+            )
+            connection.commit()
+            with self.assertRaisesRegex(
+                    ValueError, "recurring_payment_buyer_lineage_unverified"):
+                opportunity_intake._verified_recurring_payment_receipt(
+                    connection, settled["receipt_id"])
+            connection.execute(
+                "UPDATE proposal_artifacts SET artifact_json=? WHERE proposal_id=?",
+                (proposal_json, prepared["proposal_id"]),
+            )
+            connection.commit()
+            connection.close()
             withdrawable = (
                 opportunity_intake.record_recurring_withdrawable_balance(
                     path, opportunity_id, settled["receipt_id"], {
