@@ -5252,6 +5252,40 @@ class OpportunityIntakeTests(unittest.TestCase):
                     connection, receipt_id)
             connection.close()
 
+    def test_self_hashed_recurring_bank_without_payout_lineage_is_not_verified(self):
+        snapshot = {
+            "opportunity_id": "opp_missing_recurring_payout",
+            "recurring_payout_receipt_id": "recuravail_" + "a" * 24,
+            "financial_institution": "Owner Bank",
+            "external_transfer_id": "valid-looking-transfer",
+            "evidence_url": "https://example.com/bank/valid-looking",
+            "amount_cents": 14500,
+            "currency": "USD",
+            "received_at": "2026-01-01T00:00:00+00:00",
+        }
+        serialized = json.dumps(
+            snapshot, sort_keys=True, separators=(",", ":"))
+        receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        receipt_id = "recurbank_" + receipt_hash[:24]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.open_ledger(path).close()
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """INSERT INTO recurring_bank_receipts
+                   (receipt_id,opportunity_id,recurring_payout_receipt_id,
+                    financial_institution,external_transfer_id,evidence_url,
+                    amount_cents,currency,received_at,receipt_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (receipt_id, *snapshot.values(), receipt_hash,
+                 "2026-01-01T00:01:00+00:00"),
+            )
+            with self.assertRaisesRegex(
+                    ValueError, "recurring_bank_receipt_unverified"):
+                opportunity_intake._verified_recurring_bank_receipt(
+                    connection, receipt_id)
+            connection.close()
+
     def test_self_hashed_one_time_payout_without_payment_lineage_is_not_verified(self):
         snapshot = {
             "opportunity_id": "opp_missing_payment_lineage",
