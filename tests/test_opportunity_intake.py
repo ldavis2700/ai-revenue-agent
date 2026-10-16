@@ -5030,6 +5030,44 @@ class OpportunityIntakeTests(unittest.TestCase):
                     connection, receipt_id)
             connection.close()
 
+    def test_self_hashed_payment_without_transaction_id_is_not_verified(self):
+        snapshot = {
+            "opportunity_id": "opp_forged_payment_id",
+            "invoice_receipt_id": "invr_" + "a" * 24,
+            "provider": "authorized_marketplace",
+            "external_transaction_id": "",
+            "transaction_url": "https://example.com/payments/forged-id",
+            "gross_amount_cents": 15000,
+            "fee_amount_cents": 500,
+            "net_amount_cents": 14500,
+            "currency": "USD",
+            "paid_at": NOW.isoformat(),
+            "settled_at": NOW.isoformat(),
+        }
+        serialized = json.dumps(
+            snapshot, sort_keys=True, separators=(",", ":"))
+        receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        receipt_id = "payr_" + receipt_hash[:24]
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.open_ledger(path).close()
+            connection = sqlite3.connect(path)
+            connection.execute(
+                """INSERT INTO payment_receipts
+                   (receipt_id,opportunity_id,invoice_receipt_id,provider,
+                    external_transaction_id,transaction_url,
+                    gross_amount_cents,fee_amount_cents,net_amount_cents,
+                    currency,paid_at,settled_at,receipt_hash,recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (receipt_id, *snapshot.values(), receipt_hash,
+                 NOW.isoformat()),
+            )
+            with self.assertRaisesRegex(
+                    ValueError, "payment_receipt_unverified"):
+                opportunity_intake._verified_payment_receipt(
+                    connection, receipt_id)
+            connection.close()
+
     def test_self_hashed_payment_without_verified_invoice_is_not_verified(self):
         snapshot = {
             "opportunity_id": "opp_forged_lineage",
