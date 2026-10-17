@@ -4516,6 +4516,22 @@ class OpportunityIntakeTests(unittest.TestCase):
                    WHERE contract_receipt_id=?""",
                 (accepted["receipt_id"],))
             connection.commit()
+            connection.execute(
+                """UPDATE recurring_pricing_terms
+                   SET base_fee_cents=base_fee_cents+1 WHERE term_id=?""",
+                (recurring[0],),
+            )
+            connection.commit()
+            with self.assertRaisesRegex(
+                    ValueError, "contract_terms_lineage_unverified"):
+                opportunity_intake._verified_recurring_payment_receipt(
+                    connection, settled["receipt_id"])
+            connection.execute(
+                """UPDATE recurring_pricing_terms
+                   SET base_fee_cents=base_fee_cents-1 WHERE term_id=?""",
+                (recurring[0],),
+            )
+            connection.commit()
             connection.close()
             connection = sqlite3.connect(path)
             proposal_json = connection.execute(
