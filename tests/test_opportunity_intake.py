@@ -3674,6 +3674,52 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(bindings, 0)
         self.assertIn(state, {"response_received", "buyer_reply"})
 
+    def test_issue_164_outcome_source_terms_remain_contract_bound(self):
+        result = opportunity_intake.ingest([candidate(
+            outcome_pricing=True,
+            offer_phases=["diagnostic", "outcome_pricing"],
+            outcome_success_definition="Qualified appointment attended.",
+            outcome_attribution_method="CRM event tied to approved lead ID.",
+            outcome_exclusions=["Duplicates and refunds."],
+            outcome_fee_cap_cents=25000,
+            outcome_unit_fee_cents=10000,
+            human_escalation_defined=True,
+            human_escalation_rule="Pause disputes for owner review.",
+        )], now=NOW)
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "opportunities.db")
+            opportunity_intake.persist(result, path, now=NOW)
+            _, contract_id = self.advance_to_contract(path)
+            connection = sqlite3.connect(path)
+            term = connection.execute(
+                """SELECT term_id FROM outcome_pricing_terms
+                   WHERE opportunity_id=(
+                       SELECT opportunity_id FROM contract_receipts
+                       WHERE receipt_id=?
+                   )""",
+                (contract_id,),
+            ).fetchone()
+            self.assertIsNotNone(term)
+            connection.execute(
+                """UPDATE outcome_pricing_terms
+                   SET fee_cap_cents=fee_cap_cents+1 WHERE term_id=?""",
+                (term[0],),
+            )
+            connection.commit()
+            with self.assertRaisesRegex(
+                    ValueError, "contract_terms_lineage_unverified"):
+                opportunity_intake._verified_contract_receipt(
+                    connection, contract_id)
+            connection.execute(
+                """UPDATE outcome_pricing_terms
+                   SET fee_cap_cents=fee_cap_cents-1 WHERE term_id=?""",
+                (term[0],),
+            )
+            connection.commit()
+            opportunity_intake._verified_contract_receipt(
+                connection, contract_id)
+            connection.close()
+
     def test_issue_164_outcome_events_are_attributed_capped_and_invoice_bound(self):
         result = opportunity_intake.ingest([candidate(
             outcome_pricing=True,
