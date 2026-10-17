@@ -4142,6 +4142,32 @@ def _verified_response_receipt(connection, response_receipt_id):
     return response
 
 
+def _contract_terms_binding_semantics(row, contract):
+    """Validate accepted recurring/outcome terms independently of their hash."""
+    try:
+        term_id = _proposal_text(row[1], "term_id", 160)
+        terms_hash = _proposal_text(row[2], "accepted_terms_hash", 64)
+        evidence_url = canonical_url(_proposal_text(
+            row[4], "acceptance_evidence_url", 2000))
+        accepted_at = parse_time(row[5], "accepted_at")
+        contracted_at = parse_time(contract[8], "contracted_at")
+        return (
+            row[0] == contract[0]
+            and term_id == row[1]
+            and re.fullmatch(r"[0-9a-f]{64}", terms_hash) is not None
+            and terms_hash == row[2]
+            and isinstance(row[3], int)
+            and not isinstance(row[3], bool)
+            and row[3] > 0
+            and evidence_url == row[4]
+            and urlsplit(evidence_url).scheme == "https"
+            and accepted_at <= contracted_at
+            and accepted_at <= utc_now() + MAX_FUTURE_SKEW
+        )
+    except (TypeError, ValueError):
+        return False
+
+
 def _verified_contract_receipt(connection, contract_receipt_id):
     """Rebuild accepted-contract evidence and verify its buyer lineage."""
     contract = connection.execute(
@@ -4178,7 +4204,10 @@ def _verified_contract_receipt(connection, contract_receipt_id):
         }
         binding_json = json.dumps(
             binding_snapshot, sort_keys=True, separators=(",", ":"))
-        if recurring_row[6] != hashlib.sha256(binding_json.encode()).hexdigest():
+        if (
+            recurring_row[6] != hashlib.sha256(binding_json.encode()).hexdigest()
+            or not _contract_terms_binding_semantics(recurring_row, contract)
+        ):
             raise ValueError("contract_receipt_unverified")
 
     outcome_row = connection.execute(
@@ -4204,7 +4233,10 @@ def _verified_contract_receipt(connection, contract_receipt_id):
         }
         binding_json = json.dumps(
             binding_snapshot, sort_keys=True, separators=(",", ":"))
-        if outcome_row[6] != hashlib.sha256(binding_json.encode()).hexdigest():
+        if (
+            outcome_row[6] != hashlib.sha256(binding_json.encode()).hexdigest()
+            or not _contract_terms_binding_semantics(outcome_row, contract)
+        ):
             raise ValueError("contract_receipt_unverified")
 
     snapshot = {
