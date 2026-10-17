@@ -4209,6 +4209,19 @@ def _verified_contract_receipt(connection, contract_receipt_id):
             or not _contract_terms_binding_semantics(recurring_row, contract)
         ):
             raise ValueError("contract_receipt_unverified")
+        recurring_source = connection.execute(
+            """SELECT opportunity_id,proposal_id,terms_hash,base_fee_cents
+               FROM recurring_pricing_terms WHERE term_id=?""",
+            (recurring_row[1],),
+        ).fetchone()
+        if (
+            recurring_source is None
+            or recurring_source[0] != contract[0]
+            or recurring_source[1] != contract[2]
+            or recurring_source[2] != recurring_row[2]
+            or recurring_source[3] != recurring_row[3]
+        ):
+            raise ValueError("contract_terms_lineage_unverified")
 
     outcome_row = connection.execute(
         """SELECT opportunity_id,term_id,accepted_terms_hash,
@@ -4238,6 +4251,18 @@ def _verified_contract_receipt(connection, contract_receipt_id):
             or not _contract_terms_binding_semantics(outcome_row, contract)
         ):
             raise ValueError("contract_receipt_unverified")
+        outcome_source = connection.execute(
+            """SELECT opportunity_id,terms_hash,fee_cap_cents
+               FROM outcome_pricing_terms WHERE term_id=?""",
+            (outcome_row[1],),
+        ).fetchone()
+        if (
+            outcome_source is None
+            or outcome_source[0] != contract[0]
+            or outcome_source[1] != outcome_row[2]
+            or outcome_source[2] != outcome_row[3]
+        ):
+            raise ValueError("contract_terms_lineage_unverified")
 
     snapshot = {
         "opportunity_id": contract[0],
