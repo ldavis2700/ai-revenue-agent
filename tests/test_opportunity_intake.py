@@ -5084,6 +5084,34 @@ class OpportunityIntakeTests(unittest.TestCase):
                     connection, response_id)
             connection.close()
 
+    def test_contract_term_bindings_require_canonical_evidence(self):
+        contract = (
+            "opp_terms", None, None, None, None, None, None, None,
+            NOW.isoformat(),
+        )
+        valid = (
+            "opp_terms", "term_1", "a" * 64, 100,
+            "https://example.com/contracts/terms", NOW.isoformat(), "hash",
+        )
+        self.assertTrue(
+            opportunity_intake._contract_terms_binding_semantics(
+                valid, contract))
+        invalid = (
+            tuple(["opp_other", *valid[1:]]),
+            tuple([valid[0], "", *valid[2:]]),
+            tuple([*valid[:2], "A" * 64, *valid[3:]]),
+            tuple([*valid[:3], True, *valid[4:]]),
+            tuple([*valid[:4], "http://example.com/terms", *valid[5:]]),
+            tuple([*valid[:5], (NOW + timedelta(seconds=1)).isoformat(),
+                   *valid[6:]]),
+        )
+        for row in invalid:
+            with self.subTest(row=row):
+                self.assertFalse(
+                    opportunity_intake._contract_terms_binding_semantics(
+                        row, contract))
+
+
     def test_self_hashed_contract_requires_external_id(self):
         proposal_id = "prop_" + "b" * 24
         submission = {
