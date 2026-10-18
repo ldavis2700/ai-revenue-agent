@@ -5087,7 +5087,7 @@ class OpportunityIntakeTests(unittest.TestCase):
                 "SELECT pipeline_state FROM opportunities WHERE id=?",
                 (opportunity_id,)).fetchone()[0]
             connection.close()
-        self.assertEqual(recurring[2:], (15000, "monthly"))
+        self.assertEqual(recurring[2:4], (15000, "monthly"))
         self.assertEqual(binding, (
             recurring[0], recurring[1], 15000,
             "https://example.com/contracts/recurring/managed-terms", 64))
