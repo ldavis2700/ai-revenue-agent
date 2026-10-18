@@ -3692,7 +3692,8 @@ class OpportunityIntakeTests(unittest.TestCase):
             _, contract_id = self.advance_to_contract(path)
             connection = sqlite3.connect(path)
             term = connection.execute(
-                """SELECT term_id FROM outcome_pricing_terms
+                """SELECT term_id,success_definition
+                   FROM outcome_pricing_terms
                    WHERE opportunity_id=(
                        SELECT opportunity_id FROM contract_receipts
                        WHERE receipt_id=?
@@ -3714,6 +3715,24 @@ class OpportunityIntakeTests(unittest.TestCase):
                 """UPDATE outcome_pricing_terms
                    SET fee_cap_cents=fee_cap_cents-1 WHERE term_id=?""",
                 (term[0],),
+            )
+            connection.commit()
+            opportunity_intake._verified_contract_receipt(
+                connection, contract_id)
+            connection.execute(
+                """UPDATE outcome_pricing_terms
+                   SET success_definition=? WHERE term_id=?""",
+                (term[1] + " altered", term[0]),
+            )
+            connection.commit()
+            with self.assertRaisesRegex(
+                    ValueError, "contract_terms_lineage_unverified"):
+                opportunity_intake._verified_contract_receipt(
+                    connection, contract_id)
+            connection.execute(
+                """UPDATE outcome_pricing_terms
+                   SET success_definition=? WHERE term_id=?""",
+                (term[1], term[0]),
             )
             connection.commit()
             opportunity_intake._verified_contract_receipt(
