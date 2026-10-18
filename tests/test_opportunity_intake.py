@@ -4478,7 +4478,8 @@ class OpportunityIntakeTests(unittest.TestCase):
                 }, now=NOW)
             connection = sqlite3.connect(path)
             recurring = connection.execute(
-                """SELECT term_id,terms_hash,base_fee_cents,billing_cadence
+                """SELECT term_id,terms_hash,base_fee_cents,billing_cadence,
+                          support_boundaries
                    FROM recurring_pricing_terms WHERE proposal_id=?""",
                 (prepared["proposal_id"],)).fetchone()
             connection.close()
@@ -4597,6 +4598,26 @@ class OpportunityIntakeTests(unittest.TestCase):
                 (recurring[0],),
             )
             connection.commit()
+            opportunity_intake._verified_recurring_payment_receipt(
+                connection, settled["receipt_id"])
+            connection.execute(
+                """UPDATE recurring_pricing_terms
+                   SET support_boundaries=? WHERE term_id=?""",
+                (recurring[4] + " altered", recurring[0]),
+            )
+            connection.commit()
+            with self.assertRaisesRegex(
+                    ValueError, "contract_terms_lineage_unverified"):
+                opportunity_intake._verified_recurring_payment_receipt(
+                    connection, settled["receipt_id"])
+            connection.execute(
+                """UPDATE recurring_pricing_terms
+                   SET support_boundaries=? WHERE term_id=?""",
+                (recurring[4], recurring[0]),
+            )
+            connection.commit()
+            opportunity_intake._verified_recurring_payment_receipt(
+                connection, settled["receipt_id"])
             connection.close()
             connection = sqlite3.connect(path)
             proposal_json = connection.execute(
