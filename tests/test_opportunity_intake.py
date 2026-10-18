@@ -3737,6 +3737,24 @@ class OpportunityIntakeTests(unittest.TestCase):
             connection.commit()
             opportunity_intake._verified_contract_receipt(
                 connection, contract_id)
+            connection.execute(
+                """UPDATE outcome_pricing_terms
+                   SET recorded_at=? WHERE term_id=?""",
+                ("2099-01-01T00:00:00+00:00", term[0]),
+            )
+            connection.commit()
+            with self.assertRaisesRegex(
+                    ValueError, "contract_terms_lineage_unverified"):
+                opportunity_intake._verified_contract_receipt(
+                    connection, contract_id)
+            connection.execute(
+                """UPDATE outcome_pricing_terms
+                   SET recorded_at=? WHERE term_id=?""",
+                (NOW.isoformat(), term[0]),
+            )
+            connection.commit()
+            opportunity_intake._verified_contract_receipt(
+                connection, contract_id)
             connection.close()
 
     def test_issue_164_outcome_events_are_attributed_capped_and_invoice_bound(self):
