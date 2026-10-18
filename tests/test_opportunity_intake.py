@@ -3778,7 +3778,8 @@ class OpportunityIntakeTests(unittest.TestCase):
                 "SELECT receipt_id FROM contract_receipts").fetchone()[0]
             terms = connection.execute(
                 """SELECT success_definition,attribution_method,exclusions_json,
-                          fee_cap_cents,human_escalation_rule,LENGTH(terms_hash)
+                          fee_cap_cents,unit_fee_cents,human_escalation_rule,
+                          LENGTH(terms_hash)
                    FROM outcome_pricing_terms""").fetchone()
             binding = connection.execute(
                 """SELECT accepted_fee_cap_cents,acceptance_evidence_url,
@@ -3786,6 +3787,18 @@ class OpportunityIntakeTests(unittest.TestCase):
                    FROM contract_outcome_terms""").fetchone()
             accepted_terms_hash = connection.execute(
                 "SELECT terms_hash FROM outcome_pricing_terms").fetchone()[0]
+            # Mutable opportunity snapshots must not redefine an already
+            # accepted unit price.
+            payload_row = connection.execute(
+                "SELECT payload_json FROM opportunities WHERE id=?",
+                (opportunity_id,)).fetchone()
+            tampered_payload = json.loads(payload_row[0])
+            tampered_payload["outcome_unit_fee_cents"] = 5000
+            connection.execute(
+                "UPDATE opportunities SET payload_json=? WHERE id=?",
+                (json.dumps(tampered_payload, sort_keys=True, separators=(",", ":")),
+                 opportunity_id))
+            connection.commit()
             connection.close()
 
             eligibility_review = {
@@ -4103,7 +4116,7 @@ class OpportunityIntakeTests(unittest.TestCase):
         self.assertEqual(json.loads(terms[2]), [
             "Duplicates, test records, and refunds."])
         self.assertEqual(terms[3:], (
-            25000, "Pause disputed events for owner review.", 64))
+            25000, 10000, "Pause disputed events for owner review.", 64))
         self.assertEqual(binding, (
             25000, "https://example.com/contracts/321/outcome-terms", 64, 64))
         self.assertTrue(event["changed"])
