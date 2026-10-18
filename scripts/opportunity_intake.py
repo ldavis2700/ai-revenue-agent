@@ -1795,11 +1795,21 @@ def open_ledger(path):
         attribution_method TEXT NOT NULL,
         exclusions_json TEXT NOT NULL,
         fee_cap_cents INTEGER NOT NULL,
+        unit_fee_cents INTEGER,
         human_escalation_rule TEXT NOT NULL,
         terms_hash TEXT NOT NULL,
         recorded_at TEXT NOT NULL,
         FOREIGN KEY(opportunity_id) REFERENCES opportunities(id)
     )""")
+    outcome_term_columns = {
+        row[1] for row in connection.execute(
+            "PRAGMA table_info(outcome_pricing_terms)").fetchall()
+    }
+    if "unit_fee_cents" not in outcome_term_columns:
+        # Legacy terms lack immutable unit-price evidence. Add a nullable column
+        # and fail closed until the opportunity is safely re-persisted.
+        connection.execute(
+            "ALTER TABLE outcome_pricing_terms ADD COLUMN unit_fee_cents INTEGER")
     connection.execute("""CREATE TABLE IF NOT EXISTS contract_outcome_terms (
         contract_receipt_id TEXT PRIMARY KEY,
         opportunity_id TEXT NOT NULL,
@@ -3024,7 +3034,7 @@ def record_attributed_outcome(
         with connection:
             terms = connection.execute(
                 """SELECT term_id,fee_cap_cents,exclusions_json,
-                          human_escalation_rule
+                          human_escalation_rule,unit_fee_cents
                    FROM outcome_pricing_terms WHERE opportunity_id=?""",
                 (opportunity_id,)).fetchone()
             if terms is None:
@@ -3055,12 +3065,7 @@ def record_attributed_outcome(
                     or binding[1] != current_terms[0]
                     or binding[2] != current_terms[1]):
                 raise ValueError("outcome_contract_terms_mismatch")
-            opportunity_row = connection.execute(
-                "SELECT payload_json FROM opportunities WHERE id=?",
-                (opportunity_id,)).fetchone()
-            configured_unit_fee = (
-                json.loads(opportunity_row[0]).get("outcome_unit_fee_cents")
-                if opportunity_row else None)
+            configured_unit_fee = terms[4]
             if not isinstance(configured_unit_fee, int) or configured_unit_fee <= 0:
                 raise ValueError("outcome_unit_fee_terms_not_found")
             if unit_fee != configured_unit_fee:
@@ -4283,36 +4288,28 @@ def _verified_contract_receipt(connection, contract_receipt_id):
             raise ValueError("contract_receipt_unverified")
         outcome_source = connection.execute(
             """SELECT opportunity_id,success_definition,attribution_method,
-                      exclusions_json,fee_cap_cents,human_escalation_rule,
-                      terms_hash,recorded_at
+                      exclusions_json,fee_cap_cents,unit_fee_cents,
+                      human_escalation_rule,terms_hash,recorded_at
                FROM outcome_pricing_terms WHERE term_id=?""",
             (outcome_row[1],),
         ).fetchone()
-        opportunity_source = (
-            connection.execute(
-                "SELECT payload_json FROM opportunities WHERE id=?",
-                (outcome_source[0],),
-            ).fetchone()
-            if outcome_source is not None else None
-        )
         try:
-            source_payload = json.loads(opportunity_source[0])
             source_terms = {
                 "opportunity_id": outcome_source[0],
                 "success_definition": outcome_source[1],
                 "attribution_method": outcome_source[2],
                 "exclusions": json.loads(outcome_source[3]),
                 "fee_cap_cents": outcome_source[4],
-                "unit_fee_cents": source_payload["outcome_unit_fee_cents"],
-                "human_escalation_rule": outcome_source[5],
+                "unit_fee_cents": outcome_source[5],
+                "human_escalation_rule": outcome_source[6],
             }
             reconstructed_hash = payload_hash(source_terms)
             source_recorded_at = parse_time(
-                outcome_source[7], "outcome_terms_recorded_at")
+                outcome_source[8], "outcome_terms_recorded_at")
             accepted_at = parse_time(
                 outcome_row[5], "outcome_terms_accepted_at")
             source_integrity_valid = (
-                outcome_source[6] == reconstructed_hash
+                outcome_source[7] == reconstructed_hash
                 and outcome_row[1] == "outt_" + reconstructed_hash[:24]
                 and source_recorded_at <= accepted_at
                 and source_recorded_at <= utc_now() + MAX_FUTURE_SKEW
@@ -4322,7 +4319,7 @@ def _verified_contract_receipt(connection, contract_receipt_id):
         if (
             outcome_source is None
             or outcome_source[0] != contract[0]
-            or outcome_source[6] != outcome_row[2]
+            or outcome_source[7] != outcome_row[2]
             or outcome_source[4] != outcome_row[3]
             or not source_integrity_valid
         ):
@@ -6635,12 +6632,14 @@ def persist(result, path=DEFAULT_DB_PATH, *, now=None):
                             """INSERT OR IGNORE INTO outcome_pricing_terms
                                (term_id,opportunity_id,success_definition,
                                 attribution_method,exclusions_json,fee_cap_cents,
-                                human_escalation_rule,terms_hash,recorded_at)
-                               VALUES (?,?,?,?,?,?,?,?,?)""",
+                                unit_fee_cents,human_escalation_rule,terms_hash,
+                                recorded_at)
+                               VALUES (?,?,?,?,?,?,?,?,?,?)""",
                             (term_id, item["id"], item["outcome_success_definition"],
                              item["outcome_attribution_method"],
                              json.dumps(item["outcome_exclusions"], sort_keys=True),
                              item["outcome_fee_cap_cents"],
+                             item["outcome_unit_fee_cents"],
                              item["human_escalation_rule"], terms_hash, now))
                 else:
                     unchanged += 1
