@@ -4284,7 +4284,7 @@ def _verified_contract_receipt(connection, contract_receipt_id):
         outcome_source = connection.execute(
             """SELECT opportunity_id,success_definition,attribution_method,
                       exclusions_json,fee_cap_cents,human_escalation_rule,
-                      terms_hash
+                      terms_hash,recorded_at
                FROM outcome_pricing_terms WHERE term_id=?""",
             (outcome_row[1],),
         ).fetchone()
@@ -4307,9 +4307,15 @@ def _verified_contract_receipt(connection, contract_receipt_id):
                 "human_escalation_rule": outcome_source[5],
             }
             reconstructed_hash = payload_hash(source_terms)
+            source_recorded_at = parse_time(
+                outcome_source[7], "outcome_terms_recorded_at")
+            accepted_at = parse_time(
+                outcome_row[5], "outcome_terms_accepted_at")
             source_integrity_valid = (
                 outcome_source[6] == reconstructed_hash
                 and outcome_row[1] == "outt_" + reconstructed_hash[:24]
+                and source_recorded_at <= accepted_at
+                and source_recorded_at <= utc_now() + MAX_FUTURE_SKEW
             )
         except (TypeError, KeyError, json.JSONDecodeError):
             source_integrity_valid = False
