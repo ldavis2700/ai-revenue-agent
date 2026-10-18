@@ -561,6 +561,37 @@ class OpportunityIntakeTests(unittest.TestCase):
             "evidence_status": "captured_not_revenue",
         })
 
+    def test_issue_164_evidence_urls_reject_credentials_and_sensitive_queries(self):
+        for reference in (
+            "https://user:secret@example.com/evidence",
+            "https://example.com/evidence?access_token=do-not-store",
+        ):
+            result = opportunity_intake.ingest([candidate(
+                offer_phases=["diagnostic"],
+                offer_evidence={"diagnostic": [reference]},
+            )], now=NOW)
+            with self.subTest(reference=reference):
+                self.assertEqual(result["opportunities"], [])
+                self.assertEqual(
+                    result["rejections"][0]["reason"],
+                    "offer_evidence_diagnostic_invalid",
+                )
+
+    def test_issue_164_canonicalizes_https_evidence_urls(self):
+        item = opportunity_intake.ingest([candidate(
+            offer_phases=["diagnostic"],
+            offer_evidence={
+                "diagnostic": [
+                    "https://EXAMPLE.COM/evidence//run/#not-persisted",
+                ],
+            },
+        )], now=NOW)["opportunities"][0]
+
+        self.assertEqual(
+            item["offer_evidence"]["diagnostic"],
+            ["https://example.com/evidence/run"],
+        )
+
     def test_issue_164_reusable_ip_maturity_requires_payment_and_margin_evidence(self):
         missing_payment = opportunity_intake.ingest([candidate(
             reusable_ip_assets=[{
