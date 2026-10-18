@@ -3412,6 +3412,10 @@ def record_collected_payment(path, opportunity_id, invoice_receipt_id, payment, 
                 (invoice_receipt_id,)).fetchone()
             if invoice is None:
                 raise ValueError("invoice_receipt_not_found")
+            try:
+                _verified_invoice_receipt(connection, invoice_receipt_id)
+            except ValueError as exc:
+                raise ValueError("invoice_receipt_unverified") from exc
             if invoice[0] != opportunity_id:
                 raise ValueError("payment_opportunity_mismatch")
             if invoice[1].casefold() != provider.casefold():
