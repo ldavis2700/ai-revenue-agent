@@ -4210,16 +4210,40 @@ def _verified_contract_receipt(connection, contract_receipt_id):
         ):
             raise ValueError("contract_receipt_unverified")
         recurring_source = connection.execute(
-            """SELECT opportunity_id,proposal_id,terms_hash,base_fee_cents
+            """SELECT opportunity_id,proposal_id,base_fee_cents,
+                      billing_cadence,included_services_json,
+                      included_usage_definition,support_boundaries,
+                      exception_boundaries,renewal_terms,termination_terms,
+                      terms_hash
                FROM recurring_pricing_terms WHERE term_id=?""",
             (recurring_row[1],),
         ).fetchone()
+        try:
+            source_terms = {
+                "base_fee_cents": recurring_source[2],
+                "billing_cadence": recurring_source[3],
+                "included_services": json.loads(recurring_source[4]),
+                "included_usage_definition": recurring_source[5],
+                "support_boundaries": recurring_source[6],
+                "exception_boundaries": recurring_source[7],
+                "renewal_terms": recurring_source[8],
+                "termination_terms": recurring_source[9],
+                "evidence_status": "proposed_not_accepted_not_revenue",
+            }
+            reconstructed_hash = payload_hash(source_terms)
+            source_integrity_valid = (
+                recurring_source[10] == reconstructed_hash
+                and recurring_row[1] == "rect_" + reconstructed_hash[:24]
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            source_integrity_valid = False
         if (
             recurring_source is None
             or recurring_source[0] != contract[0]
             or recurring_source[1] != contract[2]
-            or recurring_source[2] != recurring_row[2]
-            or recurring_source[3] != recurring_row[3]
+            or recurring_source[10] != recurring_row[2]
+            or recurring_source[2] != recurring_row[3]
+            or not source_integrity_valid
         ):
             raise ValueError("contract_terms_lineage_unverified")
 
