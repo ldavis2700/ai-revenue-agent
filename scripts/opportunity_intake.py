@@ -4252,15 +4252,43 @@ def _verified_contract_receipt(connection, contract_receipt_id):
         ):
             raise ValueError("contract_receipt_unverified")
         outcome_source = connection.execute(
-            """SELECT opportunity_id,terms_hash,fee_cap_cents
+            """SELECT opportunity_id,success_definition,attribution_method,
+                      exclusions_json,fee_cap_cents,human_escalation_rule,
+                      terms_hash
                FROM outcome_pricing_terms WHERE term_id=?""",
             (outcome_row[1],),
         ).fetchone()
+        opportunity_source = (
+            connection.execute(
+                "SELECT payload_json FROM opportunities WHERE id=?",
+                (outcome_source[0],),
+            ).fetchone()
+            if outcome_source is not None else None
+        )
+        try:
+            source_payload = json.loads(opportunity_source[0])
+            source_terms = {
+                "opportunity_id": outcome_source[0],
+                "success_definition": outcome_source[1],
+                "attribution_method": outcome_source[2],
+                "exclusions": json.loads(outcome_source[3]),
+                "fee_cap_cents": outcome_source[4],
+                "unit_fee_cents": source_payload["outcome_unit_fee_cents"],
+                "human_escalation_rule": outcome_source[5],
+            }
+            reconstructed_hash = payload_hash(source_terms)
+            source_integrity_valid = (
+                outcome_source[6] == reconstructed_hash
+                and outcome_row[1] == "outt_" + reconstructed_hash[:24]
+            )
+        except (TypeError, KeyError, json.JSONDecodeError):
+            source_integrity_valid = False
         if (
             outcome_source is None
             or outcome_source[0] != contract[0]
-            or outcome_source[1] != outcome_row[2]
-            or outcome_source[2] != outcome_row[3]
+            or outcome_source[6] != outcome_row[2]
+            or outcome_source[4] != outcome_row[3]
+            or not source_integrity_valid
         ):
             raise ValueError("contract_terms_lineage_unverified")
 
