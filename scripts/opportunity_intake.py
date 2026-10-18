@@ -479,6 +479,11 @@ def evidence_refs(values, field):
         reference = value.strip()
         if not reference or len(reference) > 1000 or not reference.startswith(allowed_prefixes):
             raise ValueError(f"{field}_invalid")
+        if reference.startswith("https://"):
+            try:
+                reference = canonical_url(reference)
+            except ValueError as exc:
+                raise ValueError(f"{field}_invalid") from exc
         if reference not in normalized:
             normalized.append(reference)
     return normalized
