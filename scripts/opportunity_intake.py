@@ -4214,7 +4214,7 @@ def _verified_contract_receipt(connection, contract_receipt_id):
                       billing_cadence,included_services_json,
                       included_usage_definition,support_boundaries,
                       exception_boundaries,renewal_terms,termination_terms,
-                      terms_hash
+                      terms_hash,recorded_at
                FROM recurring_pricing_terms WHERE term_id=?""",
             (recurring_row[1],),
         ).fetchone()
@@ -4231,9 +4231,15 @@ def _verified_contract_receipt(connection, contract_receipt_id):
                 "evidence_status": "proposed_not_accepted_not_revenue",
             }
             reconstructed_hash = payload_hash(source_terms)
+            source_recorded_at = parse_time(
+                recurring_source[11], "recurring_terms_recorded_at")
+            accepted_at = parse_time(
+                recurring_row[5], "recurring_terms_accepted_at")
             source_integrity_valid = (
                 recurring_source[10] == reconstructed_hash
                 and recurring_row[1] == "rect_" + reconstructed_hash[:24]
+                and source_recorded_at <= accepted_at
+                and source_recorded_at <= utc_now() + MAX_FUTURE_SKEW
             )
         except (TypeError, ValueError, json.JSONDecodeError):
             source_integrity_valid = False
