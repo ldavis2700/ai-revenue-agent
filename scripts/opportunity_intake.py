@@ -3620,6 +3620,12 @@ def record_settled_recurring_payment(
             if existing:
                 if existing[1] != receipt_hash:
                     raise ValueError("recurring_payment_provider_id_conflict")
+                try:
+                    _verified_recurring_payment_receipt(
+                        connection, existing[0])
+                except ValueError as exc:
+                    raise ValueError(
+                        "recurring_payment_lineage_unverified") from exc
                 return {
                     "receipt_id": existing[0], "changed": False,
                     "status": "settled_recurring_collected",
@@ -3653,6 +3659,11 @@ def record_settled_recurring_payment(
                     period_start.isoformat(), period_end.isoformat(),
                     invoiced_at.isoformat(), paid_at.isoformat(),
                     settled_at.isoformat(), receipt_hash, recorded_at))
+            try:
+                _verified_recurring_payment_receipt(connection, receipt_id)
+            except ValueError as exc:
+                raise ValueError(
+                    "recurring_payment_lineage_unverified") from exc
             return {
                 "receipt_id": receipt_id, "changed": True,
                 "status": "settled_recurring_collected",
