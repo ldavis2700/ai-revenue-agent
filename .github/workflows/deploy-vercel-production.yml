@@ -95,7 +95,7 @@ jobs:
       - name: Record release evidence
         env:
           DEPLOYMENT_URL: ${{ steps.deploy.outputs.deployment_url }}
-          REQUESTED_SHA: ${{ inputs.commit_sha }}
+          REQUESTED_SHA: ${{ inputs.commit_sha || github.sha }}
         run: |
           {
             echo "## AI Revenue Agent production release"

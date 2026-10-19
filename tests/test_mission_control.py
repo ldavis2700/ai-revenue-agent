@@ -1,8 +1,10 @@
 import json
+import hashlib
 import os
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from scripts import mission_control
 
@@ -20,78 +22,200 @@ class MissionControlTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    @staticmethod
+    def create_contract_tables(conn):
+        conn.execute('''CREATE TABLE contract_receipts (
+            receipt_id TEXT, opportunity_id TEXT, response_receipt_id TEXT,
+            proposal_id TEXT, provider TEXT, external_contract_id TEXT,
+            contract_url TEXT, amount_cents INTEGER, currency TEXT,
+            contracted_at TEXT, terms_authority TEXT,
+            authority_evidence_url TEXT, receipt_hash TEXT)''')
+        for table, amount_column in (
+                ('contract_recurring_terms', 'accepted_base_fee_cents'),
+                ('contract_outcome_terms', 'accepted_fee_cap_cents')):
+            conn.execute(f'''CREATE TABLE {table} (
+                contract_receipt_id TEXT, opportunity_id TEXT, term_id TEXT,
+                accepted_terms_hash TEXT, {amount_column} INTEGER,
+                acceptance_evidence_url TEXT, accepted_at TEXT,
+                binding_hash TEXT)''')
+        conn.execute('''CREATE TABLE submission_receipts (
+            receipt_id TEXT, opportunity_id TEXT, proposal_id TEXT,
+            provider TEXT, external_submission_id TEXT,
+            submission_url TEXT, submitted_at TEXT, receipt_hash TEXT)''')
+        conn.execute('''CREATE TABLE response_receipts (
+            receipt_id TEXT, opportunity_id TEXT,
+            submission_receipt_id TEXT, provider TEXT,
+            external_message_id TEXT, message_url TEXT,
+            received_at TEXT, receipt_hash TEXT)''')
+        conn.execute('''CREATE TABLE opportunity_transitions (
+            opportunity_id TEXT, to_state TEXT, evidence_id TEXT,
+            evidence_hash TEXT)''')
+
+    @staticmethod
+    def insert_contract(conn, opportunity_id):
+        submission = {
+            'opportunity_id': opportunity_id,
+            'proposal_id': 'prop_' + opportunity_id,
+            'provider': 'authorized_marketplace',
+            'external_submission_id': 'submission_' + opportunity_id,
+            'submission_url': 'https://example.com/submission/' + opportunity_id,
+            'submitted_at': '2026-10-11T22:00:00+00:00',
+        }
+        submission_hash = hashlib.sha256(json.dumps(
+            submission, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        submission_id = 'subr_' + submission_hash[:24]
+        conn.execute(
+            'INSERT INTO submission_receipts VALUES (?,?,?,?,?,?,?,?)',
+            (submission_id, opportunity_id, submission['proposal_id'],
+             submission['provider'], submission['external_submission_id'],
+             submission['submission_url'], submission['submitted_at'],
+             submission_hash),
+        )
+        response = {
+            'opportunity_id': opportunity_id,
+            'submission_receipt_id': submission_id,
+            'provider': submission['provider'],
+            'external_message_id': 'message_' + opportunity_id,
+            'message_url': 'https://example.com/message/' + opportunity_id,
+            'received_at': '2026-10-11T23:00:00+00:00',
+            'stage': 'offer',
+        }
+        response_hash = hashlib.sha256(json.dumps(
+            response, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        response_id = 'respr_' + response_hash[:24]
+        conn.execute(
+            'INSERT INTO response_receipts VALUES (?,?,?,?,?,?,?,?)',
+            (response_id, opportunity_id, submission_id,
+             response['provider'], response['external_message_id'],
+             response['message_url'], response['received_at'],
+             response_hash),
+        )
+        evidence_id = 'offer:' + response_id
+        conn.execute(
+            'INSERT INTO opportunity_transitions VALUES (?,?,?,?)',
+            (opportunity_id, 'offer', evidence_id,
+             hashlib.sha256(evidence_id.encode()).hexdigest()),
+        )
+        contract = {
+            'opportunity_id': opportunity_id,
+            'response_receipt_id': response_id,
+            'proposal_id': submission['proposal_id'],
+            'provider': 'authorized_marketplace',
+            'external_contract_id': 'contract_external_' + opportunity_id,
+            'contract_url': 'https://example.com/contract/' + opportunity_id,
+            'amount_cents': 250000,
+            'currency': 'USD',
+            'contracted_at': '2026-10-12T00:00:00+00:00',
+            'terms_authority': 'authorized_marketplace',
+            'authority_evidence_url': 'https://example.com/authority',
+            'recurring_terms_binding': None,
+            'outcome_terms_binding': None,
+        }
+        serialized = json.dumps(
+            contract, sort_keys=True, separators=(',', ':'))
+        contract_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        contract_id = 'contr_' + contract_hash[:24]
+        conn.execute(
+            'INSERT INTO contract_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (contract_id, opportunity_id, contract['response_receipt_id'],
+             contract['proposal_id'], contract['provider'],
+             contract['external_contract_id'], contract['contract_url'],
+             contract['amount_cents'], contract['currency'],
+             contract['contracted_at'], contract['terms_authority'],
+             contract['authority_evidence_url'], contract_hash),
+        )
+        return contract_id
+
+    def test_buyer_evidence_urls_require_credential_free_https_hostname(self):
+        self.assertTrue(mission_control._credible_https_evidence_url(
+            'https://marketplace.example/evidence/123'))
+        for invalid in (
+            'http://marketplace.example/evidence/123',
+            'https://?evidence=123',
+            'https://user:secret@marketplace.example/evidence/123',
+            'javascript:alert(1)',
+            '',
+            None,
+        ):
+            with self.subTest(url=invalid):
+                self.assertFalse(
+                    mission_control._credible_https_evidence_url(invalid))
+
     def test_defaults_to_safe_preparation_mode(self):
         result = mission_control.run(self.path)
         self.assertEqual(result['mode'], 'analysis_and_preparation_only')
         self.assertFalse(result['execution_gate']['external_actions_allowed'])
         self.assertFalse(result['execution_gate']['spending_allowed'])
 
-    def test_verified_revenue_drives_score_and_plan(self):
+    def test_unverified_sale_claim_does_not_drive_score_or_plan(self):
         conn = sqlite3.connect(self.path)
         conn.execute("INSERT INTO leads VALUES ('l1', 80, 1)")
         conn.executemany('INSERT INTO events VALUES (?,?,?)', [
-            ('l1', 'sent', 0), ('l1', 'reply', 0), ('l1', 'interested', 0), ('l1', 'sale', 100)])
+            ('l1', 'sent', 0), ('l1', 'reply', 0),
+            ('l1', 'interested', 0), ('l1', 'sale', 100)])
         conn.commit()
         conn.close()
         result = mission_control.run(self.path)
-        self.assertEqual(result['metrics']['verified_net_revenue'], 100)
-        self.assertGreater(result['objective_score'], 100)
-        self.assertEqual(result['plan'][0]['action'], 'replicate_verified_winning_segment')
+        metrics = result['metrics']
+        self.assertEqual(metrics['claimed_sale_events'], 1)
+        self.assertEqual(metrics['claimed_sale_value'], 100)
+        self.assertEqual(
+            metrics['claimed_sale_status'],
+            'unverified_not_collected_revenue')
+        self.assertEqual(metrics['verified_collected_payments'], 0)
+        self.assertEqual(metrics['verified_net_revenue'], 0)
+        self.assertEqual(result['objective_score'], 25)
+        self.assertNotEqual(
+            result['plan'][0]['action'], 'replicate_verified_winning_segment')
 
-    def test_settled_opportunity_payments_feed_mission_metrics_without_double_refunds(self):
+    def test_unsealed_legacy_receipts_do_not_feed_verified_metrics(self):
         conn = sqlite3.connect(self.path)
-        conn.execute('''CREATE TABLE payment_receipts (
-            receipt_id TEXT PRIMARY KEY,
-            gross_amount_cents INTEGER NOT NULL,
-            fee_amount_cents INTEGER NOT NULL,
-            net_amount_cents INTEGER NOT NULL
-        )''')
-        conn.execute('''CREATE TABLE recurring_payment_receipts (
-            receipt_id TEXT PRIMARY KEY,
-            gross_amount_cents INTEGER NOT NULL,
-            fee_amount_cents INTEGER NOT NULL,
-            net_amount_cents INTEGER NOT NULL
-        )''')
-        conn.execute('''CREATE TABLE recurring_payout_availability_receipts (
-            receipt_id TEXT PRIMARY KEY,
-            amount_cents INTEGER NOT NULL
-        )''')
-        conn.execute('''CREATE TABLE recurring_bank_receipts (
-            receipt_id TEXT PRIMARY KEY,
-            amount_cents INTEGER NOT NULL
-        )''')
+        for table, amount_columns in (
+            ('payment_receipts',
+             'gross_amount_cents INTEGER, fee_amount_cents INTEGER, net_amount_cents INTEGER'),
+            ('recurring_payment_receipts',
+             'gross_amount_cents INTEGER, fee_amount_cents INTEGER, net_amount_cents INTEGER'),
+            ('recurring_payout_availability_receipts', 'amount_cents INTEGER'),
+            ('recurring_bank_receipts', 'amount_cents INTEGER'),
+            ('payout_availability_receipts', 'amount_cents INTEGER'),
+            ('bank_receipts', 'amount_cents INTEGER'),
+        ):
+            conn.execute(
+                f'CREATE TABLE {table} (receipt_id TEXT PRIMARY KEY, {amount_columns})'
+            )
         conn.executemany('INSERT INTO events VALUES (?,?,?)', [
             ('l1', 'sent', 0), ('l1', 'sale', 100), ('l1', 'refund', 20)])
         conn.execute(
-            "INSERT INTO payment_receipts VALUES ('payr_1',50000,2500,47500)")
+            "INSERT INTO payment_receipts VALUES ('legacy_pay',50000,2500,47500)")
         conn.execute(
             "INSERT INTO recurring_payment_receipts "
-            "VALUES ('recurpay_1',15000,500,14500)")
-        conn.execute(
-            "INSERT INTO recurring_payout_availability_receipts "
-            "VALUES ('recuravail_1',14500)")
-        conn.execute(
-            "INSERT INTO recurring_bank_receipts "
-            "VALUES ('recurbank_1',14500)")
+            "VALUES ('legacy_recurring',15000,500,14500)")
+        for table, receipt_id, amount in (
+            ('recurring_payout_availability_receipts', 'legacy_recuravail', 14500),
+            ('recurring_bank_receipts', 'legacy_recurbank', 14500),
+            ('payout_availability_receipts', 'legacy_avail', 47500),
+            ('bank_receipts', 'legacy_bank', 47500),
+        ):
+            conn.execute(f'INSERT INTO {table} VALUES (?,?)', (receipt_id, amount))
         conn.commit()
+
         metrics = mission_control.snapshot(conn)
         conn.close()
-        self.assertEqual(metrics['sales'], 3)
-        self.assertEqual(metrics['verified_collected_payments'], 2)
-        self.assertEqual(metrics['verified_one_time_payment_receipts'], 1)
-        self.assertEqual(metrics['verified_recurring_payment_receipts'], 1)
-        self.assertEqual(metrics['verified_recurring_gross_revenue'], 150)
-        self.assertEqual(metrics['verified_recurring_fees'], 5)
-        self.assertEqual(metrics['verified_recurring_net_revenue'], 145)
-        self.assertEqual(
-            metrics['verified_recurring_withdrawable_balance'], 145)
-        self.assertEqual(metrics['verified_recurring_money_received'], 145)
-        self.assertEqual(metrics['verified_opportunity_gross_revenue'], 650)
-        self.assertEqual(metrics['verified_opportunity_fees'], 30)
-        self.assertEqual(metrics['verified_opportunity_net_revenue'], 620)
-        self.assertEqual(metrics['verified_gross_revenue'], 750)
-        self.assertEqual(metrics['verified_net_revenue'], 700)
-        self.assertEqual(mission_control.objective_score(metrics), 850)
+
+        self.assertEqual(metrics['claimed_sale_events'], 1)
+        self.assertEqual(metrics['claimed_sale_value'], 100)
+        self.assertEqual(metrics['claimed_refund_value'], 20)
+        self.assertEqual(metrics['verified_collected_payments'], 0)
+        self.assertEqual(metrics['verified_one_time_payment_receipts'], 0)
+        self.assertEqual(metrics['verified_recurring_payment_receipts'], 0)
+        self.assertEqual(metrics['verified_recurring_net_revenue'], 0)
+        self.assertEqual(metrics['verified_withdrawable_balance'], 0)
+        self.assertEqual(metrics['verified_money_received'], 0)
+        self.assertEqual(metrics['verified_gross_revenue'], 0)
+        self.assertEqual(metrics['verified_net_revenue'], 0)
+        self.assertEqual(mission_control.objective_score(metrics), 0)
 
     def test_missing_payment_table_remains_backward_compatible(self):
         conn = sqlite3.connect(self.path)
@@ -102,7 +226,906 @@ class MissionControlTests(unittest.TestCase):
         self.assertEqual(metrics['verified_recurring_net_revenue'], 0)
         self.assertEqual(metrics['verified_recurring_withdrawable_balance'], 0)
         self.assertEqual(metrics['verified_recurring_money_received'], 0)
+        self.assertEqual(metrics['verified_one_time_withdrawable_balance'], 0)
+        self.assertEqual(metrics['verified_one_time_money_received'], 0)
+        self.assertEqual(metrics['verified_withdrawable_balance'], 0)
+        self.assertEqual(metrics['verified_money_received'], 0)
         self.assertEqual(metrics['verified_opportunity_net_revenue'], 0)
+
+    def test_tampered_production_receipt_cannot_inflate_verified_metrics(self):
+        conn = sqlite3.connect(self.path)
+        conn.execute('''CREATE TABLE payment_receipts (
+            receipt_id TEXT PRIMARY KEY, opportunity_id TEXT,
+            invoice_receipt_id TEXT, provider TEXT,
+            external_transaction_id TEXT, transaction_url TEXT,
+            gross_amount_cents INTEGER, fee_amount_cents INTEGER,
+            net_amount_cents INTEGER, currency TEXT, paid_at TEXT,
+            settled_at TEXT, receipt_hash TEXT
+        )''')
+        conn.execute('''CREATE TABLE payout_availability_receipts (
+            receipt_id TEXT PRIMARY KEY, opportunity_id TEXT,
+            payment_receipt_id TEXT, provider TEXT,
+            external_balance_id TEXT, evidence_url TEXT,
+            amount_cents INTEGER, currency TEXT, available_at TEXT,
+            receipt_hash TEXT
+        )''')
+        conn.execute('''CREATE TABLE bank_receipts (
+            receipt_id TEXT PRIMARY KEY, opportunity_id TEXT,
+            payout_availability_receipt_id TEXT,
+            financial_institution TEXT, external_transfer_id TEXT,
+            evidence_url TEXT, amount_cents INTEGER, currency TEXT,
+            received_at TEXT, receipt_hash TEXT
+        )''')
+
+        # Insert explicitly to keep the SQL column order obvious.
+        valid = {
+            'opportunity_id': 'opp_1', 'invoice_receipt_id': 'invr_1',
+            'provider': 'stripe', 'external_transaction_id': 'txn_valid',
+            'transaction_url': 'https://example.com/txn_valid',
+            'gross_amount_cents': 10000, 'fee_amount_cents': 500,
+            'net_amount_cents': 9500, 'currency': 'USD',
+            'paid_at': '2026-10-07T00:00:00+00:00',
+            'settled_at': '2026-10-08T00:00:00+00:00',
+        }
+        serialized = json.dumps(valid, sort_keys=True, separators=(',', ':'))
+        valid_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        valid_receipt_id = 'payr_' + valid_hash[:24]
+        conn.execute(
+            'INSERT INTO payment_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (valid_receipt_id, *valid.values(), valid_hash))
+
+        forged = dict(valid)
+        forged['external_transaction_id'] = 'txn_tampered'
+        forged['transaction_url'] = 'https://example.com/txn_tampered'
+        serialized = json.dumps(forged, sort_keys=True, separators=(',', ':'))
+        forged_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        forged_values = list(forged.values())
+        forged_values[7] = 99999999  # Alter net after the receipt was sealed.
+        conn.execute(
+            'INSERT INTO payment_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            ('payr_' + forged_hash[:24], *forged_values, forged_hash))
+
+        for index, insecure_url in enumerate((
+            'http://example.com/txn_insecure',
+            'https://user:secret@example.com/txn_credentialed',
+            'https://?transaction=missing-host',
+        )):
+            insecure = dict(valid)
+            insecure['external_transaction_id'] = f'txn_insecure_{index}'
+            insecure['transaction_url'] = insecure_url
+            insecure_hash = hashlib.sha256(json.dumps(
+                insecure, sort_keys=True, separators=(',', ':')
+            ).encode()).hexdigest()
+            conn.execute(
+                'INSERT INTO payment_receipts VALUES '
+                '(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                ('payr_' + insecure_hash[:24],
+                 *insecure.values(), insecure_hash),
+            )
+
+        chronology_cases = (
+            ('naive', '2026-10-07T00:00:00',
+             '2026-10-08T00:00:00+00:00'),
+            ('reversed', '2026-10-09T00:00:00+00:00',
+             '2026-10-08T00:00:00+00:00'),
+            ('future', '2026-10-07T00:00:00+00:00',
+             '9999-10-08T00:00:00+00:00'),
+        )
+        for name, paid_at, settled_at in chronology_cases:
+            invalid_time = dict(valid)
+            invalid_time['external_transaction_id'] = f'txn_{name}'
+            invalid_time['transaction_url'] = (
+                f'https://example.com/txn_{name}')
+            invalid_time['paid_at'] = paid_at
+            invalid_time['settled_at'] = settled_at
+            invalid_hash = hashlib.sha256(json.dumps(
+                invalid_time, sort_keys=True, separators=(',', ':')
+            ).encode()).hexdigest()
+            conn.execute(
+                'INSERT INTO payment_receipts VALUES '
+                '(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                ('payr_' + invalid_hash[:24],
+                 *invalid_time.values(), invalid_hash),
+            )
+
+        amount_cases = (
+            ('inconsistent_net', 10000, 500, 9600, 'USD'),
+            ('negative_fee', 10000, -100, 10100, 'USD'),
+            ('zero_payment', 0, 0, 0, 'USD'),
+            ('noncanonical_currency', 10000, 500, 9500, 'usd'),
+        )
+        for name, gross, fee, net, currency in amount_cases:
+            invalid_amount = dict(valid)
+            invalid_amount['external_transaction_id'] = f'txn_{name}'
+            invalid_amount['transaction_url'] = (
+                f'https://example.com/txn_{name}')
+            invalid_amount['gross_amount_cents'] = gross
+            invalid_amount['fee_amount_cents'] = fee
+            invalid_amount['net_amount_cents'] = net
+            invalid_amount['currency'] = currency
+            invalid_hash = hashlib.sha256(json.dumps(
+                invalid_amount, sort_keys=True, separators=(',', ':')
+            ).encode()).hexdigest()
+            conn.execute(
+                'INSERT INTO payment_receipts VALUES '
+                '(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                ('payr_' + invalid_hash[:24],
+                 *invalid_amount.values(), invalid_hash),
+            )
+        payout_cases = (
+            ('valid', valid_receipt_id, 9500,
+             '2026-10-09T00:00:00+00:00'),
+            ('amount_mismatch', valid_receipt_id, 9600,
+             '2026-10-09T00:00:00+00:00'),
+            ('orphan', 'payr_missing', 9500,
+             '2026-10-09T00:00:00+00:00'),
+            ('before_settlement', valid_receipt_id, 9500,
+             '2026-10-07T23:59:59+00:00'),
+        )
+        valid_payout_receipt_id = None
+        for name, payment_receipt_id, amount, available_at in payout_cases:
+            payout = {
+                'opportunity_id': 'opp_1',
+                'payment_receipt_id': payment_receipt_id,
+                'provider': 'stripe',
+                'external_balance_id': f'balance_{name}',
+                'evidence_url': f'https://example.com/balance_{name}',
+                'amount_cents': amount,
+                'currency': 'USD',
+                'available_at': available_at,
+            }
+            payout_hash = hashlib.sha256(json.dumps(
+                payout, sort_keys=True, separators=(',', ':')
+            ).encode()).hexdigest()
+            payout_receipt_id = 'pavr_' + payout_hash[:24]
+            conn.execute(
+                'INSERT INTO payout_availability_receipts VALUES '
+                '(?,?,?,?,?,?,?,?,?,?)',
+                (payout_receipt_id, *payout.values(), payout_hash),
+            )
+            if name == 'valid':
+                valid_payout_receipt_id = payout_receipt_id
+
+        bank_cases = (
+            ('valid', valid_payout_receipt_id, 9500,
+             '2026-10-10T00:00:00+00:00'),
+            ('amount_mismatch', valid_payout_receipt_id, 9600,
+             '2026-10-10T00:00:00+00:00'),
+            ('orphan', 'pavr_missing', 9500,
+             '2026-10-10T00:00:00+00:00'),
+            ('before_availability', valid_payout_receipt_id, 9500,
+             '2026-10-08T23:59:59+00:00'),
+        )
+        for name, payout_receipt_id, amount, received_at in bank_cases:
+            bank = {
+                'opportunity_id': 'opp_1',
+                'payout_availability_receipt_id': payout_receipt_id,
+                'financial_institution': 'test_bank',
+                'external_transfer_id': f'transfer_{name}',
+                'evidence_url': f'https://example.com/transfer_{name}',
+                'amount_cents': amount,
+                'currency': 'USD',
+                'received_at': received_at,
+            }
+            bank_hash = hashlib.sha256(json.dumps(
+                bank, sort_keys=True, separators=(',', ':')
+            ).encode()).hexdigest()
+            conn.execute(
+                'INSERT INTO bank_receipts VALUES '
+                '(?,?,?,?,?,?,?,?,?,?)',
+                ('bankr_' + bank_hash[:24], *bank.values(), bank_hash),
+            )
+        conn.commit()
+
+        metrics = mission_control.snapshot(conn)
+        conn.close()
+        self.assertEqual(metrics['verified_collected_payments'], 1)
+        self.assertEqual(metrics['verified_gross_revenue'], 100)
+        self.assertEqual(metrics['verified_net_revenue'], 95)
+        self.assertEqual(
+            metrics['verified_one_time_withdrawable_balance'], 95)
+        self.assertEqual(metrics['verified_one_time_money_received'], 95)
+        self.assertEqual(metrics['verified_money_received'], 95)
+
+    def test_active_buyer_stage_outranks_new_prospecting(self):
+        conn = sqlite3.connect(self.path)
+        conn.execute(
+            'CREATE TABLE opportunities (id TEXT, pipeline_state TEXT)')
+        conn.execute('''CREATE TABLE opportunity_transitions (
+            opportunity_id TEXT, to_state TEXT, evidence_id TEXT,
+            evidence_hash TEXT)''')
+        conn.execute('''CREATE TABLE submission_receipts (
+            receipt_id TEXT, opportunity_id TEXT, proposal_id TEXT,
+            provider TEXT, external_submission_id TEXT,
+            submission_url TEXT, submitted_at TEXT, receipt_hash TEXT)''')
+        conn.execute('''CREATE TABLE response_receipts (
+            receipt_id TEXT, opportunity_id TEXT,
+            submission_receipt_id TEXT, provider TEXT,
+            external_message_id TEXT, message_url TEXT,
+            received_at TEXT, receipt_hash TEXT)''')
+        conn.executemany(
+            'INSERT INTO opportunities VALUES (?,?)',
+            [('prospect', 'qualified'), ('reply', 'buyer_reply'),
+             ('offer', 'offer'), ('tampered', 'offer'),
+             ('forged', 'contracted')],
+        )
+        for opportunity_id, stage, prefix in (
+            ('reply', 'buyer_reply', 'reply:'),
+            ('offer', 'offer', 'offer:'),
+        ):
+            submission = {
+                'opportunity_id': opportunity_id,
+                'proposal_id': 'prop_' + opportunity_id,
+                'provider': 'authorized_marketplace',
+                'external_submission_id': 'submission_' + opportunity_id,
+                'submission_url': 'https://example.com/submission/' + opportunity_id,
+                'submitted_at': '2026-10-11T23:00:00+00:00',
+            }
+            submission_json = json.dumps(
+                submission, sort_keys=True, separators=(',', ':'))
+            submission_hash = hashlib.sha256(
+                submission_json.encode()).hexdigest()
+            submission_id = 'subr_' + submission_hash[:24]
+            conn.execute(
+                'INSERT INTO submission_receipts VALUES (?,?,?,?,?,?,?,?)',
+                (submission_id, opportunity_id, submission['proposal_id'],
+                 submission['provider'],
+                 submission['external_submission_id'],
+                 submission['submission_url'], submission['submitted_at'],
+                 submission_hash),
+            )
+            snapshot = {
+                'opportunity_id': opportunity_id,
+                'submission_receipt_id': submission_id,
+                'provider': 'authorized_marketplace',
+                'external_message_id': 'message_' + opportunity_id,
+                'message_url': 'https://example.com/' + opportunity_id,
+                'received_at': '2026-10-12T00:00:00+00:00',
+                'stage': stage,
+            }
+            serialized = json.dumps(
+                snapshot, sort_keys=True, separators=(',', ':'))
+            receipt_hash = hashlib.sha256(serialized.encode()).hexdigest()
+            receipt_id = 'respr_' + receipt_hash[:24]
+            evidence_id = prefix + receipt_id
+            conn.execute(
+                'INSERT INTO opportunity_transitions VALUES (?,?,?,?)',
+                (opportunity_id, stage, evidence_id,
+                 hashlib.sha256(evidence_id.encode()).hexdigest()),
+            )
+            conn.execute(
+                'INSERT INTO response_receipts VALUES (?,?,?,?,?,?,?,?)',
+                (receipt_id, opportunity_id,
+                 snapshot['submission_receipt_id'], snapshot['provider'],
+                 snapshot['external_message_id'], snapshot['message_url'],
+                 snapshot['received_at'], receipt_hash),
+            )
+
+        tampered = {
+            'opportunity_id': 'tampered',
+            'submission_receipt_id': 'subr_tampered',
+            'provider': 'authorized_marketplace',
+            'external_message_id': 'message_tampered',
+            'message_url': 'https://example.com/original',
+            'received_at': '2026-10-12T00:00:00+00:00',
+            'stage': 'offer',
+        }
+        serialized = json.dumps(
+            tampered, sort_keys=True, separators=(',', ':'))
+        tampered_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        tampered_id = 'respr_' + tampered_hash[:24]
+        tampered_evidence = 'offer:' + tampered_id
+        conn.execute(
+            'INSERT INTO opportunity_transitions VALUES (?,?,?,?)',
+            ('tampered', 'offer', tampered_evidence,
+             hashlib.sha256(tampered_evidence.encode()).hexdigest()),
+        )
+        conn.execute(
+            'INSERT INTO response_receipts VALUES (?,?,?,?,?,?,?,?)',
+            (tampered_id, 'tampered', tampered['submission_receipt_id'],
+             tampered['provider'], tampered['external_message_id'],
+             'https://example.com/altered', tampered['received_at'],
+             tampered_hash),
+        )
+
+        # A raw state write plus a self-consistent transition hash is still not
+        # buyer evidence when its referenced contract receipt does not exist.
+        forged_evidence = 'contract:contr_missing'
+        conn.execute(
+            'INSERT INTO opportunity_transitions VALUES (?,?,?,?)',
+            ('forged', 'contracted', forged_evidence,
+             hashlib.sha256(forged_evidence.encode()).hexdigest()),
+        )
+        conn.execute("INSERT INTO leads VALUES ('l1', 90, 1)")
+        conn.commit()
+
+        metrics = mission_control.snapshot(conn)
+        conn.execute(
+            'UPDATE submission_receipts SET submission_url=? '
+            'WHERE opportunity_id=?',
+            ('https://example.com/tampered', 'offer'),
+        )
+        tampered_metrics = mission_control.snapshot(conn)
+        reply_submission_id = conn.execute(
+            'SELECT receipt_id FROM submission_receipts '
+            'WHERE opportunity_id=?',
+            ('reply',),
+        ).fetchone()[0]
+        cross_provider_response = {
+            'opportunity_id': 'reply',
+            'submission_receipt_id': reply_submission_id,
+            'provider': 'substituted_marketplace',
+            'external_message_id': 'message_reply',
+            'message_url': 'https://example.com/reply',
+            'received_at': '2026-10-12T00:00:00+00:00',
+            'stage': 'buyer_reply',
+        }
+        cross_provider_hash = hashlib.sha256(json.dumps(
+            cross_provider_response, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        cross_provider_id = 'respr_' + cross_provider_hash[:24]
+        cross_provider_evidence = 'reply:' + cross_provider_id
+        conn.execute(
+            'DELETE FROM response_receipts WHERE opportunity_id=?',
+            ('reply',),
+        )
+        conn.execute(
+            'DELETE FROM opportunity_transitions WHERE opportunity_id=?',
+            ('reply',),
+        )
+        conn.execute(
+            'INSERT INTO response_receipts VALUES (?,?,?,?,?,?,?,?)',
+            (cross_provider_id, 'reply', reply_submission_id,
+             cross_provider_response['provider'],
+             cross_provider_response['external_message_id'],
+             cross_provider_response['message_url'],
+             cross_provider_response['received_at'],
+             cross_provider_hash),
+        )
+        conn.execute(
+            'INSERT INTO opportunity_transitions VALUES (?,?,?,?)',
+            ('reply', 'buyer_reply', cross_provider_evidence,
+             hashlib.sha256(cross_provider_evidence.encode()).hexdigest()),
+        )
+        cross_provider_metrics = mission_control.snapshot(conn)
+        conn.close()
+        plan = mission_control.build_plan(metrics)
+
+        self.assertEqual(metrics['active_buyer_opportunities'], 2)
+        self.assertEqual(tampered_metrics['active_buyer_opportunities'], 1)
+        self.assertEqual(
+            cross_provider_metrics['active_buyer_opportunities'], 0)
+        self.assertEqual(
+            tampered_metrics['highest_active_buyer_stage'], 'buyer_reply')
+        self.assertEqual(metrics['highest_active_buyer_stage'], 'offer')
+        self.assertEqual(metrics['active_buyer_stage_counts']['buyer_reply'], 1)
+        self.assertEqual(metrics['active_buyer_stage_counts']['offer'], 1)
+        self.assertEqual(metrics['active_buyer_stage_counts']['contracted'], 0)
+        self.assertEqual(plan[0]['action'], 'advance_active_buyer_offer')
+        self.assertEqual(plan[0]['buyer_stage'], 'offer')
+        self.assertNotEqual(plan[0]['action'], 'prepare_initial_outreach_batch')
+
+    def test_active_contract_and_invoice_require_full_receipt_integrity(self):
+        conn = sqlite3.connect(':memory:')
+        self.create_contract_tables(conn)
+        contract = {
+            'opportunity_id': 'contract_opportunity',
+            'contract_url': 'https://example.com/contract/contract_opportunity',
+        }
+        contract_id = self.insert_contract(
+            conn, contract['opportunity_id'])
+        self.assertTrue(mission_control._buyer_stage_artifact_exists(
+            conn, contract['opportunity_id'], 'contracted',
+            'contract:' + contract_id))
+        conn.execute(
+            'UPDATE response_receipts SET message_url=? '
+            'WHERE opportunity_id=?',
+            ('https://example.com/message/tampered',
+             contract['opportunity_id']),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, contract['opportunity_id'], 'contracted',
+            'contract:' + contract_id))
+        conn.execute(
+            'UPDATE response_receipts SET message_url=? '
+            'WHERE opportunity_id=?',
+            ('https://example.com/message/' + contract['opportunity_id'],
+             contract['opportunity_id']),
+        )
+        self.assertTrue(mission_control._buyer_stage_artifact_exists(
+            conn, contract['opportunity_id'], 'contracted',
+            'contract:' + contract_id))
+        response_id = conn.execute(
+            'SELECT response_receipt_id FROM contract_receipts '
+            'WHERE receipt_id=?',
+            (contract_id,),
+        ).fetchone()[0]
+        mismatched = {
+            'opportunity_id': contract['opportunity_id'],
+            'response_receipt_id': response_id,
+            'proposal_id': 'prop_not_submitted',
+            'provider': 'authorized_marketplace',
+            'external_contract_id': 'contract_proposal_mismatch',
+            'contract_url': 'https://example.com/contract/mismatch',
+            'amount_cents': 250000,
+            'currency': 'USD',
+            'contracted_at': '2026-10-12T00:00:00+00:00',
+            'terms_authority': 'authorized_marketplace',
+            'authority_evidence_url': 'https://example.com/authority',
+            'recurring_terms_binding': None,
+            'outcome_terms_binding': None,
+        }
+        mismatch_hash = hashlib.sha256(json.dumps(
+            mismatched, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        mismatch_id = 'contr_' + mismatch_hash[:24]
+        conn.execute(
+            'INSERT INTO contract_receipts VALUES '
+            '(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (mismatch_id, mismatched['opportunity_id'],
+             mismatched['response_receipt_id'],
+             mismatched['proposal_id'], mismatched['provider'],
+             mismatched['external_contract_id'],
+             mismatched['contract_url'], mismatched['amount_cents'],
+             mismatched['currency'], mismatched['contracted_at'],
+             mismatched['terms_authority'],
+             mismatched['authority_evidence_url'], mismatch_hash),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, contract['opportunity_id'], 'contracted',
+            'contract:' + mismatch_id))
+        submitted_proposal_id = conn.execute(
+            'SELECT proposal_id FROM submission_receipts '
+            'WHERE opportunity_id=?',
+            (contract['opportunity_id'],),
+        ).fetchone()[0]
+        cross_provider = {
+            **mismatched,
+            'proposal_id': submitted_proposal_id,
+            'provider': 'substituted_marketplace',
+            'external_contract_id': 'contract_provider_mismatch',
+        }
+        cross_provider_hash = hashlib.sha256(json.dumps(
+            cross_provider, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        cross_provider_id = 'contr_' + cross_provider_hash[:24]
+        conn.execute(
+            'INSERT INTO contract_receipts VALUES '
+            '(?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (cross_provider_id, cross_provider['opportunity_id'],
+             cross_provider['response_receipt_id'],
+             cross_provider['proposal_id'], cross_provider['provider'],
+             cross_provider['external_contract_id'],
+             cross_provider['contract_url'], cross_provider['amount_cents'],
+             cross_provider['currency'], cross_provider['contracted_at'],
+             cross_provider['terms_authority'],
+             cross_provider['authority_evidence_url'],
+             cross_provider_hash),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, contract['opportunity_id'], 'contracted',
+            'contract:' + cross_provider_id))
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, contract['opportunity_id'], 'contracted',
+            'invoice:' + contract_id))
+        conn.execute(
+            'UPDATE contract_receipts SET contract_url=? WHERE receipt_id=?',
+            ('https://example.com/tampered', contract_id),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, contract['opportunity_id'], 'contracted',
+            'contract:' + contract_id))
+
+        conn.execute('''CREATE TABLE execution_plans (
+            plan_id TEXT, opportunity_id TEXT, contract_receipt_id TEXT,
+            plan_hash TEXT, plan_json TEXT, started_at TEXT)''')
+        invoice_contract_id = self.insert_contract(
+            conn, 'invoice_opportunity')
+        invoice_plan = {
+            'opportunity_id': 'invoice_opportunity',
+            'contract_receipt_id': invoice_contract_id,
+            'execution_environment': 'isolated',
+            'deliverables': [],
+            'started_at': '2026-10-12T00:05:00+00:00',
+        }
+        invoice_plan_json = json.dumps(
+            invoice_plan, sort_keys=True, separators=(',', ':'))
+        invoice_plan_hash = hashlib.sha256(
+            invoice_plan_json.encode()).hexdigest()
+        invoice_plan_id = 'execp_' + invoice_plan_hash[:24]
+        conn.execute(
+            'INSERT INTO execution_plans VALUES (?,?,?,?,?,?)',
+            (invoice_plan_id, invoice_plan['opportunity_id'],
+             invoice_plan['contract_receipt_id'], invoice_plan_hash,
+             invoice_plan_json, invoice_plan['started_at']),
+        )
+        conn.execute('''CREATE TABLE qa_reports (
+            report_id TEXT, opportunity_id TEXT, execution_plan_id TEXT,
+            artifact_sha256 TEXT, report_hash TEXT, report_json TEXT,
+            completed_at TEXT)''')
+        qa = {
+            'opportunity_id': 'invoice_opportunity',
+            'execution_plan_id': invoice_plan_id,
+            'artifact_sha256': 'd' * 64,
+            'tests': [{
+                'name': 'acceptance',
+                'status': 'passed',
+                'evidence_url': 'https://example.com/evidence',
+            }],
+            'completed_at': '2026-10-12T00:15:00+00:00',
+        }
+        qa_json = json.dumps(qa, sort_keys=True, separators=(',', ':'))
+        qa_hash = hashlib.sha256(qa_json.encode()).hexdigest()
+        qa_id = 'qar_' + qa_hash[:24]
+        conn.execute(
+            'INSERT INTO qa_reports VALUES (?,?,?,?,?,?,?)',
+            (qa_id, qa['opportunity_id'], qa['execution_plan_id'],
+             qa['artifact_sha256'], qa_hash, qa_json, qa['completed_at']),
+        )
+
+        conn.execute('''CREATE TABLE delivery_receipts (
+            receipt_id TEXT, opportunity_id TEXT, qa_report_id TEXT,
+            provider TEXT, external_delivery_id TEXT, delivery_url TEXT,
+            artifact_sha256 TEXT, delivered_at TEXT, receipt_hash TEXT)''')
+        delivery = {
+            'opportunity_id': 'invoice_opportunity',
+            'qa_report_id': qa_id,
+            'provider': 'authorized_marketplace',
+            'external_delivery_id': 'delivery_external',
+            'delivery_url': 'https://example.com/delivery',
+            'artifact_sha256': 'd' * 64,
+            'delivered_at': '2026-10-12T00:30:00+00:00',
+        }
+        delivery_serialized = json.dumps(
+            delivery, sort_keys=True, separators=(',', ':'))
+        delivery_hash = hashlib.sha256(
+            delivery_serialized.encode()).hexdigest()
+        delivery_id = 'delr_' + delivery_hash[:24]
+        conn.execute(
+            'INSERT INTO delivery_receipts VALUES (?,?,?,?,?,?,?,?,?)',
+            (delivery_id, delivery['opportunity_id'],
+             delivery['qa_report_id'], delivery['provider'],
+             delivery['external_delivery_id'], delivery['delivery_url'],
+             delivery['artifact_sha256'], delivery['delivered_at'],
+             delivery_hash),
+        )
+
+        self.assertTrue(mission_control._buyer_stage_artifact_exists(
+            conn, delivery['opportunity_id'], 'delivered',
+            'delivery:' + delivery_id))
+        cross_provider_delivery = {
+            **delivery,
+            'provider': 'substituted_marketplace',
+            'external_delivery_id': 'delivery_provider_mismatch',
+        }
+        cross_delivery_serialized = json.dumps(
+            cross_provider_delivery, sort_keys=True, separators=(',', ':'))
+        cross_delivery_hash = hashlib.sha256(
+            cross_delivery_serialized.encode()).hexdigest()
+        cross_delivery_id = 'delr_' + cross_delivery_hash[:24]
+        conn.execute(
+            'INSERT INTO delivery_receipts VALUES (?,?,?,?,?,?,?,?,?)',
+            (cross_delivery_id, cross_provider_delivery['opportunity_id'],
+             cross_provider_delivery['qa_report_id'],
+             cross_provider_delivery['provider'],
+             cross_provider_delivery['external_delivery_id'],
+             cross_provider_delivery['delivery_url'],
+             cross_provider_delivery['artifact_sha256'],
+             cross_provider_delivery['delivered_at'],
+             cross_delivery_hash),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, cross_provider_delivery['opportunity_id'], 'delivered',
+            'delivery:' + cross_delivery_id))
+
+        conn.execute('''CREATE TABLE invoice_receipts (
+            receipt_id TEXT, opportunity_id TEXT, delivery_receipt_id TEXT,
+            provider TEXT, external_invoice_id TEXT, invoice_url TEXT,
+            amount_cents INTEGER, currency TEXT, issued_at TEXT, due_at TEXT,
+            receipt_hash TEXT)''')
+        conn.execute('''CREATE TABLE invoice_outcome_events (
+            invoice_receipt_id TEXT, event_id TEXT,
+            outcome_fee_cents INTEGER)''')
+        conn.execute('''CREATE TABLE attributed_outcome_events (
+            event_id TEXT, event_hash TEXT)''')
+        invoice = {
+            'opportunity_id': 'invoice_opportunity',
+            'delivery_receipt_id': delivery_id,
+            'provider': 'authorized_marketplace',
+            'external_invoice_id': 'invoice_external',
+            'invoice_url': 'https://example.com/invoice',
+            'amount_cents': 250000,
+            'outcome_fee_cents': 0,
+            'outcome_event_ids': [],
+            'outcome_event_hashes': [],
+            'currency': 'USD',
+            'issued_at': '2026-10-12T01:00:00+00:00',
+            'due_at': '2026-10-26T01:00:00+00:00',
+        }
+        serialized = json.dumps(invoice, sort_keys=True, separators=(',', ':'))
+        invoice_hash = hashlib.sha256(serialized.encode()).hexdigest()
+        invoice_id = 'invr_' + invoice_hash[:24]
+        conn.execute(
+            'INSERT INTO invoice_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            (invoice_id, invoice['opportunity_id'],
+             invoice['delivery_receipt_id'], invoice['provider'],
+             invoice['external_invoice_id'], invoice['invoice_url'],
+             invoice['amount_cents'], invoice['currency'],
+             invoice['issued_at'], invoice['due_at'], invoice_hash),
+        )
+        self.assertTrue(mission_control._buyer_stage_artifact_exists(
+            conn, invoice['opportunity_id'], 'invoiced',
+            'invoice:' + invoice_id))
+
+        cross_provider_invoice = {
+            **invoice,
+            'provider': 'substituted_marketplace',
+            'external_invoice_id': 'invoice_provider_mismatch',
+        }
+        cross_invoice_serialized = json.dumps(
+            cross_provider_invoice, sort_keys=True, separators=(',', ':'))
+        cross_invoice_hash = hashlib.sha256(
+            cross_invoice_serialized.encode()).hexdigest()
+        cross_invoice_id = 'invr_' + cross_invoice_hash[:24]
+        conn.execute(
+            'INSERT INTO invoice_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            (cross_invoice_id, cross_provider_invoice['opportunity_id'],
+             cross_provider_invoice['delivery_receipt_id'],
+             cross_provider_invoice['provider'],
+             cross_provider_invoice['external_invoice_id'],
+             cross_provider_invoice['invoice_url'],
+             cross_provider_invoice['amount_cents'],
+             cross_provider_invoice['currency'],
+             cross_provider_invoice['issued_at'],
+             cross_provider_invoice['due_at'],
+             cross_invoice_hash),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, cross_provider_invoice['opportunity_id'], 'invoiced',
+            'invoice:' + cross_invoice_id))
+
+        cross_currency_invoice = {
+            **invoice,
+            'currency': 'EUR',
+            'external_invoice_id': 'invoice_currency_mismatch',
+        }
+        cross_currency_serialized = json.dumps(
+            cross_currency_invoice, sort_keys=True, separators=(',', ':'))
+        cross_currency_hash = hashlib.sha256(
+            cross_currency_serialized.encode()).hexdigest()
+        cross_currency_id = 'invr_' + cross_currency_hash[:24]
+        conn.execute(
+            'INSERT INTO invoice_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            (cross_currency_id, cross_currency_invoice['opportunity_id'],
+             cross_currency_invoice['delivery_receipt_id'],
+             cross_currency_invoice['provider'],
+             cross_currency_invoice['external_invoice_id'],
+             cross_currency_invoice['invoice_url'],
+             cross_currency_invoice['amount_cents'],
+             cross_currency_invoice['currency'],
+             cross_currency_invoice['issued_at'],
+             cross_currency_invoice['due_at'],
+             cross_currency_hash),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, cross_currency_invoice['opportunity_id'], 'invoiced',
+            'invoice:' + cross_currency_id))
+
+        over_contract_invoice = {
+            **invoice,
+            'amount_cents': invoice['amount_cents'] + 1,
+            'external_invoice_id': 'invoice_amount_exceeds_contract',
+        }
+        over_contract_serialized = json.dumps(
+            over_contract_invoice, sort_keys=True, separators=(',', ':'))
+        over_contract_hash = hashlib.sha256(
+            over_contract_serialized.encode()).hexdigest()
+        over_contract_id = 'invr_' + over_contract_hash[:24]
+        conn.execute(
+            'INSERT INTO invoice_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            (over_contract_id, over_contract_invoice['opportunity_id'],
+             over_contract_invoice['delivery_receipt_id'],
+             over_contract_invoice['provider'],
+             over_contract_invoice['external_invoice_id'],
+             over_contract_invoice['invoice_url'],
+             over_contract_invoice['amount_cents'],
+             over_contract_invoice['currency'],
+             over_contract_invoice['issued_at'],
+             over_contract_invoice['due_at'],
+             over_contract_hash),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, over_contract_invoice['opportunity_id'], 'invoiced',
+            'invoice:' + over_contract_id))
+
+        predelivery_invoice = {
+            **invoice,
+            'issued_at': '2026-10-12T00:20:00+00:00',
+            'external_invoice_id': 'invoice_before_delivery',
+        }
+        predelivery_serialized = json.dumps(
+            predelivery_invoice, sort_keys=True, separators=(',', ':'))
+        predelivery_hash = hashlib.sha256(
+            predelivery_serialized.encode()).hexdigest()
+        predelivery_id = 'invr_' + predelivery_hash[:24]
+        conn.execute(
+            'INSERT INTO invoice_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+            (predelivery_id, predelivery_invoice['opportunity_id'],
+             predelivery_invoice['delivery_receipt_id'],
+             predelivery_invoice['provider'],
+             predelivery_invoice['external_invoice_id'],
+             predelivery_invoice['invoice_url'],
+             predelivery_invoice['amount_cents'],
+             predelivery_invoice['currency'],
+             predelivery_invoice['issued_at'],
+             predelivery_invoice['due_at'],
+             predelivery_hash),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, predelivery_invoice['opportunity_id'], 'invoiced',
+            'invoice:' + predelivery_id))
+
+        for index, invalid_delivery_id in enumerate((
+            'qar_cccccccccccccccccccccccc',
+            'delr_not-a-canonical-ledger-id',
+        )):
+            wrong_type = dict(invoice)
+            wrong_type['delivery_receipt_id'] = invalid_delivery_id
+            wrong_serialized = json.dumps(
+                wrong_type, sort_keys=True, separators=(',', ':'))
+            wrong_hash = hashlib.sha256(wrong_serialized.encode()).hexdigest()
+            wrong_id = 'invr_' + wrong_hash[:24]
+            conn.execute(
+                'INSERT INTO invoice_receipts VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                (wrong_id, wrong_type['opportunity_id'],
+                 wrong_type['delivery_receipt_id'], wrong_type['provider'],
+                 f'invoice_invalid_lineage_{index}',
+                 wrong_type['invoice_url'], wrong_type['amount_cents'],
+                 wrong_type['currency'], wrong_type['issued_at'],
+                 wrong_type['due_at'], wrong_hash),
+            )
+            self.assertFalse(mission_control._buyer_stage_artifact_exists(
+                conn, wrong_type['opportunity_id'], 'invoiced',
+                'invoice:' + wrong_id))
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, invoice['opportunity_id'], 'invoiced',
+            'contract:' + invoice_id))
+        conn.execute(
+            'UPDATE delivery_receipts SET delivery_url=? WHERE receipt_id=?',
+            ('https://example.com/delivery/substituted', delivery_id),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, invoice['opportunity_id'], 'invoiced',
+            'invoice:' + invoice_id))
+        conn.execute(
+            'UPDATE delivery_receipts SET delivery_url=? WHERE receipt_id=?',
+            (delivery['delivery_url'], delivery_id),
+        )
+        conn.execute(
+            'UPDATE qa_reports SET artifact_sha256=? WHERE report_id=?',
+            ('f' * 64, qa_id),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, invoice['opportunity_id'], 'invoiced',
+            'invoice:' + invoice_id))
+        conn.execute(
+            'UPDATE qa_reports SET artifact_sha256=? WHERE report_id=?',
+            (qa['artifact_sha256'], qa_id),
+        )
+        conn.execute(
+            'UPDATE execution_plans SET started_at=? WHERE plan_id=?',
+            ('2026-10-12T00:06:00+00:00', invoice_plan_id),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, invoice['opportunity_id'], 'invoiced',
+            'invoice:' + invoice_id))
+        conn.execute(
+            'UPDATE execution_plans SET started_at=? WHERE plan_id=?',
+            (invoice_plan['started_at'], invoice_plan_id),
+        )
+        conn.execute(
+            'UPDATE invoice_receipts SET amount_cents=? WHERE receipt_id=?',
+            (99999999, invoice_id),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, invoice['opportunity_id'], 'invoiced',
+            'invoice:' + invoice_id))
+        conn.close()
+
+    def test_active_execution_and_qa_bind_columns_to_sealed_payloads(self):
+        conn = sqlite3.connect(':memory:')
+        self.create_contract_tables(conn)
+        contract_id = self.insert_contract(conn, 'work')
+        conn.execute('''CREATE TABLE execution_plans (
+            plan_id TEXT, opportunity_id TEXT, contract_receipt_id TEXT,
+            plan_hash TEXT, plan_json TEXT, started_at TEXT)''')
+        plan = {
+            'opportunity_id': 'work',
+            'contract_receipt_id': contract_id,
+            'execution_environment': 'isolated',
+            'deliverables': [{
+                'title': 'diagnostic',
+                'description': 'bounded delivery',
+                'acceptance_criteria': 'verified',
+                'due_at': '2026-10-13T00:00:00+00:00',
+            }],
+            'started_at': '2026-10-12T00:00:00+00:00',
+        }
+        plan_json = json.dumps(plan, sort_keys=True, separators=(',', ':'))
+        plan_hash = hashlib.sha256(plan_json.encode()).hexdigest()
+        plan_id = 'execp_' + plan_hash[:24]
+        conn.execute(
+            'INSERT INTO execution_plans VALUES (?,?,?,?,?,?)',
+            (plan_id, 'work', contract_id, plan_hash, plan_json,
+             plan['started_at']),
+        )
+        evidence_id = (
+            'contract:' + contract_id + ':plan:' + plan_id)
+        self.assertTrue(mission_control._buyer_stage_artifact_exists(
+            conn, 'work', 'executing', evidence_id))
+        conn.execute(
+            'UPDATE contract_receipts SET contract_url=? WHERE receipt_id=?',
+            ('https://example.com/tampered', contract_id),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, 'work', 'executing', evidence_id))
+        conn.execute(
+            'UPDATE contract_receipts SET contract_url=? WHERE receipt_id=?',
+            ('https://example.com/contract/work', contract_id),
+        )
+        conn.execute(
+            'UPDATE execution_plans SET started_at=? WHERE plan_id=?',
+            ('2026-10-12T00:01:00+00:00', plan_id),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, 'work', 'executing', evidence_id))
+        conn.execute(
+            'UPDATE execution_plans SET started_at=? WHERE plan_id=?',
+            (plan['started_at'], plan_id),
+        )
+
+        conn.execute('''CREATE TABLE qa_reports (
+            report_id TEXT, opportunity_id TEXT, execution_plan_id TEXT,
+            artifact_sha256 TEXT, report_hash TEXT, report_json TEXT,
+            completed_at TEXT)''')
+        report = {
+            'opportunity_id': 'work',
+            'execution_plan_id': plan_id,
+            'artifact_sha256': 'a' * 64,
+            'tests': [{
+                'name': 'acceptance',
+                'status': 'passed',
+                'evidence_url': 'https://example.com/evidence',
+            }],
+            'completed_at': '2026-10-12T01:00:00+00:00',
+        }
+        report_json = json.dumps(report, sort_keys=True, separators=(',', ':'))
+        report_hash = hashlib.sha256(report_json.encode()).hexdigest()
+        report_id = 'qar_' + report_hash[:24]
+        conn.execute(
+            'INSERT INTO qa_reports VALUES (?,?,?,?,?,?,?)',
+            (report_id, 'work', plan_id, report['artifact_sha256'],
+             report_hash, report_json, report['completed_at']),
+        )
+        self.assertTrue(mission_control._buyer_stage_artifact_exists(
+            conn, 'work', 'qa_passed', 'qa:' + report_id))
+        conn.execute(
+            'UPDATE execution_plans SET started_at=? WHERE plan_id=?',
+            ('2026-10-12T00:02:00+00:00', plan_id),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, 'work', 'qa_passed', 'qa:' + report_id))
+        conn.execute(
+            'UPDATE execution_plans SET started_at=? WHERE plan_id=?',
+            (plan['started_at'], plan_id),
+        )
+        conn.execute(
+            'UPDATE qa_reports SET artifact_sha256=? WHERE report_id=?',
+            ('b' * 64, report_id),
+        )
+        self.assertFalse(mission_control._buyer_stage_artifact_exists(
+            conn, 'work', 'qa_passed', 'qa:' + report_id))
+        conn.close()
 
     def test_no_leads_prioritizes_approved_source(self):
         result = mission_control.run(self.path)
@@ -153,9 +1176,12 @@ class MissionControlTests(unittest.TestCase):
         candidates = result['business_model_intelligence']['top_candidates']
         self.assertTrue(any(candidate['id'] == seed['id'] for candidate in candidates))
         measured = next(candidate for candidate in candidates if candidate['id'] == seed['id'])
-        self.assertIn(measured['experiment_state'], {'continue_validation', 'scale_candidate'})
+        self.assertEqual(measured['experiment_state'], 'validate')
+        self.assertFalse(measured['economics_verified'])
+        self.assertEqual(measured['observed_profit'], 0)
+        self.assertEqual(measured['claimed_observed_revenue'], 1200)
         competition = result['business_model_intelligence']['portfolio_competition']
-        self.assertIsNotNone(competition.get('champion'))
+        self.assertIsNone(competition.get('champion'))
         self.assertIsNotNone(competition.get('challenger'))
 
     def test_recurring_growth_and_cross_opportunity_reuse_feed_model_evidence(self):
@@ -245,8 +1271,15 @@ class MissionControlTests(unittest.TestCase):
             ])
         conn.commit()
 
-        evidence = mission_control.ledger_business_model_evidence(conn)
-        snapshot = mission_control.business_model_snapshot(conn)
+        with patch.object(
+                mission_control, '_verified_recurring_growth_evidence'), \
+             patch.object(
+                mission_control, '_verified_reusable_ip_reuse_evidence'), \
+             patch.object(
+                mission_control, '_verified_reusable_ip_maturity',
+                return_value={'maturity': 'productize_candidate'}):
+            evidence = mission_control.ledger_business_model_evidence(conn)
+            snapshot = mission_control.business_model_snapshot(conn)
         conn.close()
 
         model = evidence['ai_agent_implementation']
@@ -271,6 +1304,389 @@ class MissionControlTests(unittest.TestCase):
             'ai_agent_implementation']
         self.assertEqual(verified['observed_revenue'], 145)
         self.assertEqual(verified['verified_reuse_receipts'], 1)
+
+    def test_verified_one_time_forecasts_feed_model_calibration(self):
+        conn = mission_control.connect(self.path)
+        conn.execute('''CREATE TABLE opportunities (
+            id TEXT PRIMARY KEY, payload_json TEXT NOT NULL
+        )''')
+        conn.execute('''CREATE TABLE payment_receipts (
+            receipt_id TEXT PRIMARY KEY, opportunity_id TEXT NOT NULL,
+            net_amount_cents INTEGER NOT NULL
+        )''')
+        conn.execute('''CREATE TABLE realized_unit_economics (
+            economics_id TEXT PRIMARY KEY, opportunity_id TEXT NOT NULL,
+            payment_receipt_id TEXT NOT NULL,
+            delivery_cost_cents INTEGER NOT NULL,
+            inference_cost_cents INTEGER NOT NULL,
+            cac_cents INTEGER NOT NULL,
+            measured_at TEXT NOT NULL, evidence_json TEXT NOT NULL
+        )''')
+        conn.execute(
+            "INSERT INTO opportunities VALUES (?,?)",
+            ('opp_1', json.dumps({
+                'offer_family': 'multi_system_operational_integration'})))
+        conn.execute(
+            "INSERT INTO payment_receipts VALUES (?,?,?)",
+            ('pay_1', 'opp_1', 70000))
+        conn.execute(
+            "INSERT INTO realized_unit_economics VALUES (?,?,?,?,?,?,?,?)",
+            ('econ_1', 'opp_1', 'pay_1', 20000, 2000, 5000,
+             '2026-09-27T00:00:00+00:00', json.dumps({
+                 'proposal_projection_comparison': {
+                     'projected_contribution_cents': 73000,
+                     'contribution_variance_cents': -3000,
+                 }})))
+        conn.commit()
+        with patch.object(
+                mission_control, '_verified_realized_economics') as verify:
+            evidence = mission_control.ledger_business_model_evidence(conn)
+        conn.close()
+        verify.assert_called_once_with(conn, 'econ_1')
+        model = evidence['ai_agent_implementation']
+        self.assertEqual(model['verified_forecast_comparisons'], 1)
+        self.assertEqual(model['forecast_mean_absolute_error_cents'], 3000)
+        self.assertEqual(
+            model['forecast_mean_projected_contribution_cents'], 73000)
+        self.assertEqual(model['observed_revenue'], 700)
+        self.assertEqual(model['observed_cost'], 270)
+        self.assertTrue(model['_ledger_verified'])
+
+    def test_invoice_priority_recomputes_outcome_event_hashes(self):
+        conn = mission_control.connect(self.path)
+        self.addCleanup(conn.close)
+        conn.execute("""CREATE TABLE contract_receipts (
+            receipt_id TEXT, opportunity_id TEXT, provider TEXT
+        )""")
+        conn.execute("""CREATE TABLE outcome_pricing_terms (
+            term_id TEXT, opportunity_id TEXT, terms_hash TEXT,
+            exclusions_json TEXT, fee_cap_cents INTEGER
+        )""")
+        conn.execute("""CREATE TABLE contract_outcome_terms (
+            contract_receipt_id TEXT, opportunity_id TEXT, term_id TEXT,
+            accepted_terms_hash TEXT, accepted_fee_cap_cents INTEGER,
+            acceptance_evidence_url TEXT, accepted_at TEXT,
+            binding_hash TEXT
+        )""")
+        conn.execute("""CREATE TABLE attributed_outcome_events (
+            event_id TEXT, opportunity_id TEXT, term_id TEXT,
+            contract_receipt_id TEXT, provider TEXT, external_event_id TEXT,
+            evidence_url TEXT, artifact_sha256 TEXT,
+            attribution_reference TEXT, eligibility_review_json TEXT,
+            units INTEGER, unit_fee_cents INTEGER, fee_cents INTEGER,
+            occurred_at TEXT, event_hash TEXT
+        )""")
+        exclusions = []
+        exclusions_hash = hashlib.sha256(json.dumps(
+            exclusions, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        terms_hash = 'b' * 64
+        review = {
+            'reviewed_terms_hash': terms_hash,
+            'reviewed_exclusions_hash': exclusions_hash,
+            'matched_exclusions': [],
+            'artifact_sha256': 'c' * 64,
+            'reviewed_at': '2026-10-12T00:05:00+00:00',
+            'requires_human_escalation': False,
+            'human_escalation_decision': None,
+        }
+        snapshot = {
+            'opportunity_id': 'opp_outcome',
+            'term_id': 'term_1',
+            'contract_receipt_id': 'contr_123456789012345678901234',
+            'provider': 'authorized_marketplace',
+            'external_event_id': 'event_external',
+            'evidence_url': 'https://example.com/outcome',
+            'artifact_sha256': 'a' * 64,
+            'attribution_reference': 'buyer-approved-result',
+            'eligibility_review': review,
+            'units': 2,
+            'unit_fee_cents': 5000,
+            'fee_cents': 10000,
+            'occurred_at': '2026-10-12T00:00:00+00:00',
+        }
+        event_hash = hashlib.sha256(json.dumps(
+            snapshot, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        binding = {
+            'contract_receipt_id': snapshot['contract_receipt_id'],
+            'opportunity_id': snapshot['opportunity_id'],
+            'term_id': snapshot['term_id'],
+            'accepted_terms_hash': terms_hash,
+            'accepted_fee_cap_cents': 50000,
+            'acceptance_evidence_url': 'https://example.com/terms',
+            'accepted_at': '2026-10-11T00:00:00+00:00',
+        }
+        binding_hash = hashlib.sha256(json.dumps(
+            binding, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        conn.execute(
+            'INSERT INTO contract_receipts VALUES (?,?,?)',
+            (snapshot['contract_receipt_id'], snapshot['opportunity_id'],
+             snapshot['provider']),
+        )
+        conn.execute(
+            'INSERT INTO outcome_pricing_terms VALUES (?,?,?,?,?)',
+            (snapshot['term_id'], snapshot['opportunity_id'], terms_hash,
+             json.dumps(exclusions), 50000),
+        )
+        conn.execute(
+            'INSERT INTO contract_outcome_terms VALUES (?,?,?,?,?,?,?,?)',
+            (binding['contract_receipt_id'], binding['opportunity_id'],
+             binding['term_id'], binding['accepted_terms_hash'],
+             binding['accepted_fee_cap_cents'],
+             binding['acceptance_evidence_url'], binding['accepted_at'],
+             binding_hash),
+        )
+        event_id = 'oute_' + event_hash[:24]
+        conn.execute(
+            'INSERT INTO attributed_outcome_events VALUES '
+            '(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (event_id, snapshot['opportunity_id'], snapshot['term_id'],
+             snapshot['contract_receipt_id'], snapshot['provider'],
+             snapshot['external_event_id'], snapshot['evidence_url'],
+             snapshot['artifact_sha256'], snapshot['attribution_reference'],
+             json.dumps(review, sort_keys=True, separators=(',', ':')),
+             snapshot['units'], snapshot['unit_fee_cents'],
+             snapshot['fee_cents'], snapshot['occurred_at'], event_hash),
+        )
+        self.assertTrue(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], event_id, event_hash))
+
+        future_binding = dict(binding)
+        future_binding['accepted_at'] = '2999-10-11T00:00:00+00:00'
+        future_binding_hash = hashlib.sha256(json.dumps(
+            future_binding, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        conn.execute(
+            """UPDATE contract_outcome_terms
+               SET accepted_at=?, binding_hash=?
+               WHERE contract_receipt_id=? AND opportunity_id=?""",
+            (future_binding['accepted_at'], future_binding_hash,
+             binding['contract_receipt_id'], binding['opportunity_id']),
+        )
+        self.assertFalse(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], event_id, event_hash))
+        conn.execute(
+            """UPDATE contract_outcome_terms
+               SET accepted_at=?, binding_hash=?
+               WHERE contract_receipt_id=? AND opportunity_id=?""",
+            (binding['accepted_at'], binding_hash,
+             binding['contract_receipt_id'], binding['opportunity_id']),
+        )
+
+        insecure_binding = dict(binding)
+        insecure_binding['acceptance_evidence_url'] = 'http://example.com/terms'
+        insecure_binding_hash = hashlib.sha256(json.dumps(
+            insecure_binding, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        conn.execute(
+            """UPDATE contract_outcome_terms
+               SET acceptance_evidence_url=?, binding_hash=?
+               WHERE contract_receipt_id=? AND opportunity_id=?""",
+            (insecure_binding['acceptance_evidence_url'],
+             insecure_binding_hash, binding['contract_receipt_id'],
+             binding['opportunity_id']),
+        )
+        self.assertFalse(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], event_id, event_hash))
+        conn.execute(
+            """UPDATE contract_outcome_terms
+               SET acceptance_evidence_url=?, binding_hash=?
+               WHERE contract_receipt_id=? AND opportunity_id=?""",
+            (binding['acceptance_evidence_url'], binding_hash,
+             binding['contract_receipt_id'], binding['opportunity_id']),
+        )
+
+        for deceptive_url in (
+            'https://?evidence=terms',
+            'https://user:secret@example.com/terms',
+        ):
+            deceptive_binding = dict(binding)
+            deceptive_binding['acceptance_evidence_url'] = deceptive_url
+            deceptive_binding_hash = hashlib.sha256(json.dumps(
+                deceptive_binding, sort_keys=True, separators=(',', ':')
+            ).encode()).hexdigest()
+            conn.execute(
+                """UPDATE contract_outcome_terms
+                   SET acceptance_evidence_url=?, binding_hash=?
+                   WHERE contract_receipt_id=? AND opportunity_id=?""",
+                (deceptive_url, deceptive_binding_hash,
+                 binding['contract_receipt_id'],
+                 binding['opportunity_id']),
+            )
+            self.assertFalse(
+                mission_control._verified_attributed_outcome_event(
+                    conn, snapshot['opportunity_id'], event_id, event_hash))
+        conn.execute(
+            """UPDATE contract_outcome_terms
+               SET acceptance_evidence_url=?, binding_hash=?
+               WHERE contract_receipt_id=? AND opportunity_id=?""",
+            (binding['acceptance_evidence_url'], binding_hash,
+             binding['contract_receipt_id'], binding['opportunity_id']),
+        )
+
+        review_forgery = dict(review)
+        review_forgery['matched_exclusions'] = ['excluded-outcome']
+        review_snapshot = dict(snapshot)
+        review_snapshot['external_event_id'] = 'event_bad_exclusion'
+        review_snapshot['eligibility_review'] = review_forgery
+        review_hash = hashlib.sha256(json.dumps(
+            review_snapshot, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        review_event_id = 'oute_' + review_hash[:24]
+        conn.execute(
+            'INSERT INTO attributed_outcome_events VALUES '
+            '(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (review_event_id, review_snapshot['opportunity_id'],
+             review_snapshot['term_id'],
+             review_snapshot['contract_receipt_id'],
+             review_snapshot['provider'],
+             review_snapshot['external_event_id'],
+             review_snapshot['evidence_url'],
+             review_snapshot['artifact_sha256'],
+             review_snapshot['attribution_reference'],
+             json.dumps(review_forgery, sort_keys=True, separators=(',', ':')),
+             review_snapshot['units'], review_snapshot['unit_fee_cents'],
+             review_snapshot['fee_cents'], review_snapshot['occurred_at'],
+             review_hash),
+        )
+        self.assertFalse(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], review_event_id, review_hash))
+
+        chronology_review = dict(review)
+        chronology_review['reviewed_at'] = '2026-10-11T23:59:59+00:00'
+        chronology_snapshot = dict(snapshot)
+        chronology_snapshot['external_event_id'] = 'event_bad_review_time'
+        chronology_snapshot['eligibility_review'] = chronology_review
+        chronology_hash = hashlib.sha256(json.dumps(
+            chronology_snapshot, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        chronology_event_id = 'oute_' + chronology_hash[:24]
+        conn.execute(
+            'INSERT INTO attributed_outcome_events VALUES '
+            '(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (chronology_event_id, chronology_snapshot['opportunity_id'],
+             chronology_snapshot['term_id'],
+             chronology_snapshot['contract_receipt_id'],
+             chronology_snapshot['provider'],
+             chronology_snapshot['external_event_id'],
+             chronology_snapshot['evidence_url'],
+             chronology_snapshot['artifact_sha256'],
+             chronology_snapshot['attribution_reference'],
+             json.dumps(chronology_review, sort_keys=True, separators=(',', ':')),
+             chronology_snapshot['units'],
+             chronology_snapshot['unit_fee_cents'],
+             chronology_snapshot['fee_cents'],
+             chronology_snapshot['occurred_at'], chronology_hash),
+        )
+        self.assertFalse(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], chronology_event_id,
+            chronology_hash))
+
+        future_review = dict(review)
+        future_review['reviewed_at'] = '2999-10-12T00:05:00+00:00'
+        future_snapshot = dict(snapshot)
+        future_snapshot['external_event_id'] = 'event_future_review'
+        future_snapshot['eligibility_review'] = future_review
+        future_hash = hashlib.sha256(json.dumps(
+            future_snapshot, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        future_event_id = 'oute_' + future_hash[:24]
+        conn.execute(
+            'INSERT INTO attributed_outcome_events VALUES '
+            '(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (future_event_id, future_snapshot['opportunity_id'],
+             future_snapshot['term_id'],
+             future_snapshot['contract_receipt_id'],
+             future_snapshot['provider'],
+             future_snapshot['external_event_id'],
+             future_snapshot['evidence_url'],
+             future_snapshot['artifact_sha256'],
+             future_snapshot['attribution_reference'],
+             json.dumps(future_review, sort_keys=True, separators=(',', ':')),
+             future_snapshot['units'], future_snapshot['unit_fee_cents'],
+             future_snapshot['fee_cents'], future_snapshot['occurred_at'],
+             future_hash),
+        )
+        self.assertFalse(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], future_event_id, future_hash))
+
+        pre_contract_snapshot = dict(snapshot)
+        pre_contract_snapshot['external_event_id'] = 'event_pre_contract'
+        pre_contract_snapshot['occurred_at'] = '2026-10-10T23:59:59+00:00'
+        pre_contract_snapshot['eligibility_review'] = dict(review)
+        pre_contract_hash = hashlib.sha256(json.dumps(
+            pre_contract_snapshot, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        pre_contract_event_id = 'oute_' + pre_contract_hash[:24]
+        conn.execute(
+            'INSERT INTO attributed_outcome_events VALUES '
+            '(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (pre_contract_event_id, pre_contract_snapshot['opportunity_id'],
+             pre_contract_snapshot['term_id'],
+             pre_contract_snapshot['contract_receipt_id'],
+             pre_contract_snapshot['provider'],
+             pre_contract_snapshot['external_event_id'],
+             pre_contract_snapshot['evidence_url'],
+             pre_contract_snapshot['artifact_sha256'],
+             pre_contract_snapshot['attribution_reference'],
+             json.dumps(pre_contract_snapshot['eligibility_review'],
+                        sort_keys=True, separators=(',', ':')),
+             pre_contract_snapshot['units'],
+             pre_contract_snapshot['unit_fee_cents'],
+             pre_contract_snapshot['fee_cents'],
+             pre_contract_snapshot['occurred_at'], pre_contract_hash),
+        )
+        self.assertFalse(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], pre_contract_event_id,
+            pre_contract_hash))
+
+        arithmetic_forgery = dict(snapshot)
+        arithmetic_forgery['external_event_id'] = 'event_bad_arithmetic'
+        arithmetic_forgery['fee_cents'] = 10001
+        arithmetic_hash = hashlib.sha256(json.dumps(
+            arithmetic_forgery, sort_keys=True, separators=(',', ':')
+        ).encode()).hexdigest()
+        arithmetic_event_id = 'oute_' + arithmetic_hash[:24]
+        conn.execute(
+            'INSERT INTO attributed_outcome_events VALUES '
+            '(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            (arithmetic_event_id, arithmetic_forgery['opportunity_id'],
+             arithmetic_forgery['term_id'],
+             arithmetic_forgery['contract_receipt_id'],
+             arithmetic_forgery['provider'],
+             arithmetic_forgery['external_event_id'],
+             arithmetic_forgery['evidence_url'],
+             arithmetic_forgery['artifact_sha256'],
+             arithmetic_forgery['attribution_reference'],
+             json.dumps(review, sort_keys=True, separators=(',', ':')),
+             arithmetic_forgery['units'],
+             arithmetic_forgery['unit_fee_cents'],
+             arithmetic_forgery['fee_cents'],
+             arithmetic_forgery['occurred_at'], arithmetic_hash),
+        )
+        self.assertFalse(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], arithmetic_event_id,
+            arithmetic_hash))
+
+        forged_hash = 'f' * 64
+        conn.execute(
+            'UPDATE attributed_outcome_events SET event_hash=? WHERE event_id=?',
+            (forged_hash, event_id),
+        )
+        self.assertFalse(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], event_id, forged_hash))
+        conn.execute(
+            'UPDATE attributed_outcome_events SET event_hash=? WHERE event_id=?',
+            (event_hash, event_id),
+        )
+        conn.execute(
+            'UPDATE outcome_pricing_terms SET terms_hash=? WHERE term_id=?',
+            ('d' * 64, snapshot['term_id']),
+        )
+        self.assertFalse(mission_control._verified_attributed_outcome_event(
+            conn, snapshot['opportunity_id'], event_id, event_hash))
 
     def test_nonfinite_evidence_cannot_insert_or_replace_measurements(self):
         conn = mission_control.connect(self.path)
