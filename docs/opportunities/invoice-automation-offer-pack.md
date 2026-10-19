@@ -1,21 +1,26 @@
 # Invoice Automation Outcome-Service Offer Pack
 
-Status: **qualified candidate only — not saved, applied, offered, contracted, or revenue**
+Status: **deprioritized — the one-person role has hired; not saved, applied, offered, contracted, or revenue**
 
-Evidence checked: 2026-10-17 (America/Los_Angeles)
+Evidence checked: 2026-10-19 (America/Los_Angeles)
 
 ## Marketplace evidence
 
 - Authorized channel: Upwork
 - Job ID: `2111575838872460054`
 - Posting: “Build an Automated Invoice Processing System in n8n”
-- Live state observed: active; zero hires and zero offers; one invitation/interview
+- Live state observed: still marked active, but one person has been hired for the
+  one-person role; zero offers, one invitation, and zero interviews are reported
+  by the posting activity snapshot
 - Buyer budget: $70–$100/hour
 - Application cost: 15 Connects
 - Connected account balance observed: 147 Connects
-- Client risk: new client record with no completed hires or feedback
-- Competition signal: 50+ proposals in the recommendation snapshot
-- Action state: no proposal or spend; explicit approval is required before consuming Connects
+- Client record: one total/active contract, one hire, $20.49 total spend, and no
+  feedback yet
+- Competition signal: applicant bid statistics are unavailable on the connected
+  Freelancer Basic plan and are not estimated
+- Action state: do not apply or spend Connects while the advertised one-person
+  opening is filled; retain the architecture and draft only as reusable vertical IP
 
 This is marketplace evidence, not buyer interest. No message, invitation, offer,
 contract, payment, or settled revenue exists.
@@ -67,7 +72,7 @@ Success must be measured with an owner-approved test set: extraction accuracy,
 duplicate-prevention accuracy, reconciliation pass rate, approval completion,
 exception rate, and required human minutes per accepted invoice.
 
-## Evidence-constrained proposal draft
+## Evidence-constrained proposal draft (reusable asset; do not submit to this filled role)
 
 > INVOICE
 >
@@ -94,12 +99,16 @@ exception rate, and required human minutes per accepted invoice.
 > approval authority, Gmail/Google Workspace access, expected monthly volume,
 > and the accepted error/review thresholds.
 
-## Pre-submission gate
+## Reactivation gate
 
-Before any proposal is sent:
+Do not send this proposal while the current evidence shows one hire for one
+opening. Reconsider only if fresh marketplace evidence shows an unfilled
+additional opening or the buyer directly invites the account. Before any later
+proposal is sent:
 
 - obtain explicit approval for the 15-Connect spend and proposed rate;
-- verify the posting is still active and has not hired/offered;
+- verify that the role is genuinely open beyond the existing hire;
 - review the attached project brief without exposing its temporary signed URL;
 - confirm the profile can truthfully support every claim;
 - do not add a boost or attachment unless separately approved.
+
