@@ -92,3 +92,40 @@ Pause a channel if realized margin, compliance risk, complaint rate, or time-to-
 APEX may research laws from primary sources, qualify markets and parcels, build conservative underwriting, maintain suppression and audit records, prepare individualized drafts, assemble deal packets, and rank buyers and opportunities.
 
 Owner-only or consequential gates include identity attestations, licensing decisions, legal advice/signatures, seller purchase-contract execution, earnest money, opening escrow, custom legal terms, title commitments, property acquisition, and closing authorization.
+
+## Executable research-only pipeline (issue #213)
+
+`scripts/land_research.py` turns caller-supplied parcel records into a deterministic,
+source-linked dry-run scorecard. It intentionally has no connector for outreach,
+advertising, offers, contracts, signatures, deposits, purchases, or paid data.
+
+The default policy in `config/land_research_policies.json` contains no approved
+jurisdiction. A jurisdiction may become `RESEARCH_ONLY_APPROVED` only after a
+human legal review records current primary-source URLs for licensing, marketing,
+assignment, contracts, telemarketing, and disclosures. Research approval still
+does not authorize an external action.
+
+Input records must identify a permitted public/licensed source, its record and
+terms URLs, observation timestamp, and affirmative terms/robots/collection
+review. The pipeline normalizes jurisdiction/county/parcel IDs, keeps the freshest
+duplicate, expires stale records, accepts only verified closed-sale comps, excludes
+price-per-acre outliers, requires legal road access and title evidence, and
+subtracts closing, diligence, legal/assignment, carrying/marketing, taxes/liens,
+and uncertainty reserve from the conservative supported value.
+
+```bash
+python3 scripts/land_research.py parcels.json \
+  --policy config/land_research_policies.json > land-research-dry-run.json
+```
+
+The output separates `discovered`, `verified_comp`, and `verified_buyer` research
+stages. It reports verified settled deals and revenue only when a caller supplies
+an explicitly verified closing receipt with an HTTPS evidence URL and external
+transaction ID. Projected spreads remain `projected_value_is_revenue=false` and
+the aggregate projected-revenue field stays zero. Government-buyer claims fail
+closed unless a fresh, specific procurement URL and solicitation ID are present.
+
+`tests/test_land_research.py` covers duplicates, misleading asking/listing comps,
+missing road access/title evidence, disallowed markets, stale or unauthorized
+sources, unsupported government-buyer claims, conservative economics, and strict
+settled-revenue separation.
