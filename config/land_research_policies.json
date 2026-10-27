@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "default_status": "QUARANTINED",
+  "jurisdictions": {},
+  "notes": [
+    "No jurisdiction is approved by default.",
+    "RESEARCH_ONLY_APPROVED requires current human legal review of every required check with primary-source URLs.",
+    "Research approval never authorizes outreach, advertising, contracts, signatures, deposits, purchases, or paid data."
+  ]
+}
