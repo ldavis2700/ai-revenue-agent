@@ -27,6 +27,21 @@ def stable_id(lead):
     return lead.get('id') or hashlib.sha256(raw.lower().encode()).hexdigest()[:16]
 
 
+def explicit_contact_permission(value):
+    """Parse affirmative import values without treating nonempty text as consent.
+
+    CSV/API imports may encode booleans as text. Unknown values fail closed;
+    this flag does not replace source, suppression, or delivery authorization.
+    """
+    if isinstance(value, bool):
+        return value
+    if type(value) is int:
+        return value == 1
+    if isinstance(value, str):
+        return value.strip().lower() in {'1', 'true', 'yes', 'y'}
+    return False
+
+
 def normalize(lead):
     return {
         'id': stable_id(lead),
@@ -38,7 +53,7 @@ def normalize(lead):
         'pain_point': str(lead.get('pain_point') or '').strip(),
         'website': str(lead.get('website') or '').strip(),
         'source': str(lead.get('source') or 'external').strip(),
-        'contact_allowed': bool(lead.get('contact_allowed', False)),
+        'contact_allowed': explicit_contact_permission(lead.get('contact_allowed')),
         'metadata': lead.get('metadata') or {},
     }
 
