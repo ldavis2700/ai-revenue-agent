@@ -84,7 +84,11 @@ def route(actions, sources, enabled=AUTONOMY_ENABLED, kill_switch=KILL_SWITCH, c
 
 def run(path=DB_PATH):
     actions = load_actions(path)
-    autonomous, review, blocked = route(actions, lead_sources(path))
+    # Fulfillment preparation is internal work, not a customer message or an
+    # owner-only decision. External customer-system changes remain separately gated.
+    internal_work = [action for action in actions if action.get('action') == 'fulfill_setup']
+    messaging_actions = [action for action in actions if action.get('action') != 'fulfill_setup']
+    autonomous, review, blocked = route(messaging_actions, lead_sources(path))
     delivery_results = [deliver(action, path) for action in autonomous]
     return {
         "generated_at": now_iso(),
@@ -93,11 +97,13 @@ def run(path=DB_PATH):
         "owner_review": review,
         "blocked": blocked,
         "delivery_results": delivery_results,
+        "internal_work": internal_work,
         "counts": {
             "autonomous_dispatch": len(autonomous),
             "owner_review": len(review),
             "blocked": len(blocked),
             "delivered": sum(1 for result in delivery_results if result["status"] == "delivered"),
+            "pending_fulfillment": len(internal_work),
         },
         "guardrails": {
             "owned_inbound_only": True,

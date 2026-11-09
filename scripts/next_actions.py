@@ -5,6 +5,10 @@ import os
 import sqlite3
 import urllib.parse
 from datetime import datetime, timezone, timedelta
+try:
+    from .setup_fulfillment import delivery_complete
+except ImportError:
+    from setup_fulfillment import delivery_complete
 
 DB_PATH = os.getenv('REVENUE_DB_PATH', '/files/data/revenue_agent.db')
 FOLLOWUP_HOURS = int(os.getenv('FOLLOWUP_HOURS', '72'))
@@ -52,12 +56,34 @@ def main():
     conn.row_factory = sqlite3.Row
     now = datetime.now(timezone.utc)
     actions = []
-    leads = conn.execute('SELECT * FROM leads WHERE contact_allowed=1').fetchall()
+    leads = conn.execute('SELECT * FROM leads').fetchall()
 
     for lead in leads:
-        events = conn.execute('SELECT event_type, created_at FROM events WHERE lead_id=? ORDER BY created_at', (lead['id'],)).fetchall()
+        events = conn.execute('SELECT event_type, created_at, metadata FROM events WHERE lead_id=? ORDER BY created_at', (lead['id'],)).fetchall()
         kinds = [e['event_type'] for e in events]
-        if 'opt_out' in kinds or 'refund' in kinds:
+        if 'refund' in kinds:
+            continue
+        # A sale is a fulfillment obligation, not proof that setup is complete.
+        # Keep internal work visible even if marketing consent was withdrawn.
+        sales = [event for event in events if event['event_type'] == 'sale']
+        pending_delivery = False
+        for sale in sales:
+            try:
+                metadata = json.loads(sale['metadata'] or '{}')
+                event_id = metadata.get('processor_event_id') if isinstance(metadata, dict) else None
+            except (ValueError, TypeError):
+                event_id = None
+            if not event_id or not delivery_complete(conn, lead['id'], event_id):
+                pending_delivery = True
+                break
+        if pending_delivery:
+            actions.append({
+                'lead_id': lead['id'], 'action': 'fulfill_setup',
+                'reason': 'Recorded sale requires payment-linked setup delivery evidence before any upsell.',
+                'company': lead['company'], 'external_action_allowed': False,
+            })
+            continue
+        if lead['contact_allowed'] != 1 or 'opt_out' in kinds or 'not_interested' in kinds:
             continue
         if 'managed_plan_active' in kinds:
             continue
@@ -82,7 +108,7 @@ def main():
             actions.append({
                 'lead_id': lead['id'],
                 'action': 'offer_optional_managed_plan',
-                'reason': 'verified setup customer is eligible for optional ongoing optimization',
+                'reason': 'Setup customer has payment-linked delivery evidence; optional offer remains review-only.',
                 'company': lead['company'],
                 'email': lead['email'],
                 'amount': float(MANAGED_MONTHLY_PRICE),
