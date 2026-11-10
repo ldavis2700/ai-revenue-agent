@@ -61,6 +61,24 @@ class WealthExpertiseAuditTests(unittest.TestCase):
   self.assertEqual(report["stage"],"repeatability_under_review")
   self.assertFalse(report["external_provider_receipts_verified_by_this_audit"])
   self.assertEqual(report["recurring_economics"]["positive_periods"],2)
+ def test_cross_table_duplicate_receipt_quarantines_both_totals(self):
+  self.receipts()
+  self.db.execute("INSERT INTO payment_receipts VALUES ('shared',10000,200,9800)")
+  self.db.execute("INSERT INTO recurring_payment_receipts VALUES ('shared',9900,100,9800)")
+  report=m.audit(self.db)
+  self.assertEqual(report["stage"],"reconciliation_required")
+  for key in ("one_time_receipts","recurring_receipts"):
+   self.assertIsNone(report[key]["gross_cents"])
+   self.assertIsNone(report[key]["receipts"])
+   self.assertIn("cross_table_duplicate_receipt_id",report[key]["integrity_issues"])
+ def test_orphan_recurring_unit_economics_never_counts_as_retention(self):
+  self.receipts()
+  self.db.execute("CREATE TABLE recurring_realized_unit_economics (recurring_payment_receipt_id TEXT,contribution_cents INTEGER)")
+  self.db.execute("INSERT INTO recurring_realized_unit_economics VALUES ('ghost',7000)")
+  report=m.audit(self.db)
+  self.assertEqual(report["stage"],"reconciliation_required")
+  self.assertEqual(report["recurring_economics"]["state"],"unreconciled")
+  self.assertIsNone(report["recurring_economics"]["positive_periods"])
  def test_negative_or_boolean_amounts_fail_closed(self):
   self.receipts()
   self.db.execute("INSERT INTO payment_receipts VALUES ('neg',10000,-100,10100)")
