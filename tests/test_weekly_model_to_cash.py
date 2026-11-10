@@ -79,6 +79,37 @@ class WeeklyModelTests(unittest.TestCase):
   self.good["buyer_evidence_url"]="https://example.org/buyer"
   self.good["payment_rail_evidence_url"]="http://unsafe.example"
   self.assertIn("payment_rail_evidence_url_required",w.evaluate(self.good,self.now)["reasons"])
+ def test_recreation_cannot_copy_proprietary_work(self):
+  result=w.evaluate(self.good,self.now)["recreation"]
+  self.assertEqual(result["state"],"preparation_only")
+  self.assertIn("independent_original_implementation_required",result["missing"])
+  self.assertFalse(result["settled_payment_verified"])
+ def test_recreation_requires_real_qa_and_buyer_acceptance(self):
+  self.good.update({
+   "copied_proprietary_material":False,"rights_verified":True,
+   "delivery_artifact_sha256":"a"*64,
+   "delivery_qa_evidence_url":"https://example.org/artifact-qa",
+   "actual_buyer_acceptance_verified":False
+  })
+  result=w.evaluate(self.good,self.now)["recreation"]
+  self.assertIn("real_buyer_acceptance_not_verified",result["missing"])
+  self.good["actual_buyer_acceptance_verified"]=True
+  result=w.evaluate(self.good,self.now)["recreation"]
+  self.assertEqual(result["state"],"acceptance_evidence_supplied")
+  self.assertFalse(result["verified_by_this_code"])
+  self.assertFalse(result["external_delivery_performed"])
+ def test_missing_or_invalid_artifact_and_rights_fail_closed(self):
+  self.good.update({
+   "copied_proprietary_material":False,"rights_verified":True,
+   "delivery_artifact_sha256":"unverified",
+   "delivery_qa_evidence_url":"http://example.net",
+   "actual_buyer_acceptance_verified":True
+  })
+  result=w.recreation_gate(self.good)
+  self.assertIn("immutable_delivery_artifact_required",result["missing"])
+  self.assertIn("delivery_qa_receipt_required",result["missing"])
+  self.good["rights_verified"]=False
+  self.assertIn("rights_review_required",w.recreation_gate(self.good)["missing"])
  def test_two_experiment_limit(self):
   items=[dict(self.good,model_id=f"model-{i}",estimated_revenue_cents=10000+i) for i in range(3)]
   x=w.weekly_report(items,self.now)
