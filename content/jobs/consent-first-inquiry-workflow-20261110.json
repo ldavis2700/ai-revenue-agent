@@ -1,0 +1,46 @@
+{
+  "id": "consent-first-inquiry-workflow-20261110",
+  "title": "Build a Consent-First Customer Inquiry Workflow",
+  "format": "vertical",
+  "audience": "adults",
+  "original": true,
+  "rights": "Original educational script and text graphics for RMC AI Workshop/APEX. Local synthetic CMU Flite narration. No third-party music, photos, clips or client data.",
+  "description": "Original small-business tutorial showing how to capture inquiries with clear consent, limit data, use a human handoff, and test an automated acknowledgement with fictional customers. This is a demonstration, not legal advice or a live customer delivery system. Synthetic narration. No promised earnings.",
+  "scenes": [
+    {
+      "heading": "A lead form is not permission",
+      "text": "Ask what follow-up the person wants.",
+      "narration": "A visitor submitting a question is not blanket permission for every campaign. Design the form around the specific response requested, and record the permission you actually received."
+    },
+    {
+      "heading": "1. Explain the purpose",
+      "text": "Show what happens after Submit.",
+      "narration": "Tell visitors whether you will email a reply, call about a quote, or send a confirmation. Avoid hiding marketing enrollment inside a general contact form."
+    },
+    {
+      "heading": "2. Keep only useful fields",
+      "text": "Business, reply address, and question.",
+      "narration": "For a simple inquiry, ask only for information needed to respond. Never collect passwords or payment details through an ordinary contact form."
+    },
+    {
+      "heading": "3. Record consent evidence",
+      "text": "Consent choice plus time and form version.",
+      "narration": "Store the selected permission, submission time, and the version of the notice. Keep access limited, and respect withdrawal and deletion requests."
+    },
+    {
+      "heading": "4. Draft, don't auto-promise",
+      "text": "Human review for uncertain requests.",
+      "narration": "Your workflow can suggest an acknowledgement, but route pricing, complaints, emergencies, and unusual requests to a person. Never claim a service was delivered because a message was sent."
+    },
+    {
+      "heading": "5. Test before real use",
+      "text": "Use fictional submissions; inspect outcomes.",
+      "narration": "Try a missing-consent submission, a duplicate inquiry, and an opt-out. Confirm each is handled correctly before activating anything for actual customers."
+    },
+    {
+      "heading": "Build trust before scale",
+      "text": "Clear permission. Useful replies. Verified outcomes.",
+      "narration": "A small, respectful workflow is easier to support and improve. Follow RMC AI Workshop for original tutorials on safer small-business automation."
+    }
+  ]
+}
