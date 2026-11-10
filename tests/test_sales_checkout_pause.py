@@ -18,7 +18,9 @@ class PausedCheckoutOfferTests(unittest.TestCase):
     def test_no_hardcoded_stripe_checkout_or_alternative_external_checkout(self):
         self.assertNotIn("buy.stripe.com", self.html.lower())
         self.assertNotIn("checkout.stripe.com", self.html.lower())
-        for href in re.findall(r'<a\\b[^>]*\\bhref="([^"]+)"', self.html):
+        hrefs = re.findall(r'<a\b[^>]*\bhref="([^"]+)"', self.html)
+        self.assertTrue(hrefs, "expected to inspect actual offer CTAs")
+        for href in hrefs:
             self.assertFalse(re.search(r'(?:checkout|payment|purchase)', href, re.I), href)
 
     def test_query_parameters_cannot_inject_a_checkout_destination(self):
