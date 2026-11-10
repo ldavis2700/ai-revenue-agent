@@ -18,6 +18,7 @@ STAGES = (
     ('learn', 'scripts/experiment_learning.py'),
     ('plan', 'scripts/mission_control.py'),
     ('execute_authorized_inbound', 'autonomous_cycle.py'),
+    ('self_review', 'scripts/self_improvement_cycle.py'),
 )
 
 
