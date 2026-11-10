@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "timezone": "America/Los_Angeles",
+  "research_day": "Monday",
+  "videos_per_week": 27,
+  "daily_targets": [4, 4, 4, 4, 4, 4, 3],
+  "default_channel_id": "UC1TPDWauf7kEnOYjbE1zU7w",
+  "original_content_required": true,
+  "paid_hosting_allowed": true,
+  "paid_models_and_research_credits_allowed": false,
+  "payout_status": "unverified",
+  "publishing_integration": "vidiq_exact_draft_approval_required",
+  "research_task_id": "Automation_c75fcc149fb48191bdbe64a5af38bbfb",
+  "execution_task_id": "6a7e835492408191818a1f07ec08f4c6"
+}
