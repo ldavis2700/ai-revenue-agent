@@ -3,6 +3,7 @@
 import argparse
 import fcntl
 import hashlib
+import hmac
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
@@ -175,6 +176,12 @@ def cycle(directory):
                 db.execute("UPDATE jobs SET status='failed',error='render_failed',updated=? WHERE id=?",(time.time(),m['id']))
             print(json.dumps({'event':'content_render_failed','id':m['id']}),flush=True)
 
+def artifact_authorized(headers):
+    token=os.environ.get('CONTENT_ARTIFACT_TOKEN','')
+    authorization=headers.get('Authorization','')
+    prefix='Bearer '
+    return bool(token) and authorization.startswith(prefix) and hmac.compare_digest(authorization[len(prefix):],token)
+
 def health():
     with connect() as db:
         jobs=[dict(r) for r in db.execute('SELECT id,status,attempts,artifact FROM jobs ORDER BY updated DESC LIMIT 50')]
@@ -193,6 +200,10 @@ class Handler(BaseHTTPRequestHandler):
             row=db.execute("SELECT status FROM jobs WHERE id=?",(match[1],)).fetchone()
         path=STATE/'artifacts'/match[1]/match[2]
         if not row or row['status']!='complete' or not path.is_file():self.send_error(404);return
+        if not os.environ.get('CONTENT_ARTIFACT_TOKEN'):
+            self.send_error(503);return
+        if not artifact_authorized(self.headers):
+            self.send_response(401);self.send_header('WWW-Authenticate','Bearer');self.send_header('Content-Length','0');self.end_headers();return
         size=path.stat().st_size; day=time.strftime('%Y-%m-%d',time.gmtime())
         with connect() as db:
             db.execute('BEGIN IMMEDIATE')
@@ -202,7 +213,8 @@ class Handler(BaseHTTPRequestHandler):
             db.execute('UPDATE egress SET bytes=bytes+? WHERE day=?',(size,day))
             db.execute('DELETE FROM egress WHERE day<?',(time.strftime('%Y-%m-%d',time.gmtime(time.time()-86400*7)),))
         self.connection.settimeout(10)
-        self.send_response(200);self.send_header('Content-Length',str(size));self.send_header('Content-Type','video/mp4' if match[2]=='video.mp4' else 'text/plain');self.end_headers()
+        content_type={'video.mp4':'video/mp4','captions.srt':'text/plain','manifest.json':'application/json'}[match[2]]
+        self.send_response(200);self.send_header('Content-Length',str(size));self.send_header('Content-Type',content_type);self.send_header('Cache-Control','private, no-store');self.end_headers()
         try:
             with path.open('rb') as source:shutil.copyfileobj(source,self.wfile,64*1024)
         except (OSError,TimeoutError):pass
