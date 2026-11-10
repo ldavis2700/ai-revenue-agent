@@ -182,17 +182,25 @@ def artifact_authorized(headers):
     prefix='Bearer '
     return bool(token) and authorization.startswith(prefix) and hmac.compare_digest(authorization[len(prefix):],token)
 
-def health():
+def health(include_jobs=False):
     with connect() as db:
-        jobs=[dict(r) for r in db.execute('SELECT id,status,attempts,artifact FROM jobs ORDER BY updated DESC LIMIT 50')]
+        counts={r['status']:r['count'] for r in db.execute('SELECT status,COUNT(*) AS count FROM jobs GROUP BY status')}
+        jobs=[dict(r) for r in db.execute('SELECT id,status,attempts,artifact FROM jobs ORDER BY updated DESC LIMIT 50')] if include_jobs else None
         heartbeat=db.execute('SELECT heartbeat FROM health WHERE id=1').fetchone()
-    return {'healthy':bool(heartbeat and time.time()-heartbeat[0]<90),'paused':(STATE/'pause').exists(),'jobs':jobs,'publishing':'separate_connector_required','paid_api_usage':False}
+    result={'healthy':bool(heartbeat and time.time()-heartbeat[0]<90),'paused':(STATE/'pause').exists(),'queue':{'total':sum(counts.values()),'by_status':counts},'publishing':'separate_connector_required','paid_api_usage':False}
+    if include_jobs:result['jobs']=jobs
+    return result
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):pass
     def do_GET(self):
-        if self.path=='/health':
-            result=health(); body=json.dumps(result).encode()
+        if self.path in ('/health','/admin/jobs'):
+            detailed=self.path=='/admin/jobs'
+            if detailed and not os.environ.get('CONTENT_ARTIFACT_TOKEN'):
+                self.send_error(503);return
+            if detailed and not artifact_authorized(self.headers):
+                self.send_response(401);self.send_header('WWW-Authenticate','Bearer');self.send_header('Content-Length','0');self.end_headers();return
+            result=health(include_jobs=detailed); body=json.dumps(result).encode()
             self.send_response(200 if result['healthy'] else 503);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
         match=re.fullmatch(r'/artifacts/([a-z0-9][a-z0-9-]{2,79})/(video.mp4|captions.srt|manifest.json)',self.path)
         if not match:self.send_error(404);return
@@ -253,3 +261,4 @@ def main():
     lock.close()
 
 if __name__=='__main__':main()
+
