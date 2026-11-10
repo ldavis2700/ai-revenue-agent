@@ -96,7 +96,7 @@
     <p>I build a tailored AI Customer Response System for small businesses with ready-to-use responses for new inquiries, quotes, missed calls, follow-ups, reviews, repeat customers, and common questions.</p>
     <div class="hero-actions">
       <a class="cta" href="#lead-form">See my free tailored preview</a>
-      <a class="cta secondary" href="https://buy.stripe.com/28E3cxedvdR92kOb3n87K02">Buy the $100 setup</a>
+      <a class="cta secondary" href="#lead-form">Ask about setup details</a>
     </div>
     <p class="muted">No payment is required to request a preview. See what I would build for your business first, then decide.</p>
 
@@ -116,7 +116,7 @@
     <p class="muted">Own a contracting or local service company? See the <a href="/home-services">home-services version</a>.</p>
 
     <h2>Before you pay</h2>
-    <p>I can show you what I would build for your business first. The setup purchase and managed-plan enrollment remain separate customer decisions.</p>
+    <p>I can show you a starter preview first. A paid setup and any optional managed plan require a separate agreement. This page does not currently accept payments or subscriptions.</p>
 
     <section class="preview" aria-labelledby="sample-preview-title">
       <h2 id="sample-preview-title">See a sample before you submit</h2>
@@ -151,9 +151,9 @@
     <p><strong>Will this automatically message my customers?</strong><br />No. The setup provides tailored response assets and a practical response system. Any access to customer systems or automated sending requires a separate agreement and authorization.</p>
     <p><strong>Can I opt out of contact?</strong><br />Yes. You may opt out at any time.</p>
 
-    <a id="setup-link" class="cta" href="https://buy.stripe.com/28E3cxedvdR92kOb3n87K02">Buy the $100 setup</a>
-    <a id="managed-link" class="cta secondary" href="https://buy.stripe.com/8x214pfhzcN51gKgnH87K03">Join the optional $99/month plan</a>
-    <p id="checkout-note" class="muted">Checkout is securely hosted by Stripe. The setup and optional managed plan are separate customer-initiated purchases.</p>
+    <a id="setup-link" class="cta" href="#lead-form">Request a free setup preview</a>
+    <p class="muted">Optional $99/month optimization may be discussed after a completed setup. Enrollment is not available on this page.</p>
+    <p id="checkout-note" class="muted">Online checkout is paused. Request a free preview; no charges or recurring commitments are created by this form.</p>
     <form id="lead-form" data-lead-endpoint="https://wuzmqruxdclstezitsbf.supabase.co/functions/v1/revenue-inbound">
       <h2>See what I would build first</h2>
       <p>Tell me about your business. Submitting this form does not purchase or enroll you in anything.</p>
@@ -163,7 +163,7 @@
       <label for="pain">What customer-response problem should I solve?</label><textarea id="pain" name="pain_point" rows="3"></textarea>
       <div class="hp" aria-hidden="true"><label for="website-confirm">Leave blank</label><input id="website-confirm" name="website_confirm" tabindex="-1" autocomplete="off" /></div>
       <label class="consent"><input name="contact_consent" type="checkbox" required /><span>I agree that RMC Family Enterprises LLC may contact me about this request. I can opt out at any time.</span></label>
-      <label class="consent"><input name="privacy_acknowledged" type="checkbox" required /><span>I acknowledge the <a href="/privacy.html" target="_blank" rel="noopener">privacy notice</a>.</span></label>
+      <label class="consent"><input name="privacy_acknowledged" type="checkbox" required /><span>I acknowledge the <a href="/privacy" target="_blank" rel="noopener">privacy notice</a>.</span></label>
       <button id="lead-submit" class="cta disabled" type="submit" disabled>Request my preview</button>
       <p id="lead-status" class="muted">Lead intake is being connected. The form will activate only after its secure endpoint is verified.</p>
       <section id="instant-preview" class="preview instant-preview" aria-live="polite" hidden>
@@ -175,7 +175,7 @@
           <article class="message"><h3>Follow-up</h3><p id="instant-follow-up"></p></article>
         </div>
         <p>This starter preview is generated from the business details you submitted. It does not send messages to your customers or enroll you in a paid service.</p>
-        <a class="cta" href="https://buy.stripe.com/28E3cxedvdR92kOb3n87K02">Get the complete $100 setup</a>
+        <p class="muted">The complete paid setup is a separate, manually scoped engagement and cannot be purchased here while online checkout is paused.</p>
       </section>
     </form>
   </div>
@@ -183,8 +183,6 @@
 </main>
 <script>
   const params = new URLSearchParams(window.location.search);
-  const setup = params.get('setup');
-  const managed = params.get('managed');
   function campaignTag(name) {
     return (params.get(name) || '').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 80);
   }
@@ -193,15 +191,6 @@
     campaignTag('utm_medium'),
     campaignTag('utm_campaign')
   ].filter(Boolean).join('/');
-  function enable(id, url) {
-    if (!url || !/^https:\/\//i.test(url)) return;
-    const el = document.getElementById(id);
-    el.href = url;
-    el.classList.remove('disabled');
-  }
-  enable('setup-link', setup);
-  enable('managed-link', managed);
-  if (setup || managed) document.getElementById('checkout-note').textContent = 'Checkout is customer-initiated. The managed plan remains optional.';
   const form = document.getElementById('lead-form');
   const endpoint = form.dataset.leadEndpoint;
   const submit = document.getElementById('lead-submit');
