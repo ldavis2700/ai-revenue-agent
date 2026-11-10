@@ -84,11 +84,31 @@ class WeeklyTests(unittest.TestCase):
    self.db.execute("UPDATE slots SET video_id=?,receipt=?,published_at=? WHERE id=?",
      ('example0001','{"status":"completed"}',self.now.isoformat(),f'{self.week}-27'))
   x=w.init(self.db,self.week)
-  self.assertEqual(x['planned_slots'],10)
+  self.assertEqual(x['planned_slots'],11)
+  self.assertEqual(x['started_surplus'],1)
   self.assertEqual(w.status(self.db,self.week)['planned'],11)
   self.assertEqual(w.status(self.db,self.week)['publication_receipts'],1)
   self.assertEqual(self.db.execute("SELECT COUNT(*) FROM slots WHERE week=?",(self.week,)).fetchone()[0],27)
   self.assertEqual(self.db.execute("SELECT active FROM slots WHERE id=?",(f'{self.week}-27',)).fetchone()[0],1)
   self.assertEqual(self.db.execute("SELECT active FROM slots WHERE id=?",(f'{self.week}-26',)).fetchone()[0],0)
+
+ def test_legacy_started_concept_survives_and_does_not_retime_other_started_week(self):
+  with self.db:
+   self.db.executemany('INSERT INTO slots(id,week,due_at) VALUES(?,?,?)',
+     [(f'{self.week}-{i:02}',self.week,self.now.isoformat()) for i in range(11,28)])
+   self.db.execute("UPDATE slots SET concept=?,job_id=? WHERE id=?",
+     ('Meaningful started original lesson','weekly-started',f'{self.week}-18'))
+   self.db.execute('UPDATE slots SET due_at=? WHERE id=?',
+     (self.now.isoformat(),f'{self.week}-01'))
+  result=w.init(self.db,self.week)
+  self.assertEqual(result['planned_slots'],11)
+  self.assertEqual(result['started_surplus'],1)
+  self.assertEqual(self.db.execute('SELECT due_at FROM slots WHERE id=?',(f'{self.week}-01',)).fetchone()[0],
+                   self.now.isoformat())
+  preserved=self.db.execute('SELECT concept,active FROM slots WHERE id=?',(f'{self.week}-18',)).fetchone()
+  self.assertEqual(preserved['concept'],'Meaningful started original lesson')
+  self.assertEqual(preserved['active'],1)
+  self.assertEqual(self.db.execute('SELECT active FROM slots WHERE id=?',(f'{self.week}-17',)).fetchone()[0],0)
+  self.assertEqual(w.init(self.db,self.week)['planned_slots'],11)
 
 if __name__=='__main__':unittest.main()
