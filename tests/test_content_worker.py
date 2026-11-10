@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 from unittest.mock import patch
 
@@ -65,8 +65,11 @@ class ContentHTTPTests(unittest.TestCase):
         self.server=c.HTTPServer(('127.0.0.1',0),c.Handler)
         self.thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.thread.start()
         self.url='http://127.0.0.1:'+str(self.server.server_port)
+        self.token=patch.dict(c.os.environ,{'CONTENT_ARTIFACT_TOKEN':'test-content-token'},clear=False);self.token.start()
     def tearDown(self):
-        self.server.shutdown();self.server.server_close();self.thread.join();ContentWorkerTests.tearDown(self)
+        self.token.stop();self.server.shutdown();self.server.server_close();self.thread.join();ContentWorkerTests.tearDown(self)
+    def authorized(self,url,token='test-content-token'):
+        return urlopen(Request(url,headers={'Authorization':'Bearer '+token}))
     def test_artifact_visibility_and_daily_transfer_cap(self):
         c.ingest(self.jobs)
         path=c.STATE/'artifacts'/self.m['id'];path.mkdir();(path/'video.mp4').write_bytes(b'video')
@@ -74,10 +77,22 @@ class ContentHTTPTests(unittest.TestCase):
         with self.assertRaises(HTTPError) as e:urlopen(target)
         self.assertEqual(e.exception.code,404)
         with c.connect() as db:db.execute("UPDATE jobs SET status='complete'")
+        for request in (target,Request(target,headers={'Authorization':'Bearer wrong'})):
+            with self.assertRaises(HTTPError) as e:urlopen(request)
+            self.assertEqual(e.exception.code,401)
         with patch.object(c,'MAX_EGRESS_DAY',5):
-            self.assertEqual(urlopen(target).read(),b'video')
-            with self.assertRaises(HTTPError) as e:urlopen(target)
+            response=self.authorized(target)
+            self.assertEqual(response.read(),b'video')
+            self.assertEqual(response.headers['Cache-Control'],'private, no-store')
+            with self.assertRaises(HTTPError) as e:self.authorized(target)
             self.assertEqual(e.exception.code,429)
+    def test_missing_artifact_token_fails_closed(self):
+        c.ingest(self.jobs)
+        path=c.STATE/'artifacts'/self.m['id'];path.mkdir();(path/'video.mp4').write_bytes(b'video')
+        with c.connect() as db:db.execute("UPDATE jobs SET status='complete'")
+        with patch.dict(c.os.environ,{'CONTENT_ARTIFACT_TOKEN':''}):
+            with self.assertRaises(HTTPError) as e:urlopen(self.url+'/artifacts/'+self.m['id']+'/video.mp4')
+            self.assertEqual(e.exception.code,503)
     def test_traversal_and_arbitrary_files_unavailable(self):
         for path in ['/artifacts/../../queue.db','/queue.db','/artifacts/abc/secret.txt']:
             with self.assertRaises(HTTPError) as e:urlopen(self.url+path)
