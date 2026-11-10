@@ -17,6 +17,7 @@ jobs:
         run: python -m py_compile autonomous_cycle.py delivery_adapter.py scripts/*.py
       - name: Test consented autonomy routing
         run: |
+          python -m unittest discover -s tests -p 'test_revenue_cycle_consent.py' -v
           python -m unittest discover -s tests -p 'test_autonomous_cycle.py' -v
           python -m unittest discover -s tests -p 'test_delivery_adapter.py' -v
           python -m unittest discover -s tests -p 'test_opportunity_intake.py' -v
