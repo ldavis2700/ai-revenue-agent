@@ -273,7 +273,34 @@ Safe defaults require no owner action:
 The router never spends money, signs contracts, changes prices, charges customers, or permits unsolicited outreach. It emits a bounded, consent-verified dispatch queue for an authenticated delivery adapter, which must record successful delivery events idempotently. Until that adapter and an owned inbound endpoint are connected, the agent will continue analyzing and preparing work but cannot contact or close customers autonomously.
 
 
-### Authenticated delivery adapter
+### Fulfill paid setups before offering a managed plan
+
+A legacy `sale` event no longer means the setup has been delivered. Pending
+setups appear in `autonomous_cycle.py`'s `internal_work` queue as `fulfill_setup`,
+with `counts.pending_fulfillment` exposing the backlog. These are internal
+preparation tasks, not messages, owner-only decisions, or permission to modify
+customer systems. The queue does not itself build or deliver a setup.
+
+After actual delivery, record its evidence and the exact delivered artifact:
+
+```bash
+python3 scripts/setup_fulfillment.py LEAD_ID PAYMENT_EVENT_ID \
+  --artifact /path/to/delivered-artifact.zip \
+  --evidence-url https://provider.example/delivery-receipt \
+  --completed-at 2026-11-08T18:00:00-08:00
+```
+
+The recorder hashes the file and requires a matching positive, non-test legacy
+payment record for that customer, an HTTPS receipt, and a delivery timestamp
+between payment and now. Identical retries are idempotent; conflicting receipts
+are rejected. These are operator/provider-supplied records, not independent
+verification of the remote receipt. No revenue, charge, or payout is created.
+Generic email `delivered` events cannot complete a setup. Each recorded purchase
+needs its own delivery evidence. Marketing opt-outs retain internal fulfillment
+work while blocking upsells; refunded leads are excluded. Once all setup evidence
+is present, the optional managed offer remains review-only under existing routing.
+
+### Configure the authenticated delivery adapter
 
 When the owned inbound endpoint and sender are ready, configure the runtime with:
 

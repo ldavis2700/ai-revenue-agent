@@ -14,14 +14,17 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile Python
-        run: python -m py_compile autonomous_cycle.py delivery_adapter.py scripts/*.py
+        run: python -m py_compile autonomous_cycle.py delivery_adapter.py dispatch_recovery.py scripts/*.py
       - name: Test consented autonomy routing
         run: |
+          python -m unittest discover -s tests -p 'test_revenue_cycle_consent.py' -v
           python -m unittest discover -s tests -p 'test_autonomous_cycle.py' -v
+          python -m unittest discover -s tests -p 'test_dispatch_recovery.py' -v
           python -m unittest discover -s tests -p 'test_delivery_adapter.py' -v
           python -m unittest discover -s tests -p 'test_opportunity_intake.py' -v
           python -m unittest discover -s tests -p 'test_consignment_payout.py' -v
           python -m unittest discover -s tests -p 'test_notification_audit.py' -v
+          python -m unittest discover -s tests -p 'test_setup_fulfillment.py' -v
       - name: Smoke test referral attribution loop
         env:
           REVENUE_DB_PATH: /tmp/referral_agent.db
@@ -159,3 +162,4 @@ jobs:
         run: node --test tests/revenue_inbound_validation.test.mjs
       - name: Test Stripe revenue event normalization
         run: node --test tests/stripe_paid_event.test.mjs
+
