@@ -51,6 +51,10 @@ def init(db,week):
         db.execute("""UPDATE slots SET active=0 WHERE week=? AND
              id NOT IN (SELECT id FROM slots WHERE week=? ORDER BY id LIMIT ?) AND
              media_url IS NULL AND receipt IS NULL""",(week,week,WEEKLY_TARGET))
+        for item in rows:
+            db.execute("""UPDATE slots SET due_at=?,active=1 WHERE id=?
+                AND concept IS NULL AND media_url IS NULL AND receipt IS NULL""",
+                (item['due_at'],item['id']))
     return {'week':week,'planned_slots':WEEKLY_TARGET,
         'preserved_legacy_slots':db.execute('SELECT COUNT(*) FROM slots WHERE week=? AND active=0',(week,)).fetchone()[0],
         'timezone':str(TZ),'publication_receipts':db.execute('SELECT COUNT(*) FROM slots WHERE week=? AND receipt IS NOT NULL',(week,)).fetchone()[0]}
