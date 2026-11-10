@@ -14,7 +14,7 @@ class SelfImprovementTests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.db=sqlite3.connect(Path(self.temp.name)/'revenue.db')
+        self.db=sqlite3.connect(Path(self.temp.name)/'revenue.db', isolation_level=None)
         self.addCleanup(self.db.close)
         self.db.execute("CREATE TABLE revenue_worker_runs (id INTEGER PRIMARY KEY, status TEXT, stages_json TEXT)")
         self.db.execute("CREATE TABLE payment_receipts (receipt_id TEXT)")
