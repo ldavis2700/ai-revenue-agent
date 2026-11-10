@@ -19,6 +19,13 @@ jobs:
         run: |
           docker build -f Dockerfile.worker -t apex-worker-ci .
           docker run --rm --read-only --tmpfs /tmp --tmpfs /files/data:uid=10001,gid=10001 -e DELIVERY_ENABLED=false apex-worker-ci python revenue_worker.py --once
+      - name: Test persistent content queue
+        run: python -m unittest discover -s tests -p 'test_content_worker.py' -v
+      - name: Build and render with content container
+        timeout-minutes: 12
+        run: |
+          docker build -f Dockerfile.content -t apex-content-ci .
+          docker run --rm --memory=256m --cpus=1 --read-only --tmpfs /tmp --tmpfs /data apex-content-ci /app/content-entrypoint.sh --once
       - name: Test consented autonomy routing
         run: |
           python -m unittest discover -s tests -p 'test_revenue_cycle_consent.py' -v

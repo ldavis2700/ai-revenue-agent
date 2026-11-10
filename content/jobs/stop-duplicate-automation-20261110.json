@@ -1,0 +1,46 @@
+{
+  "id": "stop-duplicate-automation-20261110",
+  "title": "Stop Your Automation Sending the Same Message Twice",
+  "format": "vertical",
+  "audience": "adults",
+  "original": true,
+  "rights": "Original educational script and graphics created for RMC AI Workshop/APEX. Locally generated CMU Flite slt narration. No third-party photographs, music, or footage.",
+  "description": "A practical duplicate-prevention checklist for small-business automation. Use a stable event ID, persist the delivery result, and reconcile an uncertain outcome before retrying. Demonstration only: no customer messages are sent. Synthetic narration. This workflow improves reliability; it does not guarantee sales or exactly-once delivery across every provider.",
+  "scenes": [
+    {
+      "heading": "One request. Two messages?",
+      "text": "A timeout can hide a successful send.",
+      "narration": "Your automation sends a customer reply, then the connection drops. Did the send fail, or only the confirmation? Retrying blindly can send the same message twice."
+    },
+    {
+      "heading": "1. Name the event",
+      "text": "Fictional example: request-1042",
+      "narration": "Give the original request a stable event ID. Keep that same ID through retries. A new timestamp on every attempt makes one request look like several different jobs."
+    },
+    {
+      "heading": "2. Store the attempt",
+      "text": "Event ID + destination + action",
+      "narration": "Before sending, record the event ID, intended destination, and action in persistent storage. A database unique constraint can stop two workers from claiming the same action at once."
+    },
+    {
+      "heading": "3. Use provider protection",
+      "text": "Pass the same idempotency key when supported.",
+      "narration": "If your sending provider supports an idempotency key, pass the same key on every retry. Check its documentation for key lifetime and scope. Not every provider offers this protection."
+    },
+    {
+      "heading": "4. Keep the receipt",
+      "text": "Store the provider message ID and result.",
+      "narration": "After success, save the provider message ID and mark the action complete. On restart, check that durable record before doing the work again. A memory-only list will disappear."
+    },
+    {
+      "heading": "5. Treat unknown as unknown",
+      "text": "Reconcile before retrying an uncertain send.",
+      "narration": "If a timeout leaves the outcome uncertain, check the provider record before retrying. Without a receipt or provider protection, park the job for investigation instead of guessing."
+    },
+    {
+      "heading": "Test the awkward cases",
+      "text": "Duplicate input \u2022 timeout \u2022 worker restart",
+      "narration": "Test with fictional requests: submit a duplicate, interrupt a send, and restart the worker. Confirm one intended delivery. Follow RMC AI Workshop for practical automation lessons."
+    }
+  ]
+}
