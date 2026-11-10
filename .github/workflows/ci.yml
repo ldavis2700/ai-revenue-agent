@@ -19,6 +19,8 @@ jobs:
         run: |
           docker build -f Dockerfile.worker -t apex-worker-ci .
           docker run --rm --read-only --tmpfs /tmp --tmpfs /files/data:uid=10001,gid=10001 -e DELIVERY_ENABLED=false apex-worker-ci python revenue_worker.py --once
+      - name: Test weekly video planning
+        run: python -m unittest discover -s tests -p 'test_weekly_video_plan.py' -v
       - name: Test persistent content queue
         run: python -m unittest discover -s tests -p 'test_content_worker.py' -v
       - name: Build and render with content container
