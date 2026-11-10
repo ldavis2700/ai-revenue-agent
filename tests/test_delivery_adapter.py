@@ -1,10 +1,12 @@
 import os
+import json
 import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from delivery_adapter import deliver, idempotency_key, validate
+from free_delivery_fixture import free_policy
 
 
 class Response:
@@ -13,6 +15,10 @@ class Response:
 
 class DeliveryAdapterTests(unittest.TestCase):
     def setUp(self):
+        env = patch.dict(os.environ, {'DELIVERY_FREE_TIER_POLICY_JSON': json.dumps(
+            free_policy('https://delivery.example.test/send'))})
+        env.start()
+        self.addCleanup(env.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.path = os.path.join(self.tmp.name, "agent.db")
         conn = sqlite3.connect(self.path)
