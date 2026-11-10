@@ -59,7 +59,7 @@ def _choose_bottleneck(db):
                 else:
                     failures["unknown_stage_failure"]+=1
     if failures:
-        biggest=sorted(failures.items(),key=lambda p:(-p[1],p[0]))[0]
+        biggest=sorted(failures.items(),key=lambda p:(-p[1],p[0].startswith("cycle:"),p[0]))[0]
         return {"category":"reliability","evidence":f"{biggest[0]} observed in {biggest[1]} of {len(rows)} sampled cycles",
                 "next_test":"Reproduce this bounded failure with synthetic fixtures; add regression test, then prepare reviewed PR. Do not replay uncertain external effects."}
     if "payment_receipts" not in tables or "recurring_payment_receipts" not in tables:
