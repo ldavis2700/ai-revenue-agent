@@ -20,6 +20,51 @@ Configure with:
 
 ## Automated revenue loop
 
+### Continuous execution
+
+`revenue_worker.py` repeats the existing learning, Mission Control, and authorized
+inbound execution stages indefinitely. Zero revenue, an empty lead list, and a
+completed cycle do not end the worker. Each cycle uses persisted state to choose
+the next work; the default interval is 15 minutes. A failed stage does not starve
+the others. Repeated failures use bounded recovery delays of at most one hour.
+Each subprocess has a deadline, and an owner stop interrupts active work.
+
+```bash
+REVENUE_DB_PATH=/persistent/revenue_agent.db python revenue_worker.py
+# Inspect the worker without changing its state:
+REVENUE_DB_PATH=/persistent/revenue_agent.db python revenue_worker.py --status
+# Validate a single cycle instead of starting a persistent process:
+REVENUE_DB_PATH=/tmp/apex-check.db DELIVERY_ENABLED=false python revenue_worker.py --once
+```
+
+The persistent database records cycle results and a heartbeat. A process lock
+prevents overlapping workers on the same host/database. After a restart, unfinished
+cycles are marked interrupted; the existing dispatch journal prevents replay of
+uncertain deliveries. Worker history retains the most recent 1,000 cycles.
+Create `<database-path>.pause` to pause work without deleting queued data, and
+remove that file to resume. SIGTERM/SIGINT shut the worker down. No code removes
+an owner pause, bypasses a provider gate, or changes billing settings.
+
+On an **already verified free host**, the following command supplies persistent
+storage, a health check, and `unless-stopped` process
+restart. The worker uses Python's standard library; no paid model key is needed.
+
+```bash
+docker compose -f compose.worker.yml up -d --build
+```
+
+Use the same persistent database as inbound intake, and configure genuine free
+delivery evidence before enabling sends. Existing external-action and quota
+controls remain effective. Health means the worker is responsive, not that money
+was earned. Docker does not automatically restart a merely unhealthy container;
+host-level monitoring remains an operational requirement.
+
+This runner executes existing capabilities. It does not itself obtain platform
+credentials, publish YouTube videos, perform every fulfillment task, or collect
+payments without their integrations. Repository installation is not proof of a
+live worker: verify recurring cycles and recovery on the actual host. This change
+does not provision or activate hosting.
+
 1. Ingest leads from `LEADS_JSON` or `LEADS_API_URL`.
 2. Normalize and deduplicate prospects.
 3. Score each prospect for sales readiness.
