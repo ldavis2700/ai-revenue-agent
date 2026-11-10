@@ -18,3 +18,14 @@ export function normalizeLeadPayload(value) {
 
   return { payload, email, company, errors };
 }
+
+/** Insert one new request only. A repeated request must never reset an existing
+ * lead's processing status, revocation, or original consent audit record.
+ * The database has a unique (property_id, email_hash) constraint.
+ */
+export async function insertUniqueLead(table, record) {
+  return table.upsert(record, {
+    onConflict: "property_id,email_hash",
+    ignoreDuplicates: true,
+  }).select("id").maybeSingle();
+}

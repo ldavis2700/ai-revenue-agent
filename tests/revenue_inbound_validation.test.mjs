@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeLeadPayload, text } from "../supabase/functions/revenue-inbound/lead-intake.mjs";
+import { normalizeLeadPayload, text, insertUniqueLead } from "../supabase/functions/revenue-inbound/lead-intake.mjs";
 
 test("normalizes a valid consented lead", () => {
   const result = normalizeLeadPayload({
@@ -62,4 +62,51 @@ test("handles non-object JSON bodies without throwing", () => {
 test("trims and bounds stored text", () => {
   assert.equal(text("  abc  ", 10), "abc");
   assert.equal(text("123456", 4), "1234");
+});
+
+// Fake table simulates the existing unique (property_id,email_hash) constraint.
+// No customer records are read or written by this test.
+test("duplicate request preserves a revoked consent and processed status", async () => {
+  const original = { id: "existing", status: "opted_out", contact_allowed: false, pain_point: "old" };
+  let persisted = { ...original };
+  let options, selected;
+  const fakeTable = {
+    upsert(record, opts) {
+      options = opts;
+      return { select(column) {
+        selected = column;
+        return { async maybeSingle() {
+          if (persisted && opts.ignoreDuplicates) return { data: null, error: null };
+          persisted = { id: "new", ...record };
+          return { data: { id: persisted.id }, error: null };
+        }};
+      }};
+    },
+  };
+  const result = await insertUniqueLead(fakeTable, {
+    property_id: "003", email_hash: "hash", status: "new", contact_allowed: true, pain_point: "new",
+  });
+  assert.deepEqual(options, { onConflict: "property_id,email_hash", ignoreDuplicates: true });
+  assert.equal(selected, "id");
+  assert.deepEqual(result, { data: null, error: null });
+  assert.deepEqual(persisted, original);
+});
+
+test("first valid request still inserts and returns its new receipt", async () => {
+  let saved = null;
+  const fakeTable = {
+    upsert(record, opts) {
+      return { select() { return { async maybeSingle() {
+        assert.equal(opts.ignoreDuplicates, true);
+        saved = { id: "new", ...record };
+        return { data: { id: saved.id }, error: null };
+      }}; }};
+    },
+  };
+  const result = await insertUniqueLead(fakeTable, {
+    property_id: "003", email_hash: "newhash", status: "new", contact_allowed: true,
+  });
+  assert.equal(result.data.id, "new");
+  assert.equal(saved.status, "new");
+  assert.equal(saved.contact_allowed, true);
 });
