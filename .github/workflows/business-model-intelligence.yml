@@ -5,16 +5,20 @@ on:
     paths:
       - 'config/business_models.json'
       - 'scripts/business_model_intelligence.py'
+      - 'scripts/weekly_model_to_cash.py'
       - 'tests/test_business_model_intelligence.py'
+      - 'tests/test_weekly_model_to_cash.py'
       - '.github/workflows/business-model-intelligence.yml'
   push:
     branches: [main]
     paths:
       - 'config/business_models.json'
       - 'scripts/business_model_intelligence.py'
+      - 'scripts/weekly_model_to_cash.py'
       - 'tests/test_business_model_intelligence.py'
+      - 'tests/test_weekly_model_to_cash.py'
   schedule:
-    - cron: '17 8 * * *'
+    - cron: '17 8 * * 1'
   workflow_dispatch:
 
 concurrency:
@@ -32,9 +36,11 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile intelligence engine
-        run: python -m py_compile scripts/business_model_intelligence.py
+        run: python -m py_compile scripts/business_model_intelligence.py scripts/weekly_model_to_cash.py
       - name: Run intelligence tests
         run: python -m unittest discover -s tests -p 'test_business_model_intelligence.py' -v
+      - name: Test weekly buyer-evidence and conversion gates
+        run: python -m unittest discover -s tests -p 'test_weekly_model_to_cash.py' -v
       - name: Exercise low-cost autonomous portfolio ranking
         run: |
           python scripts/business_model_intelligence.py --limit 8 --max-startup-cost 3 --max-owner-effort 5 --max-compliance-risk 4 --min-speed-to-revenue 5 --min-automation 6 > /tmp/apex-models.json
