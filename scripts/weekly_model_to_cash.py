@@ -66,7 +66,32 @@ def evaluate(candidate, now=None):
             "estimate_is_collected_cash":False,"source_urls_operator_verified":False,
             "next_action":("Prepare a truthful scoped offer and tested delivery artifact; validate with a consenting buyer"
                            if not reasons else "Resolve the listed blockers and recheck current provider evidence"),
-            "external_action_executed":False,"receipt_verified":False}
+            "external_action_executed":False,"receipt_verified":False,
+            "recreation":recreation_gate(candidate)}
+
+def recreation_gate(candidate):
+    """Judge reproduction evidence without treating a public business idea as licensable IP.
+
+    This is a *documentation gate* only; the operator must independently
+    verify the original assets and checks against the trusted provider.
+    """
+    reasons=[]
+    if candidate.get("copied_proprietary_material") is not False:
+        reasons.append("independent_original_implementation_required")
+    if candidate.get("rights_verified") is not True:
+        reasons.append("rights_review_required")
+    artifact=candidate.get("delivery_artifact_sha256")
+    if not isinstance(artifact,str) or len(artifact)!=64 or any(c not in "0123456789abcdef" for c in artifact):
+        reasons.append("immutable_delivery_artifact_required")
+    qa=candidate.get("delivery_qa_evidence_url")
+    if not isinstance(qa,str) or not qa.startswith("https://"):
+        reasons.append("delivery_qa_receipt_required")
+    if candidate.get("actual_buyer_acceptance_verified") is not True:
+        reasons.append("real_buyer_acceptance_not_verified")
+    return {"state":"acceptance_evidence_supplied" if not reasons else "preparation_only",
+            "missing":reasons,"verified_by_this_code":False,
+            "external_delivery_performed":False,"settled_payment_verified":False}
+
 
 def weekly_report(candidates,now=None):
     if not isinstance(candidates,list):raise ValueError("candidates must be a list")
