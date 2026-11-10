@@ -1,5 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.111.0";
-import { normalizeLeadPayload, text } from "./lead-intake.mjs";
+import { normalizeLeadPayload, text, insertUniqueLead } from "./lead-intake.mjs";
 
 const MAX_BODY_BYTES = 16 * 1024;
 const PROPERTY_ID = "003";
@@ -77,7 +77,7 @@ Deno.serve(async (req: Request) => {
   const now = new Date().toISOString();
   const emailHash = await sha256(email);
   const supabase = createClient(url, secretKey, { auth: { persistSession: false } });
-  const { data, error } = await supabase.from("inbound_leads").upsert({
+  const { data, error } = await insertUniqueLead(supabase.from("inbound_leads"), {
     property_id: PROPERTY_ID,
     email,
     email_hash: emailHash,
@@ -94,8 +94,8 @@ Deno.serve(async (req: Request) => {
     consent_recorded_at: now,
     metadata: { campaign: text(leadPayload.campaign, 120) },
     updated_at: now,
-  }, { onConflict: "property_id,email_hash" }).select("id").single();
+  });
 
   if (error) return json({ accepted: false, errors: ["database_error"] }, 500, origin);
-  return json({ accepted: true, lead_id: data.id }, 202, origin);
+  return json({ accepted: true, lead_id: data?.id ?? null, previously_received: data === null }, 202, origin);
 });
