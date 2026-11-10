@@ -309,4 +309,31 @@ When the owned inbound endpoint and sender are ready, configure the runtime with
 - `DELIVERY_WEBHOOK_TOKEN=<server-side bearer token>`
 - `CONSENTED_INBOUND_DAILY_DELIVERY_CAP=20` (or a lower bounded value)
 
+The owner's free-only rule is enforced at the delivery network boundary.
+`DELIVERY_ENABLED=true` alone cannot send. Set `DELIVERY_FREE_TIER_POLICY_JSON`
+only after verifying the provider account is on a genuine free plan with zero
+upfront, recurring, and per-request costs and overages configured to stop rather
+than bill. This is trusted operator configuration; customer input must never set
+it. Do not populate it from assumptions or test fixtures.
+
+Required JSON fields are `plan` (`free`), `provider`, `account_id`, `endpoint`
+(the exact `DELIVERY_WEBHOOK_URL`), `overage_behavior` (`hard_stop`),
+`upfront_cost_cents`, `recurring_cost_cents`, and `request_cost_cents` (all integer
+zero), an HTTPS `evidence_url`, timezone-aware `verified_at` and `expires_at`
+(at most 24 hours apart), the provider's `period_start` and `period_end`, and an
+integer `request_limit`. Allocate the limit from the account's actual remaining
+free allowance, accounting for usage by other applications. The policy records
+verification; it does not fetch billing state or prove terms by itself. Renew
+evidence only after rechecking the account. No live account is configured by
+this code change.
+
+SQLite reserves each attempted request before contacting the provider. Failed
+and ambiguous attempts retain their reservation. Concurrent workers sharing the
+same persistent database cannot exceed the allocation; expired evidence,
+unknown costs, paid plans, and exhausted quotas block delivery. Overlapping
+quota windows or changes to an established limit cannot reset consumption.
+All workers for this account must use that same database. A successful duplicate
+receipt returns without consuming another slot. This control covers this Python
+delivery adapter, not unrelated services or a promise of continuous operation.
+
 The endpoint must accept a JSON payload containing `action` and `idempotency_key`, honor the `Idempotency-Key` header, and return a 2xx status only after durable acceptance. The adapter writes one local delivery receipt and lifecycle event only after that response. Duplicate actions, non-HTTPS endpoints, missing authentication, external lead sources, unsupported actions, and daily-cap overflow fail closed. Tokens are never printed or persisted.

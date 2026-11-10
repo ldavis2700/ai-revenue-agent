@@ -12,6 +12,7 @@ from unittest.mock import patch
 import autonomous_cycle
 import delivery_adapter
 from dispatch_recovery import dispatch_actions
+from free_delivery_fixture import free_policy
 
 
 class DispatchRecoveryTests(unittest.TestCase):
@@ -28,6 +29,7 @@ class DispatchRecoveryTests(unittest.TestCase):
             'CONSENTED_INBOUND_AUTOMATION_ENABLED': 'true',
             'REVENUE_AGENT_KILL_SWITCH': 'false',
             'CONSENTED_INBOUND_DAILY_DELIVERY_CAP': '20',
+            'DELIVERY_FREE_TIER_POLICY_JSON': json.dumps(free_policy('https://example.test/authorized-delivery')),
         })
         self.env.start()
         self.addCleanup(self.env.stop)

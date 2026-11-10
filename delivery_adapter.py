@@ -8,6 +8,8 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
+from free_delivery_policy import reserve_request
+
 DB_PATH = os.getenv("REVENUE_DB_PATH", "/files/data/revenue_agent.db")
 ALLOWED_ACTIONS = {"send_initial", "send_followup", "send_checkout", "send_managed_checkout"}
 OWNED_INBOUND_SOURCE = "owned_inbound_opt_in"
@@ -77,6 +79,12 @@ def deliver(action, path=DB_PATH, transport=None):
         ).fetchone()[0]
         if used >= cap:
             return {"status": "blocked", "reason": "daily_delivery_cap_reached", "lead_id": action.get("lead_id")}
+
+        # A boolean "spending_allowed=False" in a report is not a cost control.
+        # Reserve against verified free terms before contacting the provider.
+        allowed, reason = reserve_request(conn, endpoint)
+        if not allowed:
+            return {"status": "blocked", "reason": reason, "lead_id": action.get("lead_id")}
 
         body = json.dumps({"action": action, "idempotency_key": key}).encode()
         request = urllib.request.Request(
