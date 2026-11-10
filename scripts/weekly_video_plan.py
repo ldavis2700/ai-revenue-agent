@@ -40,24 +40,38 @@ def connect(path):
         db.execute('ALTER TABLE slots ADD COLUMN active INTEGER NOT NULL DEFAULT 1')
     return db
 
+def _has_started(row):
+    return any(row[key] is not None for key in
+               ('concept','job_id','media_url','qa_at','published_at','receipt','video_id'))
+
 def init(db,week):
-    rows=slots(week)
+    """Reconcile without resetting, deleting, or retiming any started weekly work."""
+    target=slots(week)
+    ids={item['id'] for item in target}
     with db:
         db.execute('INSERT OR IGNORE INTO weeks(week,channel) VALUES (?,?)',(week,CHANNEL))
-        db.executemany('INSERT OR IGNORE INTO slots(id,week,due_at) VALUES (?,?,?)',[(s['id'],week,s['due_at']) for s in rows])
-    # Never delete historical slots or receipts. Extra legacy slots become inactive
-    # unless they already contain a prepared artifact or a publication receipt.
-    with db:
-        db.execute("""UPDATE slots SET active=0 WHERE week=? AND
-             id NOT IN (SELECT id FROM slots WHERE week=? ORDER BY id LIMIT ?) AND
-             media_url IS NULL AND receipt IS NULL""",(week,week,WEEKLY_TARGET))
-        for item in rows:
-            db.execute("""UPDATE slots SET due_at=?,active=1 WHERE id=?
-                AND concept IS NULL AND media_url IS NULL AND receipt IS NULL""",
-                (item['due_at'],item['id']))
-    return {'week':week,'planned_slots':WEEKLY_TARGET,
-        'preserved_legacy_slots':db.execute('SELECT COUNT(*) FROM slots WHERE week=? AND active=0',(week,)).fetchone()[0],
-        'timezone':str(TZ),'publication_receipts':db.execute('SELECT COUNT(*) FROM slots WHERE week=? AND receipt IS NOT NULL',(week,)).fetchone()[0]}
+        db.executemany('INSERT OR IGNORE INTO slots(id,week,due_at) VALUES (?,?,?)',
+                       [(item['id'],week,item['due_at']) for item in target])
+        existing=list(db.execute('SELECT * FROM slots WHERE week=?',(week,)))
+        anything_started=any(_has_started(row) for row in existing)
+        for row in existing:
+            if row['id'] not in ids:
+                # Surplus historical rows are only deactivated if completely blank.
+                if not _has_started(row):
+                    db.execute('UPDATE slots SET active=0 WHERE id=?',(row['id'],))
+            elif not anything_started:
+                # Retime existing first-ten rows only when not one slot is underway.
+                desired=next(item['due_at'] for item in target if item['id']==row['id'])
+                db.execute('UPDATE slots SET due_at=?,active=1 WHERE id=?',
+                           (desired,row['id']))
+    rows=list(db.execute('SELECT * FROM slots WHERE week=?',(week,)))
+    live=sum(bool(row['active']) for row in rows)
+    return {'week':week,'target':WEEKLY_TARGET,'planned_slots':live,
+            'preserved_legacy_slots':sum(not bool(row['active']) for row in rows),
+            'started_surplus':sum(row['id'] not in ids and bool(row['active']) for row in rows),
+            'timezone':str(TZ),
+            'publication_receipts':sum(row['receipt'] is not None for row in rows)}
+
 
 def aware(value):
     dt=datetime.fromisoformat(value)
@@ -156,8 +170,8 @@ def receipt(db,slot,evidence):
 
 def status(db,week):
     rows=[dict(r) for r in db.execute('SELECT * FROM slots WHERE week=? ORDER BY due_at',(week,))]
-    return {'week':week,'target':WEEKLY_TARGET,'planned':sum(bool(r['active']) for r in rows),'concepts_assigned':sum(bool(r['concept']) for r in rows),
-            'media_ready':sum(bool(r['qa_at']) for r in rows),'publication_receipts':sum(bool(r['receipt']) for r in rows),
+    return {'week':week,'target':WEEKLY_TARGET,'planned':sum(bool(r['active']) for r in rows),'concepts_assigned':sum(bool(r['concept']) for r in rows if r['active']),
+            'media_ready':sum(bool(r['qa_at']) for r in rows if r['active']),'publication_receipts':sum(bool(r['receipt']) for r in rows),
             'payout_status':'unverified','publication_mode':'external_authorized_connector','slots':rows}
 
 def main():
