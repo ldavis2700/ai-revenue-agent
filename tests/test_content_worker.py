@@ -102,5 +102,20 @@ class ContentHTTPTests(unittest.TestCase):
         self.assertEqual(e.exception.code,503)
         with c.connect() as db:db.execute('INSERT INTO health VALUES (1,?)',(c.time.time(),))
         self.assertTrue(json.load(urlopen(self.url+'/health'))['healthy'])
+    def test_public_health_minimizes_job_data_and_diagnostics_require_auth(self):
+        c.ingest(self.jobs)
+        with c.connect() as db:db.execute('INSERT INTO health VALUES (1,?)',(c.time.time(),))
+        public=json.load(urlopen(self.url+'/health'))
+        self.assertNotIn('jobs',public)
+        self.assertEqual(public['queue'],{'total':1,'by_status':{'queued':1}})
+        for request in (self.url+'/admin/jobs',Request(self.url+'/admin/jobs',headers={'Authorization':'Bearer wrong'})):
+            with self.assertRaises(HTTPError) as e:urlopen(request)
+            self.assertEqual(e.exception.code,401)
+        detailed=json.load(self.authorized(self.url+'/admin/jobs'))
+        self.assertEqual(detailed['jobs'][0]['id'],self.m['id'])
+        with patch.dict(c.os.environ,{'CONTENT_ARTIFACT_TOKEN':''}):
+            with self.assertRaises(HTTPError) as e:urlopen(self.url+'/admin/jobs')
+            self.assertEqual(e.exception.code,503)
 
 if __name__=='__main__':unittest.main()
+
