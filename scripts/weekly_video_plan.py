@@ -83,7 +83,7 @@ def aware(value):
 def record_month(db,month,brief,now=None):
     """Record a dated research SAMPLE, not a global winner; never overwrite old evidence."""
     now=now or datetime.now(timezone.utc)
-    if not re.fullmatch(r'\\d{4}-\\d{2}',month):raise ValueError('invalid month')
+    if not re.fullmatch(r'\d{4}-\d{2}',month):raise ValueError('invalid month')
     if not isinstance(brief.get('genre'),str) or not brief['genre'].strip():raise ValueError('genre missing')
     observed=aware(brief['researched_at'])
     if not timedelta(0)<=now-observed<=timedelta(days=7):raise ValueError('research must be current')
@@ -92,7 +92,7 @@ def record_month(db,month,brief,now=None):
     if len(sources)<3 or len({s.get('channel_id') for s in sources if s.get('channel_id')})<3:
         raise ValueError('three independent channels required')
     for source in sources:
-        if not re.fullmatch(r'https://(www\\.)?youtube\\.com/watch\\?v=[A-Za-z0-9_-]{11}',source.get('url','')):
+        if not re.fullmatch(r'https://(www\.)?youtube\.com/watch\?v=[A-Za-z0-9_-]{11}',source.get('url','')):
             raise ValueError('canonical YouTube source URL required')
         if type(source.get('views')) is not int or source['views']<0:
             raise ValueError('observed views required')
