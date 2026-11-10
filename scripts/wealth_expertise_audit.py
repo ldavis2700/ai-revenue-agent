@@ -52,6 +52,12 @@ def recurring_contribution(db):
     if not has_columns(db,table,("recurring_payment_receipt_id","contribution_cents")):
         return {"state":"unavailable","positive_periods":None,"distinct_paid_periods":None}
     rows=db.execute(f"SELECT recurring_payment_receipt_id,contribution_cents FROM {table}").fetchall()
+    # Local contribution rows must link to an actual recurring receipt in this ledger.
+    if not has_columns(db,"recurring_payment_receipts",("receipt_id",)):
+        return {"state":"unavailable","positive_periods":None,"distinct_paid_periods":None}
+    linked={row[0] for row in db.execute("SELECT receipt_id FROM recurring_payment_receipts")}
+    if any(receipt not in linked for receipt,_ in rows):
+        return {"state":"unreconciled","positive_periods":None,"distinct_paid_periods":None}
     ids=set()
     positive=set()
     for receipt,contribution in rows:
@@ -70,6 +76,16 @@ def audit(db):
     one=valid_receipts(db,"payment_receipts")
     recurring=valid_receipts(db,"recurring_payment_receipts")
     economics=recurring_contribution(db)
+    # The same provider receipt must not be counted once as a setup payment and
+    # again as recurring cash, even when each table is internally consistent.
+    if one["state"]==recurring["state"]=="locally_reconciled":
+        one_ids={r[0] for r in db.execute("SELECT receipt_id FROM payment_receipts")}
+        recurring_ids={r[0] for r in db.execute("SELECT receipt_id FROM recurring_payment_receipts")}
+        if one_ids & recurring_ids:
+            for result in (one,recurring):
+                result.update(state="unreconciled",receipts=None,gross_cents=None,
+                              fees_cents=None,net_cents=None,
+                              integrity_issues=["cross_table_duplicate_receipt_id"])
     if one["state"]=="unreconciled" or recurring["state"]=="unreconciled" or economics["state"]=="unreconciled":
         next_step="Reconcile receipt IDs, amounts and period economics against original provider statements; quarantine uncertain results."
         stage="reconciliation_required"
