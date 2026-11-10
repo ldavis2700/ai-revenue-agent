@@ -97,6 +97,28 @@ class RevenueWorkerTests(unittest.TestCase):
         cycle.assert_not_called()
         self.assertTrue(worker.pause_file.exists())
 
+    def test_pause_transition_interrupts_long_backoff_without_unpausing(self):
+        worker = self.worker()
+        heartbeats = []
+        # The transition is simulated without removing or altering the
+        # actual owner pause file or kill switch.
+        with patch.object(worker, 'paused', side_effect=[False, False, True]), \
+             patch.object(worker, 'heartbeat', side_effect=lambda state: heartbeats.append(state)), \
+             patch.object(worker.stop, 'wait', return_value=False) as wait:
+            worker.wait(3600)
+        self.assertEqual(heartbeats, ['waiting', 'paused'])
+        self.assertEqual(wait.call_count, 1)
+
+    def test_resume_transition_interrupts_pause_sleep(self):
+        worker = self.worker()
+        heartbeats = []
+        with patch.object(worker, 'paused', side_effect=[True, True, False]), \
+             patch.object(worker, 'heartbeat', side_effect=lambda state: heartbeats.append(state)), \
+             patch.object(worker.stop, 'wait', return_value=False) as wait:
+            worker.wait(3600)
+        self.assertEqual(heartbeats, ['paused', 'waiting'])
+        self.assertEqual(wait.call_count, 1)
+
     def test_hung_stage_has_deadline_and_is_terminated(self):
         worker = self.worker(stage_timeout=1)
         worker.acquire()

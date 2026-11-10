@@ -138,9 +138,18 @@ class RevenueWorker:
         return {'run_id': run_id, 'status': status, 'stages': results}
 
     def wait(self, seconds):
+        """Wake promptly when the owner pauses or resumes, not after the backoff.
+
+        Never remove a pause file or override the kill switch. A transition
+        returns control to run(), which rechecks authoritative stop controls.
+        """
         deadline = time.monotonic() + seconds
+        initial_pause = self.paused()
         while not self.stop.is_set() and time.monotonic() < deadline:
-            self.heartbeat('paused' if self.paused() else 'waiting')
+            current_pause = self.paused()
+            self.heartbeat('paused' if current_pause else 'waiting')
+            if current_pause != initial_pause:
+                return
             self.stop.wait(min(15, max(0, deadline-time.monotonic())))
 
     def run(self, once=False):
