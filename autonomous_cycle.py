@@ -13,6 +13,7 @@ import sys
 from datetime import datetime, timezone
 
 from delivery_adapter import deliver
+from dispatch_recovery import dispatch_actions
 
 DB_PATH = os.getenv("REVENUE_DB_PATH", "/files/data/revenue_agent.db")
 AUTONOMY_ENABLED = os.getenv("CONSENTED_INBOUND_AUTOMATION_ENABLED", "true").lower() == "true"
@@ -44,6 +45,7 @@ def load_actions(path=DB_PATH):
         capture_output=True,
         text=True,
         env=env,
+        timeout=120,
     )
     return json.loads(result.stdout).get("actions", [])
 
@@ -89,7 +91,7 @@ def run(path=DB_PATH):
     internal_work = [action for action in actions if action.get('action') == 'fulfill_setup']
     messaging_actions = [action for action in actions if action.get('action') != 'fulfill_setup']
     autonomous, review, blocked = route(messaging_actions, lead_sources(path))
-    delivery_results = [deliver(action, path) for action in autonomous]
+    delivery_results = dispatch_actions(autonomous, path, deliver)
     return {
         "generated_at": now_iso(),
         "mode": "consented_inbound_autonomy" if AUTONOMY_ENABLED and not KILL_SWITCH else "paused",
@@ -98,12 +100,18 @@ def run(path=DB_PATH):
         "blocked": blocked,
         "delivery_results": delivery_results,
         "internal_work": internal_work,
+        "cycle_status": "needs_reconciliation" if any(
+            result["status"] == "uncertain" for result in delivery_results
+        ) else "completed",
         "counts": {
             "autonomous_dispatch": len(autonomous),
             "owner_review": len(review),
             "blocked": len(blocked),
             "delivered": sum(1 for result in delivery_results if result["status"] == "delivered"),
             "pending_fulfillment": len(internal_work),
+            "reconciliation_required": sum(
+                1 for result in delivery_results if result["status"] == "uncertain"
+            ),
         },
         "guardrails": {
             "owned_inbound_only": True,
@@ -117,3 +125,4 @@ def run(path=DB_PATH):
 
 if __name__ == "__main__":
     print(json.dumps(run()))
+
