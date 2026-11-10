@@ -1,0 +1,10 @@
+FROM python:3.12-slim
+RUN useradd --uid 10001 --create-home apex && mkdir -p /files/data /app && chown apex:apex /files/data /app
+WORKDIR /app
+COPY --chown=apex:apex revenue_worker.py autonomous_cycle.py delivery_adapter.py dispatch_recovery.py free_delivery_policy.py ./
+COPY --chown=apex:apex scripts/ ./scripts/
+COPY --chown=apex:apex config/ ./config/
+USER apex
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 REVENUE_DB_PATH=/files/data/revenue_agent.db
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 CMD ["python", "revenue_worker.py", "--status"]
+CMD ["python", "revenue_worker.py"]

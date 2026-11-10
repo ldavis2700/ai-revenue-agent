@@ -14,7 +14,11 @@ jobs:
         with:
           python-version: '3.12'
       - name: Compile Python
-        run: python -m py_compile autonomous_cycle.py delivery_adapter.py dispatch_recovery.py free_delivery_policy.py scripts/*.py
+        run: python -m py_compile revenue_worker.py autonomous_cycle.py delivery_adapter.py dispatch_recovery.py free_delivery_policy.py scripts/*.py
+      - name: Build and smoke test continuous worker container
+        run: |
+          docker build -f Dockerfile.worker -t apex-worker-ci .
+          docker run --rm --read-only --tmpfs /tmp --tmpfs /files/data:uid=10001,gid=10001 -e DELIVERY_ENABLED=false apex-worker-ci python revenue_worker.py --once
       - name: Test consented autonomy routing
         run: |
           python -m unittest discover -s tests -p 'test_revenue_cycle_consent.py' -v
@@ -22,6 +26,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_dispatch_recovery.py' -v
           python -m unittest discover -s tests -p 'test_delivery_adapter.py' -v
           python -m unittest discover -s tests -p 'test_free_delivery_policy.py' -v
+          python -m unittest discover -s tests -p 'test_revenue_worker.py' -v
           python -m unittest discover -s tests -p 'test_opportunity_intake.py' -v
           python -m unittest discover -s tests -p 'test_consignment_payout.py' -v
           python -m unittest discover -s tests -p 'test_notification_audit.py' -v

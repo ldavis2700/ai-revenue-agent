@@ -1,0 +1,27 @@
+# Run only on an already verified free host. This file does not provision hosting.
+services:
+  revenue-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 15s
+    read_only: true
+    tmpfs:
+      - /tmp
+    volumes:
+      - revenue_data:/files/data
+    environment:
+      REVENUE_DB_PATH: /files/data/revenue_agent.db
+      DELIVERY_ENABLED: ${DELIVERY_ENABLED:-false}
+      DELIVERY_WEBHOOK_URL: ${DELIVERY_WEBHOOK_URL:-}
+      DELIVERY_WEBHOOK_TOKEN: ${DELIVERY_WEBHOOK_TOKEN:-}
+      DELIVERY_FREE_TIER_POLICY_JSON: ${DELIVERY_FREE_TIER_POLICY_JSON:-}
+      REVENUE_AGENT_KILL_SWITCH: ${REVENUE_AGENT_KILL_SWITCH:-false}
+      CONSENTED_INBOUND_AUTOMATION_ENABLED: ${CONSENTED_INBOUND_AUTOMATION_ENABLED:-true}
+      CONSENTED_INBOUND_DAILY_DELIVERY_CAP: ${CONSENTED_INBOUND_DAILY_DELIVERY_CAP:-20}
+      CHECKOUT_URL_TEMPLATE: ${CHECKOUT_URL_TEMPLATE:-}
+      MANAGED_CHECKOUT_URL_TEMPLATE: ${MANAGED_CHECKOUT_URL_TEMPLATE:-}
+volumes:
+  revenue_data:
