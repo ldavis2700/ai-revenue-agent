@@ -75,6 +75,35 @@ active encoders; durable interrupted jobs resume after restart. Create `/data/co
 to pause rendering without deleting jobs. Remove it to resume. Never infer that
 lack of revenue is a stop condition.
 
+## Read-only release acceptance
+
+The combined APEX Response Lab/private-artifact revision includes a bounded,
+read-only HTTP preflight. It does **not** deploy code, send customer inquiries,
+activate checkout, publish media or prove a payout. After normal provider approval
+and isolated preview setup, run against the exact verified owned origin:
+
+```
+python scripts/verify_response_lab.py --origin https://apex-content-worker-production.up.railway.app --job-id stop-duplicate-automation-20261110
+```
+
+The private token is read **only** from the local `CONTENT_ARTIFACT_TOKEN`
+environment, never a command-line argument or output. Run this after the
+reviewed code is available at the chosen target; the older live deployment is
+expected to fail preflight. The script permits that exact Railway origin or
+a local `127.0.0.1` test server, and rejects redirects and other hosts before
+sending a credential. It checks the public academy, stylesheet, builder,
+privacy, paused checkout, aggregate-only health, inaccessible source/database,
+anonymous private-route denial and a known completed **manifest** with
+authorized credentials. The manifest GET consumes some of the existing
+bounded egress allowance; it does not download a video. Missing token or
+known job ID is **not** a passing release. A green local/HTTP preflight alone
+does not replace exact-commit CI, private-consumer authorization, Railway
+confirmation, rollback review, or actual receipt verification.
+
+The isolated regression suite is
+`python -m unittest discover -s tests -p test_verify_response_lab.py -v`.
+No customer or financial data is needed for it.
+
 ## Validation
 
 Run `python -m unittest discover -s tests -p test_content_worker.py -v`.
