@@ -99,6 +99,31 @@ class ContentHTTPTests(unittest.TestCase):
             with urlopen(self.url+path+'?utm_source=test') as response:
                 self.assertEqual(response.status,200)
                 self.assertIn(b'<!doctype html>',response.read().lower())
+    def test_academy_public_routes_and_assets_are_exactly_allowlisted(self):
+        for route in ['/academy', '/academy.html']:
+            with urlopen(self.url+route+'?utm_source=testing&checkout=https://evil.example') as response:
+                html=response.read().decode()
+                self.assertEqual(response.status,200)
+                self.assertIn('text/html',response.headers['Content-Type'])
+                self.assertIn('APEX Response Lab',html)
+                self.assertIn('Online checkout is paused',html)
+                self.assertIn(c.PUBLIC_ORIGIN+'/academy',html)
+                self.assertNotIn('https://evil.example',html)
+                self.assertNotIn('buy.stripe.com',html)
+        for route, mime, marker in [
+            ('/sales/academy.css','text/css',b'.hero'),
+            ('/sales/academy.js','application/javascript',b'apex-response-lab-progress-v1')
+        ]:
+            with urlopen(self.url+route) as response:
+                self.assertEqual(response.status,200)
+                self.assertIn(mime,response.headers['Content-Type'])
+                self.assertIn(marker,response.read())
+                self.assertEqual(response.headers['X-Content-Type-Options'],'nosniff')
+        for path in ['/sales/academy.html','/sales/../queue.db','/sales/offer.html']:
+            with self.assertRaises(HTTPError) as exc:
+                urlopen(self.url+path)
+            self.assertEqual(exc.exception.code,404)
+
     def test_public_pages_respect_shared_transfer_cap_without_breaking_health(self):
         with patch.object(c,'MAX_EGRESS_DAY',1):
             with self.assertRaises(HTTPError) as exc:urlopen(self.url+'/')
