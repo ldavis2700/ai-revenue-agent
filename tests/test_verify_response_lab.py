@@ -1,5 +1,6 @@
 """No-charge local acceptance tests for the APEX release verifier."""
 import importlib.util
+import hashlib
 from pathlib import Path
 import os
 import tempfile
@@ -30,7 +31,13 @@ class ReleaseVerifierTests(unittest.TestCase):
                        (worker.time.time(),))
         artifact = worker.STATE / 'artifacts' / 'safe-job'
         artifact.mkdir()
-        (artifact / 'manifest.json').write_text('{"id":"safe-job","status":"rendered_unpublished","bytes":4096,"sha256":"' + 'a'*64 + '"}')
+        self.video = artifact / 'video.mp4'
+        self.video_bytes = b'original-fictional-video-integrity-test-bytes'
+        self.video.write_bytes(self.video_bytes)
+        self.video_sha256 = hashlib.sha256(self.video_bytes).hexdigest()
+        (artifact / 'manifest.json').write_text(
+            '{"id":"safe-job","status":"rendered_unpublished","bytes":' +
+            str(len(self.video_bytes)) + ',"sha256":"' + self.video_sha256 + '"}')
         self.env = patch.dict(os.environ, {'CONTENT_ARTIFACT_TOKEN': 'test-content-token'})
         self.env.start()
         self.server = HTTPServer(('127.0.0.1', 0), worker.Handler)
@@ -51,6 +58,7 @@ class ReleaseVerifierTests(unittest.TestCase):
             result = verifier.inspect(self.origin, job_id='safe-job', token='test-content-token')
         self.assertTrue(result['ready'], result)
         self.assertTrue(all(check['ok'] for check in result['checks'].values()))
+        self.assertEqual(result['checks']['artifact_video_verified']['status'], 200)
 
     def test_missing_private_token_is_not_a_release_pass(self):
         with patch.dict(os.environ, {'CONTENT_ARTIFACT_TOKEN': ''}):
@@ -59,21 +67,23 @@ class ReleaseVerifierTests(unittest.TestCase):
         self.assertFalse(result['ready'])
         self.assertFalse(result['checks']['artifact_authorized']['ok'])
         self.assertEqual(result['checks']['artifact_denied']['status'], 503)
+        self.assertFalse(result['checks']['artifact_video_verified']['ok'])
 
     def test_no_private_job_id_is_not_a_release_pass(self):
         with patch.object(worker, 'reserve_egress', return_value=True):
             result = verifier.inspect(self.origin)
         self.assertFalse(result['ready'])
         self.assertEqual(result['checks']['artifact_authorized']['status'], 'not_tested_missing_job_id')
+        self.assertFalse(result['checks']['artifact_video_verified']['ok'])
 
     def test_incomplete_or_invalid_manifest_never_passes_private_acceptance(self):
         artifact = worker.STATE / 'artifacts' / 'safe-job' / 'manifest.json'
         valid = artifact.read_text()
         variations = [
             '{"id":"safe-job","status":"rendered_unpublished"}',
-            valid.replace('"bytes":4096', '"bytes":0'),
-            valid.replace('"bytes":4096', '"bytes":true'),
-            valid.replace('"sha256":"' + 'a'*64 + '"', '"sha256":"invalid"'),
+            valid.replace('"bytes":' + str(len(self.video_bytes)), '"bytes":0'),
+            valid.replace('"bytes":' + str(len(self.video_bytes)), '"bytes":true'),
+            valid.replace('"sha256":"' + self.video_sha256 + '"', '"sha256":"invalid"'),
             valid.replace('"rendered_unpublished"', '"queued"'),
         ]
         with patch.object(worker, 'reserve_egress', return_value=True):
@@ -84,6 +94,26 @@ class ReleaseVerifierTests(unittest.TestCase):
                     self.assertFalse(result['ready'], result)
                     self.assertEqual(result['checks']['artifact_authorized']['status'], 200)
                     self.assertFalse(result['checks']['artifact_authorized']['ok'])
+                    self.assertFalse(result['checks']['artifact_video_verified']['ok'])
+
+    def test_corrupted_video_bytes_fail_despite_valid_manifest(self):
+        with patch.object(worker, 'reserve_egress', return_value=True):
+            self.video.write_bytes(b'X' + self.video_bytes[1:])
+            result = verifier.inspect(self.origin, job_id='safe-job', token='test-content-token')
+        self.assertFalse(result['ready'], result)
+        self.assertTrue(result['checks']['artifact_authorized']['ok'])
+        self.assertFalse(result['checks']['artifact_video_verified']['ok'])
+        self.assertEqual(result['checks']['artifact_video_verified']['status'], 200)
+
+    def test_truncated_and_missing_private_video_fail(self):
+        with patch.object(worker, 'reserve_egress', return_value=True):
+            self.video.write_bytes(self.video_bytes[:-1])
+            short = verifier.inspect(self.origin, job_id='safe-job', token='test-content-token')
+            self.assertFalse(short['checks']['artifact_video_verified']['ok'])
+            self.video.unlink()
+            missing = verifier.inspect(self.origin, job_id='safe-job', token='test-content-token')
+        self.assertFalse(missing['ready'])
+        self.assertEqual(missing['checks']['artifact_video_verified']['status'], 404)
 
     def test_invalid_origin_and_job_fail_before_network(self):
         for origin in ['https://attacker.example', 'http://127.0.0.1:8080@attacker.example']:
