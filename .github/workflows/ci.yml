@@ -23,6 +23,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_weekly_video_plan.py' -v
       - name: Test consent-first customer-response pilot
         run: python -m unittest discover -s tests -p 'test_consent_first_inquiry_pilot.py' -v
+      - name: Test daily self-improvement review
+        run: python -m unittest discover -s tests -p 'test_self_improvement_cycle.py' -v
       - name: Test persistent content queue
         run: python -m unittest discover -s tests -p 'test_content_worker.py' -v
       - name: Build and render with content container
