@@ -7,7 +7,8 @@
     { "source": "/privacy", "destination": "/sales/privacy" },
     { "source": "/home-services", "destination": "/sales/home-services" },
     { "source": "/industries", "destination": "/sales/industries" },
-    { "source": "/partners", "destination": "/sales/partners" }
+    { "source": "/partners", "destination": "/sales/partners" },
+    { "source": "/academy", "destination": "/sales/academy" }
   ],
   "headers": [
     {

@@ -414,3 +414,14 @@ receipt returns without consuming another slot. This control covers this Python
 delivery adapter, not unrelated services or a promise of continuous operation.
 
 The endpoint must accept a JSON payload containing `action` and `idempotency_key`, honor the `Idempotency-Key` header, and return a 2xx status only after durable acceptance. The adapter writes one local delivery receipt and lifecycle event only after that response. Duplicate actions, non-HTTPS endpoints, missing authentication, external lead sources, unsupported actions, and daily-cap overflow fail closed. Tokens are never printed or persisted.
+
+## Owned training funnel
+
+`/academy` adds APEX Response Lab: four free lessons for cleaning businesses,
+a local template builder and worksheet download, and an attributed link to the
+existing consented preview form. No Kajabi subscription or new AI service is
+required. Checkout remains paused. See
+[the execution playbook](docs/business-models/owned-training-to-service.md) for
+validation milestones, payment dependencies, and the distinction between
+revenue targets and verified receipts. This is a free acquisition resource, not
+a paid course or evidence of live deployment or revenue.

@@ -38,10 +38,30 @@ immutable; content digests reject accidental duplicates with new IDs. The worker
 checks its local queue every five minutes, runs one render at a time and remains
 online when the queue is empty or earnings are zero.
 
-`/health` returns current queue status. Finished originals are downloadable at
-`/artifacts/<job-id>/video.mp4`, `captions.srt`, and `manifest.json`. Only completed
-artifacts are served, with an atomic persistent 100 MB/day transfer allowance.
-Artifacts contain no customer records or credentials. Publication is a separate
+`/health` exposes only aggregate queue counts; detailed `/admin/jobs` and
+`/artifacts/<job-id>/video.mp4`, `captions.srt`, and `manifest.json` require the
+private `Authorization: Bearer` token in `CONTENT_ARTIFACT_TOKEN`. If the token
+is absent, access fails closed. An unauthorized request cannot consume egress.
+Before deploying this reviewed change, provision that secret in the content
+worker's Railway environment and securely configure each approved consumer;
+do not commit, log or share the token in tickets. Do not change the live service
+until required provider approval and private-consumer acceptance pass.
+
+The no-redirect, no-overwrite operator client is
+`scripts/fetch_content_artifact.py`. With a securely configured local environment
+variable `CONTENT_ARTIFACT_TOKEN`, fetch a reviewed asset using:
+
+```
+python scripts/fetch_content_artifact.py stop-duplicate-automation-20261110 video.mp4 ./original.mp4 --sha256 <pre-recorded-sha256>
+```
+
+The script targets only the approved Railway host, never follows redirects,
+streams into an atomic temporary file, enforces a bounded size and optionally
+verifies the pre-recorded SHA-256 before committing the file. Its local nine-test
+suite runs with `python -m unittest discover -s tests -p test_fetch_content_artifact.py -v`.
+Only completed artifacts are served, with an atomic persistent 100 MB/day
+transfer allowance. Artifacts contain no customer records or credentials.
+Publication is a separate
 step using an authorized channel connector after visual/audio/claims checks;
 provider-required approvals must not be fabricated. Store each resulting post ID
 and URL to prevent duplicate publication. A completed render is not a published
@@ -54,6 +74,41 @@ other jobs continue. Attempts are separated by at least an hour. SIGTERM kills
 active encoders; durable interrupted jobs resume after restart. Create `/data/content/pause`
 to pause rendering without deleting jobs. Remove it to resume. Never infer that
 lack of revenue is a stop condition.
+
+## Read-only release acceptance
+
+The combined APEX Response Lab/private-artifact revision includes a bounded,
+read-only HTTP preflight. It does **not** deploy code, send customer inquiries,
+activate checkout, publish media or prove a payout. After normal provider approval
+and isolated preview setup, run against the exact verified owned origin:
+
+```
+python scripts/verify_response_lab.py --origin https://apex-content-worker-production.up.railway.app --job-id stop-duplicate-automation-20261110
+```
+
+The private token is read **only** from the local `CONTENT_ARTIFACT_TOKEN`
+environment, never a command-line argument or output. Run this after the
+reviewed code is available at the chosen target; the older live deployment is
+expected to fail preflight. The script permits that exact Railway origin or
+a local `127.0.0.1` test server, and rejects redirects and other hosts before
+sending a credential. It checks the public academy, stylesheet, builder,
+privacy, paused checkout, aggregate-only health, inaccessible source/database,
+anonymous private-route denial and a known completed **manifest and video** with
+authorized credentials. The verifier rejects incomplete manifest metadata
+(wrong job/status, missing or malformed video SHA-256, invalid byte size or
+non-JSON/private cache headers). It then streams the authenticated video,
+checks the MIME/cache headers and exact byte length, and verifies its actual
+SHA-256 against the manifest with a strict 30 MB bound. A passing HTTP 200 or
+metadata alone is not sufficient. This read-only check uses the existing bounded
+production egress allowance; it does not publish, save or decode media.
+Independent visual/audio/editorial and rights QA remain required before posting. Missing token or
+known job ID is **not** a passing release. A green local/HTTP preflight alone
+does not replace exact-commit CI, private-consumer authorization, Railway
+confirmation, rollback review, or actual receipt verification.
+
+The isolated regression suite is
+`python -m unittest discover -s tests -p test_verify_response_lab.py -v`.
+No customer or financial data is needed for it.
 
 ## Validation
 

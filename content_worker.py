@@ -3,6 +3,7 @@
 import argparse
 import fcntl
 import hashlib
+import hmac
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import os
@@ -28,6 +29,8 @@ PUBLIC_PAGES = {'/': 'offer.html', '/offer.html': 'offer.html'}
 for _page in ('privacy', 'home-services', 'industries', 'partners'):
     PUBLIC_PAGES['/' + _page] = _page + '.html'
     PUBLIC_PAGES['/' + _page + '.html'] = _page + '.html'
+PUBLIC_PAGES.update({'/academy': 'academy.html', '/academy.html': 'academy.html'})
+PUBLIC_ASSETS = {'/sales/academy.css': 'academy.css', '/sales/academy.js': 'academy.js'}
 
 def reserve_egress(size):
     """Keep public pages and existing media within the same daily transfer cap."""
@@ -195,29 +198,39 @@ def cycle(directory):
                 db.execute("UPDATE jobs SET status='failed',error='render_failed',updated=? WHERE id=?",(time.time(),m['id']))
             print(json.dumps({'event':'content_render_failed','id':m['id']}),flush=True)
 
-def health():
+def artifact_authorized(headers):
+    token=os.environ.get('CONTENT_ARTIFACT_TOKEN','')
+    authorization=headers.get('Authorization','')
+    prefix='Bearer '
+    return bool(token) and authorization.startswith(prefix) and hmac.compare_digest(authorization[len(prefix):],token)
+
+def health(include_jobs=False):
     # The heartbeat runs in a separate thread, so a wedged render can otherwise
     # appear healthy indefinitely. Render subprocesses are bounded to 30 minutes.
-    now = time.time()
+    now=time.time()
     with connect() as db:
-        jobs=[dict(r) for r in db.execute('SELECT id,status,attempts,artifact FROM jobs ORDER BY updated DESC LIMIT 50')]
+        counts={r['status']:r['count'] for r in db.execute('SELECT status,COUNT(*) AS count FROM jobs GROUP BY status')}
+        jobs=[dict(r) for r in db.execute('SELECT id,status,attempts,artifact FROM jobs ORDER BY updated DESC LIMIT 50')] if include_jobs else None
         heartbeat=db.execute('SELECT heartbeat FROM health WHERE id=1').fetchone()
         overdue=db.execute(
             "SELECT COUNT(*) FROM jobs WHERE status='rendering' AND updated<?",
             (now-1900,),
         ).fetchone()[0]
     alive=bool(heartbeat and 0 <= now-heartbeat[0] < 90)
-    return {'healthy':alive and not bool(overdue),
+    result={'healthy':alive and not bool(overdue),
             'rendering_overdue':bool(overdue),
             'paused':(STATE/'pause').exists(),
-            'jobs':jobs,'publishing':'separate_connector_required','paid_api_usage':False}
+            'queue':{'total':sum(counts.values()),'by_status':counts},
+            'publishing':'separate_connector_required','paid_api_usage':False}
+    if include_jobs:result['jobs']=jobs
+    return result
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):pass
     def do_GET(self):
         # Exact allowlist: never map arbitrary URLs onto the repository or /data.
         try:
-            public_page = PUBLIC_PAGES.get(urlsplit(self.path).path)
+            public_page = PUBLIC_PAGES.get(urlsplit(self.path).path) or PUBLIC_ASSETS.get(urlsplit(self.path).path)
         except ValueError:
             self.send_error(400);return
         if public_page:
@@ -233,7 +246,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(429);return
             self.connection.settimeout(10)
             self.send_response(200)
-            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Type', ('text/css; charset=utf-8' if public_page.endswith('.css') else 'application/javascript; charset=utf-8' if public_page.endswith('.js') else 'text/html; charset=utf-8'))
             self.send_header('Content-Length', str(len(body)))
             self.send_header('Cache-Control', 'public, max-age=300')
             self.send_header('X-Content-Type-Options', 'nosniff')
@@ -246,11 +259,23 @@ class Handler(BaseHTTPRequestHandler):
             except (OSError, TimeoutError):
                 pass
             return
-        if self.path=='/health':
-            result=health(); body=json.dumps(result).encode()
+        if self.path in ('/health','/admin/jobs'):
+            detailed=self.path=='/admin/jobs'
+            if detailed and not os.environ.get('CONTENT_ARTIFACT_TOKEN'):
+                self.send_error(503);return
+            if detailed and not artifact_authorized(self.headers):
+                self.send_response(401);self.send_header('WWW-Authenticate','Bearer');self.send_header('Content-Length','0');self.end_headers();return
+            result=health(include_jobs=detailed); body=json.dumps(result).encode()
             self.send_response(200 if result['healthy'] else 503);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
         match=re.fullmatch(r'/artifacts/([a-z0-9][a-z0-9-]{2,79})/(video.mp4|captions.srt|manifest.json)',self.path)
         if not match:self.send_error(404);return
+        # Authorize BEFORE reading queue state or probing the file system.
+        # Unauthenticated callers must not distinguish unpublished job IDs
+        # from nonexistent ones based on HTTP status or timing.
+        if not os.environ.get('CONTENT_ARTIFACT_TOKEN'):
+            self.send_error(503);return
+        if not artifact_authorized(self.headers):
+            self.send_response(401);self.send_header('WWW-Authenticate','Bearer');self.send_header('Content-Length','0');self.end_headers();return
         with connect() as db:
             row=db.execute("SELECT status FROM jobs WHERE id=?",(match[1],)).fetchone()
         path=STATE/'artifacts'/match[1]/match[2]
@@ -258,7 +283,8 @@ class Handler(BaseHTTPRequestHandler):
         size=path.stat().st_size
         if not reserve_egress(size):self.send_error(429);return
         self.connection.settimeout(10)
-        self.send_response(200);self.send_header('Content-Length',str(size));self.send_header('Content-Type','video/mp4' if match[2]=='video.mp4' else 'text/plain');self.end_headers()
+        content_type={'video.mp4':'video/mp4','captions.srt':'text/plain','manifest.json':'application/json'}[match[2]]
+        self.send_response(200);self.send_header('Content-Length',str(size));self.send_header('Content-Type',content_type);self.send_header('Cache-Control','private, no-store');self.end_headers()
         try:
             with path.open('rb') as source:shutil.copyfileobj(source,self.wfile,64*1024)
         except (OSError,TimeoutError):pass

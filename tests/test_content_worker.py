@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 from unittest.mock import patch
 
@@ -65,19 +65,53 @@ class ContentHTTPTests(unittest.TestCase):
         self.server=c.HTTPServer(('127.0.0.1',0),c.Handler)
         self.thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.thread.start()
         self.url='http://127.0.0.1:'+str(self.server.server_port)
+        self.token=patch.dict(c.os.environ,{'CONTENT_ARTIFACT_TOKEN':'test-content-token'},clear=False);self.token.start()
     def tearDown(self):
-        self.server.shutdown();self.server.server_close();self.thread.join();ContentWorkerTests.tearDown(self)
+        self.token.stop();self.server.shutdown();self.server.server_close();self.thread.join();ContentWorkerTests.tearDown(self)
+    def authorized(self,url,token='test-content-token'):
+        return urlopen(Request(url,headers={'Authorization':'Bearer '+token}))
     def test_artifact_visibility_and_daily_transfer_cap(self):
         c.ingest(self.jobs)
         path=c.STATE/'artifacts'/self.m['id'];path.mkdir();(path/'video.mp4').write_bytes(b'video')
         target=self.url+'/artifacts/'+self.m['id']+'/video.mp4'
-        with self.assertRaises(HTTPError) as e:urlopen(target)
+        # A caller with valid credentials can learn a job is not yet complete.
+        with self.assertRaises(HTTPError) as e:self.authorized(target)
         self.assertEqual(e.exception.code,404)
         with c.connect() as db:db.execute("UPDATE jobs SET status='complete'")
+        for request in (target,Request(target,headers={'Authorization':'Bearer wrong'})):
+            with self.assertRaises(HTTPError) as e:urlopen(request)
+            self.assertEqual(e.exception.code,401)
         with patch.object(c,'MAX_EGRESS_DAY',5):
-            self.assertEqual(urlopen(target).read(),b'video')
-            with self.assertRaises(HTTPError) as e:urlopen(target)
+            response=self.authorized(target)
+            self.assertEqual(response.read(),b'video')
+            self.assertEqual(response.headers['Cache-Control'],'private, no-store')
+            with self.assertRaises(HTTPError) as e:self.authorized(target)
             self.assertEqual(e.exception.code,429)
+    def test_anonymous_artifact_lookup_cannot_enumerate_unpublished_jobs(self):
+        c.ingest(self.jobs)
+        path=c.STATE/'artifacts'/self.m['id'];path.mkdir()
+        (path/'video.mp4').write_bytes(b'private')
+        with c.connect() as db:db.execute("UPDATE jobs SET status='complete'")
+        existing=self.url+'/artifacts/'+self.m['id']+'/video.mp4'
+        missing=self.url+'/artifacts/unknown-job/video.mp4'
+        for url in (existing,missing):
+            for request in (url,Request(url,headers={'Authorization':'Bearer wrong'})):
+                with self.assertRaises(HTTPError) as exc:urlopen(request)
+                self.assertEqual(exc.exception.code,401)
+            with patch.dict(c.os.environ,{'CONTENT_ARTIFACT_TOKEN':''}):
+                with self.assertRaises(HTTPError) as exc:urlopen(url)
+                self.assertEqual(exc.exception.code,503)
+        # After authentication, a genuinely missing job is still 404.
+        with self.assertRaises(HTTPError) as exc:self.authorized(missing)
+        self.assertEqual(exc.exception.code,404)
+
+    def test_missing_artifact_token_fails_closed(self):
+        c.ingest(self.jobs)
+        path=c.STATE/'artifacts'/self.m['id'];path.mkdir();(path/'video.mp4').write_bytes(b'video')
+        with c.connect() as db:db.execute("UPDATE jobs SET status='complete'")
+        with patch.dict(c.os.environ,{'CONTENT_ARTIFACT_TOKEN':''}):
+            with self.assertRaises(HTTPError) as e:urlopen(self.url+'/artifacts/'+self.m['id']+'/video.mp4')
+            self.assertEqual(e.exception.code,503)
     def test_traversal_and_arbitrary_files_unavailable(self):
         for path in ['/artifacts/../../queue.db','/queue.db','/artifacts/abc/secret.txt',
                      '/sales/offer.html', '/content_worker.py', '/privacy/../queue.db',
@@ -99,6 +133,45 @@ class ContentHTTPTests(unittest.TestCase):
             with urlopen(self.url+path+'?utm_source=test') as response:
                 self.assertEqual(response.status,200)
                 self.assertIn(b'<!doctype html>',response.read().lower())
+    def test_academy_public_routes_and_assets_are_exactly_allowlisted(self):
+        for route in ['/academy', '/academy.html']:
+            with urlopen(self.url+route+'?utm_source=testing&checkout=https://evil.example') as response:
+                html=response.read().decode()
+                self.assertEqual(response.status,200)
+                self.assertIn('text/html',response.headers['Content-Type'])
+                self.assertIn('APEX Response Lab',html)
+                self.assertIn('Online checkout is paused',html)
+                self.assertIn(c.PUBLIC_ORIGIN+'/academy',html)
+                self.assertNotIn('https://evil.example',html)
+                self.assertNotIn('buy.stripe.com',html)
+        for route, mime, marker in [
+            ('/sales/academy.css','text/css',b'.hero'),
+            ('/sales/academy.js','application/javascript',b'apex-response-lab-progress-v1')
+        ]:
+            with urlopen(self.url+route) as response:
+                self.assertEqual(response.status,200)
+                self.assertIn(mime,response.headers['Content-Type'])
+                self.assertIn(marker,response.read())
+                self.assertEqual(response.headers['X-Content-Type-Options'],'nosniff')
+        for path in ['/sales/academy.html','/sales/../queue.db','/sales/offer.html']:
+            with self.assertRaises(HTTPError) as exc:
+                urlopen(self.url+path)
+            self.assertEqual(exc.exception.code,404)
+
+    def test_public_response_lab_stays_available_without_private_artifact_token(self):
+        c.ingest(self.jobs)
+        artifact=c.STATE/'artifacts'/self.m['id'];artifact.mkdir()
+        (artifact/'video.mp4').write_bytes(b'private')
+        with c.connect() as db:db.execute("UPDATE jobs SET status='complete'")
+        with patch.dict(c.os.environ,{'CONTENT_ARTIFACT_TOKEN':''}):
+            for route in ['/academy','/sales/academy.css','/sales/academy.js']:
+                with urlopen(self.url+route) as response:
+                    self.assertEqual(response.status,200)
+                    self.assertGreater(len(response.read()),100)
+            for route in ['/artifacts/'+self.m['id']+'/video.mp4','/admin/jobs']:
+                with self.assertRaises(HTTPError) as exc:urlopen(self.url+route)
+                self.assertEqual(exc.exception.code,503)
+
     def test_public_pages_respect_shared_transfer_cap_without_breaking_health(self):
         with patch.object(c,'MAX_EGRESS_DAY',1):
             with self.assertRaises(HTTPError) as exc:urlopen(self.url+'/')
@@ -120,6 +193,20 @@ class ContentHTTPTests(unittest.TestCase):
         self.assertEqual(e.exception.code,503)
         with c.connect() as db:db.execute('INSERT INTO health VALUES (1,?)',(c.time.time(),))
         self.assertTrue(json.load(urlopen(self.url+'/health'))['healthy'])
+    def test_public_health_minimizes_job_data_and_diagnostics_require_auth(self):
+        c.ingest(self.jobs)
+        with c.connect() as db:db.execute('INSERT INTO health VALUES (1,?)',(c.time.time(),))
+        public=json.load(urlopen(self.url+'/health'))
+        self.assertNotIn('jobs',public)
+        self.assertEqual(public['queue'],{'total':1,'by_status':{'queued':1}})
+        for request in (self.url+'/admin/jobs',Request(self.url+'/admin/jobs',headers={'Authorization':'Bearer wrong'})):
+            with self.assertRaises(HTTPError) as e:urlopen(request)
+            self.assertEqual(e.exception.code,401)
+        detailed=json.load(self.authorized(self.url+'/admin/jobs'))
+        self.assertEqual(detailed['jobs'][0]['id'],self.m['id'])
+        with patch.dict(c.os.environ,{'CONTENT_ARTIFACT_TOKEN':''}):
+            with self.assertRaises(HTTPError) as e:urlopen(self.url+'/admin/jobs')
+            self.assertEqual(e.exception.code,503)
     def test_stalled_render_is_unhealthy_despite_fresh_heartbeat(self):
         c.ingest(self.jobs)
         with c.connect() as db:
@@ -132,6 +219,7 @@ class ContentHTTPTests(unittest.TestCase):
         details=json.load(exc.exception)
         self.assertTrue(details['rendering_overdue'])
         self.assertFalse(details['healthy'])
+        self.assertNotIn('jobs',details)
 
     def test_active_render_remains_healthy(self):
         c.ingest(self.jobs)
@@ -142,6 +230,7 @@ class ContentHTTPTests(unittest.TestCase):
         details=json.load(urlopen(self.url+'/health'))
         self.assertTrue(details['healthy'])
         self.assertFalse(details['rendering_overdue'])
+        self.assertNotIn('jobs',details)
 
 
 if __name__=='__main__':unittest.main()
