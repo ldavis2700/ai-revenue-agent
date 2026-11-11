@@ -167,11 +167,15 @@ def _record_receipt(path, payload, response):
             recorded_at TEXT NOT NULL
         )""")
         earlier = db.execute(
-            "SELECT payload_sha256 FROM apex_ultra_handoff_receipts "
+            "SELECT payload_sha256,request_id,task_id "
+            "FROM apex_ultra_handoff_receipts "
             "WHERE idempotency_key=?", (payload["idempotency_key"],)
         ).fetchone()
         if earlier and earlier[0] != payload_digest:
             raise HandoffError("local_idempotency_identity_mismatch")
+        if earlier and (earlier[1] != response["id"] or
+                        earlier[2] != response["task_id"]):
+            raise HandoffError("provider_receipt_identity_mismatch")
         db.execute("""INSERT INTO apex_ultra_handoff_receipts
             (idempotency_key,payload_sha256,request_id,task_id,
              business_case_id,project,status,deduplicated,recorded_at)
