@@ -1,5 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.111.0";
-import { normalizeLeadPayload, text, insertUniqueLead, readBoundedJson } from "./lead-intake.mjs";
+import { normalizeLeadPayload, text, insertUniqueLead, readBoundedJson, isAllowedLeadOrigin } from "./lead-intake.mjs";
 
 const MAX_BODY_BYTES = 16 * 1024;
 const PROPERTY_ID = "003";
@@ -9,13 +9,8 @@ function getSecretKey() {
   return raw ? JSON.parse(raw)?.default : Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 }
 
-function allowedOrigins() {
-  return new Set(["https://ai-revenue-agent-seven.vercel.app"]);
-}
-
 function headers(origin = "") {
-  const allowed = allowedOrigins();
-  const cors = origin && allowed.has(origin)
+  const cors = isAllowedLeadOrigin(origin)
     ? { "access-control-allow-origin": origin, "vary": "Origin" }
     : {};
   return {
@@ -38,9 +33,7 @@ async function sha256(value: string) {
 
 Deno.serve(async (req: Request) => {
   const origin = req.headers.get("origin") ?? "";
-  const allowed = allowedOrigins();
-
-  if (!origin || !allowed.has(origin)) {
+  if (!isAllowedLeadOrigin(origin)) {
     return json({ accepted: false, errors: ["origin_not_allowed"] }, 403);
   }
   if (req.method === "OPTIONS") {

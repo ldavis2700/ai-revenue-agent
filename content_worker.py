@@ -16,12 +16,32 @@ import tempfile
 import textwrap
 import threading
 import time
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parent
 STATE = Path(os.environ.get('CONTENT_STATE_DIR', '/data/content'))
 STOP = threading.Event()
 MAX_DISK = 600_000_000
 MAX_EGRESS_DAY = 100_000_000
+PUBLIC_ORIGIN = 'https://apex-content-worker-production.up.railway.app'
+PUBLIC_PAGES = {'/': 'offer.html', '/offer.html': 'offer.html'}
+for _page in ('privacy', 'home-services', 'industries', 'partners'):
+    PUBLIC_PAGES['/' + _page] = _page + '.html'
+    PUBLIC_PAGES['/' + _page + '.html'] = _page + '.html'
+
+def reserve_egress(size):
+    """Keep public pages and existing media within the same daily transfer cap."""
+    day = time.strftime('%Y-%m-%d', time.gmtime())
+    with connect() as db:
+        db.execute('BEGIN IMMEDIATE')
+        db.execute('INSERT OR IGNORE INTO egress VALUES (?,0)', (day,))
+        used = db.execute('SELECT bytes FROM egress WHERE day=?', (day,)).fetchone()[0]
+        if used + size > MAX_EGRESS_DAY:
+            return False
+        db.execute('UPDATE egress SET bytes=bytes+? WHERE day=?', (size, day))
+        db.execute('DELETE FROM egress WHERE day<?',
+                   (time.strftime('%Y-%m-%d', time.gmtime(time.time()-86400*7)),))
+    return True
 
 def connect():
     db = sqlite3.connect(STATE / 'queue.db', timeout=15)
@@ -195,6 +215,37 @@ def health():
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):pass
     def do_GET(self):
+        # Exact allowlist: never map arbitrary URLs onto the repository or /data.
+        try:
+            public_page = PUBLIC_PAGES.get(urlsplit(self.path).path)
+        except ValueError:
+            self.send_error(400);return
+        if public_page:
+            try:
+                with (ROOT/'sales'/public_page).open('rb') as source:
+                    body = source.read(100_001)
+            except OSError:
+                self.send_error(503);return
+            if len(body) > 100_000:
+                self.send_error(503);return
+            body = body.replace(b'https://ai-revenue-agent-seven.vercel.app', PUBLIC_ORIGIN.encode())
+            if not reserve_egress(len(body)):
+                self.send_error(429);return
+            self.connection.settimeout(10)
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'public, max-age=300')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('Referrer-Policy', 'strict-origin-when-cross-origin')
+            self.send_header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+            self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src https://wuzmqruxdclstezitsbf.supabase.co; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (OSError, TimeoutError):
+                pass
+            return
         if self.path=='/health':
             result=health(); body=json.dumps(result).encode()
             self.send_response(200 if result['healthy'] else 503);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
@@ -204,14 +255,8 @@ class Handler(BaseHTTPRequestHandler):
             row=db.execute("SELECT status FROM jobs WHERE id=?",(match[1],)).fetchone()
         path=STATE/'artifacts'/match[1]/match[2]
         if not row or row['status']!='complete' or not path.is_file():self.send_error(404);return
-        size=path.stat().st_size; day=time.strftime('%Y-%m-%d',time.gmtime())
-        with connect() as db:
-            db.execute('BEGIN IMMEDIATE')
-            db.execute('INSERT OR IGNORE INTO egress VALUES (?,0)',(day,))
-            used=db.execute('SELECT bytes FROM egress WHERE day=?',(day,)).fetchone()[0]
-            if used+size>MAX_EGRESS_DAY:self.send_error(429);return
-            db.execute('UPDATE egress SET bytes=bytes+? WHERE day=?',(size,day))
-            db.execute('DELETE FROM egress WHERE day<?',(time.strftime('%Y-%m-%d',time.gmtime(time.time()-86400*7)),))
+        size=path.stat().st_size
+        if not reserve_egress(size):self.send_error(429);return
         self.connection.settimeout(10)
         self.send_response(200);self.send_header('Content-Length',str(size));self.send_header('Content-Type','video/mp4' if match[2]=='video.mp4' else 'text/plain');self.end_headers()
         try:

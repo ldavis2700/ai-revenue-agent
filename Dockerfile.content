@@ -3,6 +3,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 python3
 WORKDIR /app
 COPY content_worker.py ./
 COPY content/jobs/ ./content/jobs/
+COPY sales/*.html ./sales/
 COPY content-entrypoint.sh ./
 RUN chmod 755 /app/content-entrypoint.sh
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 CONTENT_STATE_DIR=/data/content PORT=8080

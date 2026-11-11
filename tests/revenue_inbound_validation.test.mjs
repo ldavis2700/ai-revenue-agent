@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeLeadPayload, text, insertUniqueLead, readBoundedJson } from "../supabase/functions/revenue-inbound/lead-intake.mjs";
+import { normalizeLeadPayload, text, insertUniqueLead, readBoundedJson, isAllowedLeadOrigin } from "../supabase/functions/revenue-inbound/lead-intake.mjs";
+
+test("permits only the exact owned offer origins", () => {
+  assert.equal(isAllowedLeadOrigin("https://ai-revenue-agent-seven.vercel.app"), true);
+  assert.equal(isAllowedLeadOrigin("https://apex-content-worker-production.up.railway.app"), true);
+  for (const origin of ["", null, "null", "https://evil.example", "http://apex-content-worker-production.up.railway.app",
+    "https://apex-content-worker-production.up.railway.app.evil.example",
+    "https://apex-content-worker-production.up.railway.app/", "https://other.up.railway.app"]) {
+    assert.equal(isAllowedLeadOrigin(origin), false);
+  }
+});
 
 test("normalizes a valid consented lead", () => {
   const result = normalizeLeadPayload({
