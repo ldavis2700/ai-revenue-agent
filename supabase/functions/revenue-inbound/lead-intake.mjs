@@ -1,5 +1,10 @@
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+export function isAllowedLeadOrigin(origin) {
+  return origin === "https://ai-revenue-agent-seven.vercel.app"
+    || origin === "https://apex-content-worker-production.up.railway.app";
+}
+
 export function text(value, max = 500) {
   return String(value ?? "").trim().slice(0, max);
 }

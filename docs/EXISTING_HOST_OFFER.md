@@ -37,6 +37,12 @@ buyers or test receipts. A bare invalid request returning a network/proxy 403 is
 not evidence of application validation. Merchant identity, non-Stripe collection,
 buyer acceptance and genuine settlement remain separate commercial dependencies.
 
+Release the matching inbound function allowlist update before directing traffic:
+it permits the exact existing Railway origin as well as the legacy Vercel origin,
+not arbitrary subdomains. Consent, bounded bodies and duplicate/opt-out protection
+remain unchanged. Validate OPTIONS and invalid JSON/consent with an explicit
+allowed Origin header; missing Origin is intentionally rejected with 403.
+
 After successful live verification, use the Railway URL in new approved
 distribution. Existing Vercel links are not fixed by this deployment; separately
 retire or redirect them through authorized controls. Keep checkout paused until
