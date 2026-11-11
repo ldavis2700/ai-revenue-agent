@@ -69,6 +69,29 @@ jobs:
           test "$status" = "400"
           grep -F '"error":"invalid_signature"' /tmp/stripe-revenue-response.json
 
+      - name: Verify live chunked oversized requests fail before signature validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          endpoint="https://${SUPABASE_PROJECT_ID}.supabase.co/functions/v1/stripe-revenue"
+          python3 - <<'PY'
+          from pathlib import Path
+          Path("/tmp/stripe-revenue-oversized.json").write_bytes(
+              b'{"padding":"' + b'x' * (256 * 1024) + b'"}'
+          )
+          PY
+          # The explicit chunked encoding deliberately omits Content-Length:
+          # verifying the actual stream limit, not only header validation.
+          status="$(curl --http1.1 --silent --show-error --max-time 30 \
+            --output /tmp/stripe-revenue-oversized-response.json --write-out '%{http_code}' \
+            --request POST "$endpoint" \
+            --header 'content-type: application/json' \
+            --header 'Transfer-Encoding: chunked' \
+            --header 'Content-Length:' \
+            --data-binary @/tmp/stripe-revenue-oversized.json)"
+          test "$status" = "413"
+          grep -F '"error":"invalid_body_size"' /tmp/stripe-revenue-oversized-response.json
+
       - name: Record deployed commit
         run: |
           {
@@ -78,4 +101,5 @@ jobs:
             echo "- Function: \`stripe-revenue\`"
             echo "- Project: \`${SUPABASE_PROJECT_ID}\`"
             echo "- Signature enforcement smoke test: passed"
+            echo "- Missing-Content-Length chunked body size enforcement: passed"
           } >> "$GITHUB_STEP_SUMMARY"
