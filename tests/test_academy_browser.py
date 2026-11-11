@@ -38,6 +38,32 @@ window.addEventListener('DOMContentLoaded', function () {
       document.getElementById('reply-inquiry').textContent.includes('QA Cleaning Company') &&
       document.getElementById('reply-handoff').textContent.includes('QA Cleaning Company');
   });
+  checks.untrustedBusinessName = error(() => {
+    const form = document.getElementById('builder');
+    const untrusted = 'Example <img src=x onerror=alert(1)> & Sons';
+    const originalFetch = window.fetch;
+    const originalXhrOpen = XMLHttpRequest.prototype.open;
+    let attemptedNetworkCalls = 0;
+    window.fetch = (...args) => { attemptedNetworkCalls++; return originalFetch(...args); };
+    XMLHttpRequest.prototype.open = function (...args) {
+      attemptedNetworkCalls++;
+      return originalXhrOpen.apply(this, args);
+    };
+    try {
+      form.elements.business.value = untrusted;
+      form.dispatchEvent(new Event('input', { bubbles: true }));
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+      const output = document.getElementById('reply-inquiry');
+      const stored = Object.keys(localStorage).map(key => localStorage.getItem(key)).join(' ');
+      return output.textContent.includes(untrusted) &&
+        output.querySelector('img') === null &&
+        !stored.includes(untrusted) &&
+        attemptedNetworkCalls === 0;
+    } finally {
+      window.fetch = originalFetch;
+      XMLHttpRequest.prototype.open = originalXhrOpen;
+    }
+  });
   checks.checklist = error(() => {
     const item = document.querySelector('[data-lesson]');
     item.checked = true;
@@ -115,7 +141,7 @@ class AcademyBrowserTests(unittest.TestCase):
         self.assertEqual(checks['checkoutLinks'], 0)
         self.assertEqual(checks['canonical'], worker.PUBLIC_ORIGIN + '/academy')
         self.assertIn('utm_source=academy', checks['leadLink'])
-        for key in ('builder', 'checklist', 'download'):
+        for key in ('builder', 'untrustedBusinessName', 'checklist', 'download'):
             self.assertIs(checks[key], True, checks)
         if width < 720:
             self.assertLessEqual(checks['viewport'], 720, checks)
