@@ -176,10 +176,21 @@ def cycle(directory):
             print(json.dumps({'event':'content_render_failed','id':m['id']}),flush=True)
 
 def health():
+    # The heartbeat runs in a separate thread, so a wedged render can otherwise
+    # appear healthy indefinitely. Render subprocesses are bounded to 30 minutes.
+    now = time.time()
     with connect() as db:
         jobs=[dict(r) for r in db.execute('SELECT id,status,attempts,artifact FROM jobs ORDER BY updated DESC LIMIT 50')]
         heartbeat=db.execute('SELECT heartbeat FROM health WHERE id=1').fetchone()
-    return {'healthy':bool(heartbeat and time.time()-heartbeat[0]<90),'paused':(STATE/'pause').exists(),'jobs':jobs,'publishing':'separate_connector_required','paid_api_usage':False}
+        overdue=db.execute(
+            "SELECT COUNT(*) FROM jobs WHERE status='rendering' AND updated<?",
+            (now-1900,),
+        ).fetchone()[0]
+    alive=bool(heartbeat and 0 <= now-heartbeat[0] < 90)
+    return {'healthy':alive and not bool(overdue),
+            'rendering_overdue':bool(overdue),
+            'paused':(STATE/'pause').exists(),
+            'jobs':jobs,'publishing':'separate_connector_required','paid_api_usage':False}
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):pass
