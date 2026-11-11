@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { normalizeLeadPayload, text, insertUniqueLead } from "../supabase/functions/revenue-inbound/lead-intake.mjs";
+import { normalizeLeadPayload, text, insertUniqueLead, readBoundedJson } from "../supabase/functions/revenue-inbound/lead-intake.mjs";
 
 test("normalizes a valid consented lead", () => {
   const result = normalizeLeadPayload({
@@ -109,4 +109,58 @@ test("first valid request still inserts and returns its new receipt", async () =
   assert.equal(result.data.id, "new");
   assert.equal(saved.status, "new");
   assert.equal(saved.contact_allowed, true);
+});
+
+
+test("public intake accepts well-formed JSON and an exact-size body", async () => {
+  const max = 16 * 1024;
+  const body = JSON.stringify({ x: "a".repeat(max - 8) });
+  assert.equal(Buffer.byteLength(body), max);
+  const req = new Request("https://example.test/", { method: "POST", body });
+  const parsed = await readBoundedJson(req, max);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.value.x.length, max - 8);
+});
+
+test("public intake rejects oversized stream even with no Content-Length", async () => {
+  const max = 16 * 1024;
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(JSON.stringify({ x: "x".repeat(max) })));
+      controller.close();
+    },
+  });
+  const req = new Request("https://example.test/", { method: "POST", body: stream, duplex: "half" });
+  assert.equal(req.headers.has("content-length"), false);
+  assert.deepEqual(await readBoundedJson(req, max), {
+    ok: false, status: 413, error: "invalid_body_size",
+  });
+});
+
+test("public intake rejects oversized declared length without parsing", async () => {
+  const max = 16 * 1024;
+  const req = new Request("https://example.test/", {
+    method: "POST", body: "{}", headers: { "content-length": String(max + 1) },
+  });
+  assert.deepEqual(await readBoundedJson(req, max), {
+    ok: false, status: 413, error: "invalid_body_size",
+  });
+});
+
+test("public intake rejects malformed JSON and invalid UTF-8", async () => {
+  const max = 16 * 1024;
+  const badJson = new Request("https://example.test/", { method: "POST", body: "{oops" });
+  assert.deepEqual(await readBoundedJson(badJson, max), {
+    ok: false, status: 400, error: "invalid_json",
+  });
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array([255, 254]));
+      controller.close();
+    },
+  });
+  const invalidUtf8 = new Request("https://example.test/", { method: "POST", body: stream, duplex: "half" });
+  assert.deepEqual(await readBoundedJson(invalidUtf8, max), {
+    ok: false, status: 400, error: "invalid_json",
+  });
 });
