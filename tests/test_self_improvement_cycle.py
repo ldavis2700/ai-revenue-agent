@@ -28,6 +28,27 @@ class SelfImprovementTests(unittest.TestCase):
         self.assertEqual(self.db.execute('SELECT COUNT(*) FROM apex_self_improvement_reviews').fetchone()[0],1)
         self.assertEqual(first['priority'],'runtime_observability')
 
+    def test_in_progress_cycle_is_not_completed_work(self):
+        # The self-review stage executes while its own run is still "running".
+        self.db.execute("INSERT INTO revenue_worker_runs VALUES (1,'running','[]')")
+        result=review.record_review(self.db,'2026-11-10')
+        self.assertEqual(result['priority'],'runtime_observability')
+        self.assertIn('zero finalized production cycles',result['evidence'])
+
+    def test_in_progress_cycle_not_in_finished_cycle_count(self):
+        self.db.execute("INSERT INTO revenue_worker_runs VALUES (1,'completed','[]')")
+        self.db.execute("INSERT INTO revenue_worker_runs VALUES (2,'running','[]')")
+        result=review.record_review(self.db,'2026-11-10')
+        self.assertEqual(result['priority'],'first_paid_delivery')
+        self.assertIn('1 recorded cycles',result['evidence'])
+
+    def test_unrecognized_terminal_cycle_status_is_integrity_failure(self):
+        self.db.execute("INSERT INTO revenue_worker_runs VALUES (1,'settled','[]')")
+        result=review.record_review(self.db,'2026-11-10')
+        self.assertEqual(result['priority'],'reliability')
+        self.assertIn('invalid_cycle_status',result['evidence'])
+        self.assertNotIn('settled',result['evidence'])
+
     def test_failed_stage_prioritized_over_research(self):
         self.db.execute("INSERT INTO revenue_worker_runs VALUES (1,'degraded',?)",
                         ('[{"stage":"learn","status":"failed"},{"stage":"plan","status":"completed"}]',))
