@@ -115,4 +115,76 @@ class WeeklyModelTests(unittest.TestCase):
   x=w.weekly_report(items,self.now)
   self.assertEqual(len(x["ranked_preparation_candidates"]),2)
 
+ def learning_evidence(self):
+  return {topic:{"finding":"Documented current requirement and practical delivery lesson",
+                 "next_action":"Run the scoped delivery acceptance test",
+                 "source_urls":["https://example.org/official-evidence"],
+                 "checked_at":self.now.isoformat()}
+          for topic in w.LEARNING_TOPICS}
+
+ def test_incomplete_candidate_still_gets_learning_queue(self):
+  result=w.weekly_report([{"model_id":"unknown"}],self.now)
+  self.assertEqual(result["learning_refresh_queue"][0]["topics"],list(w.LEARNING_TOPICS))
+  self.assertFalse(result["all_evaluations"][0]["learning"]["expertise_demonstrated"])
+
+ def test_current_learning_does_not_prove_expertise_or_authorize_actions(self):
+  self.good["learning_evidence"]=self.learning_evidence()
+  result=w.weekly_report([self.good],self.now)
+  self.assertEqual(result["learning_refresh_queue"],[])
+  review=result["all_evaluations"][0]["learning"]
+  self.assertEqual(review["state"],"documented_current")
+  self.assertFalse(review["source_contents_verified"])
+  self.assertFalse(review["expertise_demonstrated"])
+  self.assertFalse(review["external_actions_authorized"])
+  self.assertEqual(result["all_evaluations"][0]["state"],"prepare_only")
+
+ def test_individual_topic_dates_prevent_refreshing_old_facts_by_redating_candidate(self):
+  self.good["learning_evidence"]=self.learning_evidence()
+  self.good["learning_evidence"]["customer_demand"]["checked_at"]=(self.now-timedelta(days=7)).isoformat()
+  review=w.learning_review(self.good,self.now)
+  self.assertEqual(review["next_learning_topics"],["customer_demand"])
+  self.assertIn("stale_check",review["topics"][0]["reasons"])
+
+ def test_delivery_topic_expires_after_thirty_days(self):
+  self.good["learning_evidence"]=self.learning_evidence()
+  item=self.good["learning_evidence"]["delivery_and_qa"]
+  item["checked_at"]=(self.now-timedelta(days=29)).isoformat()
+  self.assertEqual(w.learning_review(self.good,self.now)["state"],"documented_current")
+  item["checked_at"]=(self.now-timedelta(days=30)).isoformat()
+  self.assertEqual(w.learning_review(self.good,self.now)["next_learning_topics"],["delivery_and_qa"])
+
+ def test_material_change_invalidates_fresh_topic(self):
+  self.good["learning_evidence"]=self.learning_evidence()
+  self.good["learning_evidence"]["platform_rules_and_rights"]["material_change"]=True
+  self.assertEqual(w.learning_review(self.good,self.now)["next_learning_topics"],["platform_rules_and_rights"])
+
+ def test_invalid_learning_inputs_are_refresh_tasks(self):
+  for value in (None,[],"learned",True):
+   with self.subTest(value=value):
+    self.good["learning_evidence"]=value
+    self.assertEqual(w.learning_review(self.good,self.now)["next_learning_topics"],list(w.LEARNING_TOPICS))
+  for value in (None,{},"done"):
+   self.good["learning_evidence"]={"customer_demand":value}
+   self.assertIn("customer_demand",w.learning_review(self.good,self.now)["next_learning_topics"])
+
+ def test_bad_dates_and_sources_cannot_claim_current_knowledge(self):
+  for key,values in {
+    "checked_at":[None,"bad",self.now.replace(tzinfo=None).isoformat(),(self.now+timedelta(days=1)).isoformat()],
+    "source_urls":[[],["https://"],["http://example.org"],["https://user:secret@example.org"],["https://example.org/ bad"],[None]],
+    "finding":[None," "],"next_action":[None,""]}.items():
+   for value in values:
+    with self.subTest(key=key,value=value):
+     self.good["learning_evidence"]=self.learning_evidence()
+     self.good["learning_evidence"]["customer_demand"][key]=value
+     self.assertEqual(w.learning_review(self.good,self.now)["next_learning_topics"],["customer_demand"])
+
+ def test_learning_report_does_not_echo_private_findings_or_credentials(self):
+  import json
+  self.good["learning_evidence"]=self.learning_evidence()
+  self.good["learning_evidence"]["customer_demand"]["finding"]="PRIVATE_BUYER_DETAIL"
+  self.good["learning_evidence"]["customer_demand"]["source_urls"]=["https://user:PRIVATE_SECRET@example.org"]
+  review=json.dumps(w.learning_review(self.good,self.now))
+  self.assertNotIn("PRIVATE_BUYER_DETAIL",review)
+  self.assertNotIn("PRIVATE_SECRET",review)
+
 if __name__=="__main__":unittest.main()

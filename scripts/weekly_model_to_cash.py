@@ -4,6 +4,79 @@ import argparse
 from datetime import datetime, timezone, timedelta
 import json
 from pathlib import Path
+from urllib.parse import urlsplit
+
+# Review intervals are operating defaults, not claims that a market stays stable.
+# A known material change invalidates a topic immediately, regardless of age.
+LEARNING_TOPICS = {
+    "customer_demand": 7,
+    "pricing_and_fees": 7,
+    "platform_rules_and_rights": 7,
+    "acquisition_and_consent": 7,
+    "delivery_and_qa": 30,
+    "collection_and_unit_economics": 7,
+    "retention_and_failure_lessons": 30,
+}
+
+
+def learning_review(candidate, now=None):
+    """Return an actionable refresh checklist; never infer expertise from claims.
+
+    Evidence remains operator supplied. This pure function neither fetches URLs
+    nor changes permission to fulfill existing funded customer obligations.
+    """
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("now must be timezone aware")
+    supplied = candidate.get("learning_evidence", {})
+    if not isinstance(supplied, dict):
+        supplied = {}
+    topics = []
+    for topic, days in LEARNING_TOPICS.items():
+        item = supplied.get(topic)
+        reasons = []
+        due_at = None
+        if not isinstance(item, dict):
+            reasons.append("missing_topic")
+        else:
+            for key in ("finding", "next_action"):
+                if not isinstance(item.get(key), str) or not item[key].strip():
+                    reasons.append("missing_" + key)
+            sources = item.get("source_urls")
+            if not isinstance(sources, list) or not sources or not all(_source_url(u) for u in sources):
+                reasons.append("source_urls_required")
+            try:
+                checked = datetime.fromisoformat(item["checked_at"].replace("Z", "+00:00"))
+                if checked.tzinfo is None or checked.utcoffset() is None:
+                    raise ValueError("naive time")
+                due = checked + timedelta(days=days)
+                due_at = due.isoformat()
+                if checked > now:
+                    reasons.append("future_check")
+                elif now >= due:
+                    reasons.append("stale_check")
+            except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
+                reasons.append("invalid_check_time")
+            if item.get("material_change", False) is not False:
+                reasons.append("material_change_requires_review")
+        topics.append({"topic": topic, "state": "refresh_required" if reasons else "documented_current",
+                       "reasons": reasons, "refresh_due_at": due_at})
+    pending = [t["topic"] for t in topics if t["state"] == "refresh_required"]
+    return {"state": "refresh_required" if pending else "documented_current",
+            "topics": topics, "next_learning_topics": pending,
+            "source_contents_verified": False, "expertise_demonstrated": False,
+            "external_actions_authorized": False}
+
+
+def _source_url(value):
+    if not isinstance(value, str) or any(c.isspace() or ord(c) < 32 for c in value):
+        return False
+    try:
+        url = urlsplit(value)
+        return (url.scheme == "https" and bool(url.hostname)
+                and url.username is None and url.password is None)
+    except ValueError:
+        return False
 
 REQUIRED = ("model_id", "observed_at", "source_urls", "buyer_evidence",
             "deliverable", "delivery_capabilities_verified", "demand_channel",
@@ -19,6 +92,7 @@ def evaluate(candidate, now=None):
     missing=[x for x in REQUIRED if x not in candidate]
     if missing:
         return {"model_id":candidate.get("model_id","unknown"),"state":"insufficient_evidence",
+                "learning":learning_review(candidate, now),
                 "reasons":["missing:"+x for x in missing],"next_action":"Collect missing actual buyer/collection/delivery evidence"}
     reasons=[]
     try:
@@ -67,6 +141,7 @@ def evaluate(candidate, now=None):
             "next_action":("Prepare a truthful scoped offer and tested delivery artifact; validate with a consenting buyer"
                            if not reasons else "Resolve the listed blockers and recheck current provider evidence"),
             "external_action_executed":False,"receipt_verified":False,
+            "learning":learning_review(candidate, now),
             "recreation":recreation_gate(candidate)}
 
 def recreation_gate(candidate):
@@ -101,6 +176,9 @@ def weekly_report(candidates,now=None):
     return {"research_type":"weekly_ai_models","evidence_state":"operator_supplied_unverified_sources",
             "ranked_preparation_candidates":eligible[:2],
             "all_evaluations":results,"selected_experiments_limit":2,
+            "learning_refresh_queue":[{"model_id":r["model_id"],
+                                       "topics":r["learning"]["next_learning_topics"]}
+                                      for r in results if r["learning"]["next_learning_topics"]],
             "verified_collected_revenue":"unknown",
             "allowed_actions":"research_and_reversible_preparation_only",
             "automatic_spend":False,"automatic_contracts":False,
