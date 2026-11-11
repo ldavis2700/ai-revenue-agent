@@ -1,6 +1,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2.111.0";
 import { paidEvent } from "./paid-event.mjs";
 import { isApexRevenueEvent } from "./apex-ownership.mjs";
+import { readBoundedStripeBody } from "./bounded-stripe-body.mjs";
 
 const PROPERTY_ID = "003";
 const MAX_BODY_BYTES = 256 * 1024;
@@ -65,15 +66,16 @@ async function sha256(value: string) {
 
 Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return json({ received: false, error: "method_not_allowed" }, 405);
-  const contentLength = Number(req.headers.get("content-length") ?? "0");
-  if (contentLength > MAX_BODY_BYTES) return json({ received: false, error: "invalid_body_size" }, 413);
+  // Cap the actual incoming stream, including unsigned chunked requests.
+  const bounded = await readBoundedStripeBody(req, MAX_BODY_BYTES);
+  if (!bounded.ok) return json({ received: false, error: bounded.error }, bounded.status);
 
   const webhookSecret = Deno.env.get("STRIPE_REVENUE_WEBHOOK_SECRET") ?? "";
   const url = Deno.env.get("SUPABASE_URL") ?? "";
   const key = secretKey() ?? "";
   if (!webhookSecret || !url || !key) return json({ received: false, error: "service_not_configured" }, 503);
 
-  const body = await req.text();
+  const body = bounded.text;
   const signature = req.headers.get("stripe-signature") ?? "";
   if (!(await verifyStripeSignature(body, signature, webhookSecret))) {
     return json({ received: false, error: "invalid_signature" }, 400);
