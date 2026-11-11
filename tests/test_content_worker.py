@@ -87,5 +87,28 @@ class ContentHTTPTests(unittest.TestCase):
         self.assertEqual(e.exception.code,503)
         with c.connect() as db:db.execute('INSERT INTO health VALUES (1,?)',(c.time.time(),))
         self.assertTrue(json.load(urlopen(self.url+'/health'))['healthy'])
+    def test_stalled_render_is_unhealthy_despite_fresh_heartbeat(self):
+        c.ingest(self.jobs)
+        with c.connect() as db:
+            db.execute('INSERT INTO health VALUES (1,?)',(c.time.time(),))
+            db.execute("UPDATE jobs SET status='rendering',updated=?",
+                       (c.time.time()-2000,))
+        with self.assertRaises(HTTPError) as exc:
+            urlopen(self.url+'/health')
+        self.assertEqual(exc.exception.code,503)
+        details=json.load(exc.exception)
+        self.assertTrue(details['rendering_overdue'])
+        self.assertFalse(details['healthy'])
+
+    def test_active_render_remains_healthy(self):
+        c.ingest(self.jobs)
+        with c.connect() as db:
+            db.execute('INSERT INTO health VALUES (1,?)',(c.time.time(),))
+            db.execute("UPDATE jobs SET status='rendering',updated=?",
+                       (c.time.time()-60,))
+        details=json.load(urlopen(self.url+'/health'))
+        self.assertTrue(details['healthy'])
+        self.assertFalse(details['rendering_overdue'])
+
 
 if __name__=='__main__':unittest.main()
