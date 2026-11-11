@@ -99,8 +99,28 @@ class ArtifactClientTests(unittest.TestCase):
             client.retrieve('safe-job','../../secret',self.dir/'out',base_url=self.url)
 
     def test_unapproved_origin_rejected(self):
-        with self.assertRaisesRegex(ValueError, 'unapproved download origin'):
-            client.retrieve('safe-job','manifest.json',self.dir/'out',base_url='https://malicious.example')
+        # These URLs passed the old string-prefix check but could send the
+        # bearer token to an attacker host or a misleading origin.
+        self.assertTrue(client.approved_origin(self.url))
+        self.assertTrue(client.approved_origin(client.BASE_URL))
+        origins = [
+            'https://malicious.example',
+            'https://apex-content-worker-production.up.railway.app.attacker.example',
+            'http://127.0.0.1:8080@attacker.example',
+            'http://127.0.0.1:8080.attacker.example',
+            'http://127.0.0.1:not-a-port',
+            'http://127.0.0.1:8080/path',
+            'http://127.0.0.1:8080?forward=attacker.example',
+            'http://127.0.0.1:8080#fragment',
+            'http://127.0.0.1:8080/',
+            'http://localhost:8080',
+        ]
+        for origin in origins:
+            with self.subTest(origin=origin):
+                with patch.object(client, 'build_opener') as opener:
+                    with self.assertRaisesRegex(ValueError, 'unapproved download origin'):
+                        client.retrieve('safe-job','manifest.json',self.dir/'out',base_url=origin)
+                    opener.assert_not_called()
 
     def test_stream_limit_no_partial_file(self):
         with patch.object(client, 'MAX_BYTES', 5):
