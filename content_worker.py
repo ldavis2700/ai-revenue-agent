@@ -28,6 +28,8 @@ PUBLIC_PAGES = {'/': 'offer.html', '/offer.html': 'offer.html'}
 for _page in ('privacy', 'home-services', 'industries', 'partners'):
     PUBLIC_PAGES['/' + _page] = _page + '.html'
     PUBLIC_PAGES['/' + _page + '.html'] = _page + '.html'
+PUBLIC_PAGES.update({'/academy': 'academy.html', '/academy.html': 'academy.html'})
+PUBLIC_ASSETS = {'/sales/academy.css': 'academy.css', '/sales/academy.js': 'academy.js'}
 
 def reserve_egress(size):
     """Keep public pages and existing media within the same daily transfer cap."""
@@ -217,7 +219,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         # Exact allowlist: never map arbitrary URLs onto the repository or /data.
         try:
-            public_page = PUBLIC_PAGES.get(urlsplit(self.path).path)
+            public_page = PUBLIC_PAGES.get(urlsplit(self.path).path) or PUBLIC_ASSETS.get(urlsplit(self.path).path)
         except ValueError:
             self.send_error(400);return
         if public_page:
@@ -233,7 +235,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(429);return
             self.connection.settimeout(10)
             self.send_response(200)
-            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Type', ('text/css; charset=utf-8' if public_page.endswith('.css') else 'application/javascript; charset=utf-8' if public_page.endswith('.js') else 'text/html; charset=utf-8'))
             self.send_header('Content-Length', str(len(body)))
             self.send_header('Cache-Control', 'public, max-age=300')
             self.send_header('X-Content-Type-Options', 'nosniff')
