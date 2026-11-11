@@ -90,8 +90,20 @@ def inspect(origin, *, job_id=None, token=None):
             if valid:
                 try:
                     manifest = json.loads(body)
-                    valid = (manifest.get('id') == job_id and
-                             headers.get('Cache-Control') == 'private, no-store')
+                    # A successful HTTP 200 is not enough: reject incomplete or
+                    # inconsistent published-manifest metadata before claiming
+                    # private-artifact release acceptance. This validates the
+                    # metadata shape, not the actual MP4 checksum.
+                    digest = manifest.get('sha256') if isinstance(manifest, dict) else None
+                    expected_bytes = manifest.get('bytes') if isinstance(manifest, dict) else None
+                    valid = (isinstance(manifest, dict) and
+                             manifest.get('id') == job_id and
+                             manifest.get('status') == 'rendered_unpublished' and
+                             type(expected_bytes) is int and 0 < expected_bytes <= 30_000_000 and
+                             isinstance(digest, str) and
+                             re.fullmatch(r'[0-9a-f]{64}', digest) is not None and
+                             headers.get('Cache-Control') == 'private, no-store' and
+                             headers.get_content_type() == 'application/json')
                 except (ValueError, TypeError, AttributeError):
                     valid = False
             results['artifact_authorized'] = {'ok': bool(valid), 'status': code}

@@ -94,7 +94,12 @@ a local `127.0.0.1` test server, and rejects redirects and other hosts before
 sending a credential. It checks the public academy, stylesheet, builder,
 privacy, paused checkout, aggregate-only health, inaccessible source/database,
 anonymous private-route denial and a known completed **manifest** with
-authorized credentials. The manifest GET consumes some of the existing
+authorized credentials. The verifier also rejects incomplete manifest metadata (wrong job/status, missing
+or malformed video SHA-256, invalid video byte size or non-JSON/private cache
+headers) even if the HTTP request returns 200. This is a **metadata-shape**
+check, not a cryptographic verification of the video bytes. A separate
+checksum-verified video download and editorial QA remain required before
+publication. The manifest GET consumes some of the existing
 bounded egress allowance; it does not download a video. Missing token or
 known job ID is **not** a passing release. A green local/HTTP preflight alone
 does not replace exact-commit CI, private-consumer authorization, Railway

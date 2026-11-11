@@ -30,7 +30,7 @@ class ReleaseVerifierTests(unittest.TestCase):
                        (worker.time.time(),))
         artifact = worker.STATE / 'artifacts' / 'safe-job'
         artifact.mkdir()
-        (artifact / 'manifest.json').write_text('{"id":"safe-job","status":"rendered_unpublished"}')
+        (artifact / 'manifest.json').write_text('{"id":"safe-job","status":"rendered_unpublished","bytes":4096,"sha256":"' + 'a'*64 + '"}')
         self.env = patch.dict(os.environ, {'CONTENT_ARTIFACT_TOKEN': 'test-content-token'})
         self.env.start()
         self.server = HTTPServer(('127.0.0.1', 0), worker.Handler)
@@ -65,6 +65,25 @@ class ReleaseVerifierTests(unittest.TestCase):
             result = verifier.inspect(self.origin)
         self.assertFalse(result['ready'])
         self.assertEqual(result['checks']['artifact_authorized']['status'], 'not_tested_missing_job_id')
+
+    def test_incomplete_or_invalid_manifest_never_passes_private_acceptance(self):
+        artifact = worker.STATE / 'artifacts' / 'safe-job' / 'manifest.json'
+        valid = artifact.read_text()
+        variations = [
+            '{"id":"safe-job","status":"rendered_unpublished"}',
+            valid.replace('"bytes":4096', '"bytes":0'),
+            valid.replace('"bytes":4096', '"bytes":true'),
+            valid.replace('"sha256":"' + 'a'*64 + '"', '"sha256":"invalid"'),
+            valid.replace('"rendered_unpublished"', '"queued"'),
+        ]
+        with patch.object(worker, 'reserve_egress', return_value=True):
+            for malformed in variations:
+                with self.subTest(manifest=malformed[:80]):
+                    artifact.write_text(malformed)
+                    result = verifier.inspect(self.origin, job_id='safe-job', token='test-content-token')
+                    self.assertFalse(result['ready'], result)
+                    self.assertEqual(result['checks']['artifact_authorized']['status'], 200)
+                    self.assertFalse(result['checks']['artifact_authorized']['ok'])
 
     def test_invalid_origin_and_job_fail_before_network(self):
         for origin in ['https://attacker.example', 'http://127.0.0.1:8080@attacker.example']:
