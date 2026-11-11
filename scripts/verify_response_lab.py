@@ -6,6 +6,7 @@ against the exact owned production origin or an isolated local loopback server.
 Never pass tokens as command-line arguments or expose them in reports.
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -34,6 +35,41 @@ def get(origin, path, token=None):
             return error.code, error.read(MAX_RESPONSE + 1), error.headers
         finally:
             error.close()
+
+
+def verify_video(origin, path, token, expected_bytes, expected_sha256):
+    """Stream bounded private media and compare its actual bytes to the manifest."""
+    url = origin + path
+    request = Request(url, headers={
+        'Accept': 'video/mp4', 'Authorization': 'Bearer ' + token})
+    try:
+        with build_opener(NoRedirects()).open(request, timeout=20) as response:
+            status = response.status
+            if (status != 200 or response.geturl() != url or
+                    response.headers.get_content_type() != 'video/mp4' or
+                    response.headers.get('Cache-Control') != 'private, no-store'):
+                return False, status
+            length = response.headers.get('Content-Length')
+            if length is not None and length != str(expected_bytes):
+                return False, status
+            digest = hashlib.sha256()
+            total = 0
+            # Never read more than one byte past the 30 MB-bounded manifest size.
+            while total <= expected_bytes:
+                block = response.read(min(65536, expected_bytes + 1 - total))
+                if not block:
+                    break
+                total += len(block)
+                digest.update(block)
+            return (total == expected_bytes and
+                    digest.hexdigest() == expected_sha256), status
+    except HTTPError as error:
+        try:
+            return False, error.code
+        finally:
+            error.close()
+    except (URLError, OSError, ValueError, TypeError, AttributeError):
+        return False, 'unavailable'
 
 
 def inspect(origin, *, job_id=None, token=None):
@@ -107,17 +143,32 @@ def inspect(origin, *, job_id=None, token=None):
                 except (ValueError, TypeError, AttributeError):
                     valid = False
             results['artifact_authorized'] = {'ok': bool(valid), 'status': code}
+            if valid:
+                video_ok, video_status = verify_video(
+                    origin, '/artifacts/' + job_id + '/video.mp4',
+                    token, expected_bytes, digest)
+                results['artifact_video_verified'] = {
+                    'ok': bool(video_ok), 'status': video_status}
+            else:
+                results['artifact_video_verified'] = {
+                    'ok': False, 'status': 'not_tested_invalid_manifest'}
         else:
-            results['artifact_authorized'] = {'ok': False, 'status': 'not_tested_missing_private_token'}
+            results['artifact_authorized'] = {
+                'ok': False, 'status': 'not_tested_missing_private_token'}
+            results['artifact_video_verified'] = {
+                'ok': False, 'status': 'not_tested_missing_private_token'}
     else:
-        results['artifact_authorized'] = {'ok': False, 'status': 'not_tested_missing_job_id'}
+        results['artifact_authorized'] = {
+            'ok': False, 'status': 'not_tested_missing_job_id'}
+        results['artifact_video_verified'] = {
+            'ok': False, 'status': 'not_tested_missing_job_id'}
     return {'ready': all(v['ok'] for v in results.values()), 'checks': results}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--origin', required=True, help='Exact Railway origin or isolated loopback HTTP origin')
-    parser.add_argument('--job-id', help='Known completed private job identifier for a manifest-only acceptance')
+    parser.add_argument('--job-id', help='Known completed private job for manifest and streamed video checksum acceptance')
     args = parser.parse_args()
     result = inspect(args.origin, job_id=args.job_id,
                      token=os.environ.get('CONTENT_ARTIFACT_TOKEN') or None)
