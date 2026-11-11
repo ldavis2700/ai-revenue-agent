@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import tempfile
 from urllib.error import HTTPError
+from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 BASE_URL = 'https://apex-content-worker-production.up.railway.app'
@@ -25,6 +26,29 @@ class NoRedirects(HTTPRedirectHandler):
         return None
 
 
+def approved_origin(url):
+    """Pin production host; permit only exact loopback HTTP origins for local tests.
+
+    A string prefix such as http://127.0.0.1: is unsafe: an attacker-controlled
+    hostname can follow @userinfo or a deceptive port-looking prefix, and the
+    Authorization bearer credential would then be sent off-host.
+    """
+    if url == BASE_URL:
+        return True
+    if not isinstance(url, str):
+        return False
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return False
+    return (parts.scheme == 'http' and
+            parts.netloc == f'127.0.0.1:{port}' and
+            parts.hostname == '127.0.0.1' and port is not None and
+            parts.username is None and parts.password is None and
+            not parts.path and not parts.query and not parts.fragment)
+
+
 def retrieve(job_id, artifact, destination, *, expected_sha256=None, base_url=BASE_URL):
     """Return (saved_path, actual_sha256), with an atomic no-clobber save."""
     if not isinstance(job_id, str) or not JOB_ID.fullmatch(job_id):
@@ -36,7 +60,7 @@ def retrieve(job_id, artifact, destination, *, expected_sha256=None, base_url=BA
     token = os.environ.get('CONTENT_ARTIFACT_TOKEN', '')
     if not token or any(char in token for char in '\r\n'):
         raise ValueError('CONTENT_ARTIFACT_TOKEN is missing or invalid')
-    if base_url != BASE_URL and not base_url.startswith('http://127.0.0.1:'):
+    if not approved_origin(base_url):
         raise ValueError('unapproved download origin')
     target = Path(destination)
     if target.exists() or target.is_symlink():
