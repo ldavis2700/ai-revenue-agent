@@ -106,3 +106,61 @@ flow with permitted synthetic data, then validate scope with a genuine consentin
 buyer and establish the authorized non-Stripe collection path. Recheck this
 demand lesson by November 17, or earlier if contradictory evidence appears.
 Pricing, account eligibility, costs and buyer willingness remain separate unknowns.
+
+## Evidence-to-execution selection (November 10, 2026 Pacific)
+
+The preparation shortlist now requires all seven learning topics to be documented
+and current, the existing buyer/access/collection gates, and a bounded
+`execution_plan`. A high projected margin alone cannot occupy an experiment slot.
+Missing information remains in `learning_refresh_queue` and
+`execution_preparation_queue`; it is not silently discarded. This does not defer
+existing funded fulfillment while a research checklist is incomplete.
+
+Each private candidate's `execution_plan` contains:
+
+| Fields | Meaning |
+| --- | --- |
+| `hypothesis`, `customer_segment` | Falsifiable buyer problem and specific audience |
+| `acceptance_test`, `measurement_method` | Delivery checks and how independent outcomes will be counted |
+| `success_metric` | `qualified_opt_in_requests`, `buyer_accepted_deliveries`, or `settled_paid_deliveries` |
+| `baseline`, `target` | Nonnegative integer counts in comparable measurement windows; target exceeds baseline |
+| `minimum_sample_size` | Minimum independent observations before interpreting the result |
+| `stop_rule`, `review_at` | Explicit revise/retire criterion and timezone-aware review deadline within 14 days |
+| `next_action` | One concrete feasible action, with evidence of completion recorded afterward |
+| `estimated_total_minutes`, `estimated_days_to_cash` | All acquisition, delivery, QA and support effort; realistic time to collection |
+| `success_probability_bps` | Conservative estimated chance of the forecast revenue, in basis points from 0 to 10000 |
+| `probability_basis`, `probability_evidence_url` | Rationale and HTTPS provenance; unknown probabilities must stay unknown, not invented to pass |
+| `max_new_spend_cents` | Exactly zero under this preparation policy; existing approved costs still belong in the economics |
+
+The ranking uses estimated expected contribution per total work hour, then shorter
+time to cash, with model ID as a stable tie-breaker. Expected contribution is
+`estimated revenue × probability − all estimated costs`. Costs are charged even
+when the sale fails. Costs must include tools, fees, refunds/rework allowances and
+support; do not double-count labor already represented in cash costs. A nonpositive
+expected contribution remains a research/revision task. These are conservative
+planning estimates, not verified income, a statistical confidence interval or
+proof of the world's most profitable business. Probability sensitivity must be
+reviewed against contradictory evidence before committing resources.
+
+At most two new models are shortlisted per report. Reconcile the existing active
+experiment ledger before starting anything: the two-model limit applies across
+runs, not two additional experiments every hour. Duplicate model IDs and batches
+larger than 30 are rejected. Reported queues omit private hypotheses, URLs and
+buyer details; use the protected original evidence record to execute the step.
+
+During the existing hourly cycle, fulfill funded work first, then refresh the
+specific expired/changed facts, complete original delivery QA, and advance the
+next authorized experiment action. At the deadline, compare the measured result
+with its baseline, target, sample size and stop rule. Insufficient observations
+mean inconclusive, not success. Persist failed assumptions, acceptance evidence,
+refunds, settled receipts and actual costs. Feed measured outcomes through the
+existing experiment observation/learning and verified revenue ledgers without
+converting views, forecasts or self-reported evidence into sales.
+
+Scale only after independently verified accepted deliveries and repeat positive
+contribution; verify retention before promising recurring economics. Revise or
+retire an unsuccessful experiment while continuing other authorized work. All
+code outputs remain preparation-only and source-unverified: no field grants
+permission to send, publish, charge, sign, spend or deploy. This changes the
+selection tool used by connected workflows, not the deployed content server or
+standalone revenue worker, and does not train a model's weights.
