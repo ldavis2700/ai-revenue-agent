@@ -111,9 +111,116 @@ class WeeklyModelTests(unittest.TestCase):
   self.good["rights_verified"]=False
   self.assertIn("rights_review_required",w.recreation_gate(self.good)["missing"])
  def test_two_experiment_limit(self):
+  self.good["learning_evidence"]=self.learning_evidence()
+  self.good["execution_plan"]=self.execution_plan()
   items=[dict(self.good,model_id=f"model-{i}",estimated_revenue_cents=10000+i) for i in range(3)]
   x=w.weekly_report(items,self.now)
   self.assertEqual(len(x["ranked_preparation_candidates"]),2)
+
+ def execution_plan(self):
+  return {"hypothesis":"A scoped response workflow can meet the buyer's acceptance criteria",
+          "customer_segment":"Consenting service businesses with a response backlog",
+          "acceptance_test":"Exercise intake, routing and human handoff with buyer-approved cases",
+          "measurement_method":"Count independent buyer acceptance receipts in the private ledger",
+          "stop_rule":"Revise the pilot if the target is missed at the review deadline",
+          "next_action":"Prepare the original handoff acceptance fixture",
+          "probability_basis":"Conservative estimate from comparable permitted pilot observations",
+          "probability_evidence_url":"https://example.org/private-pilot-evidence",
+          "success_metric":"buyer_accepted_deliveries", "baseline":0, "target":1,
+          "minimum_sample_size":5, "estimated_total_minutes":120,
+          "estimated_days_to_cash":7, "success_probability_bps":5000,
+          "max_new_spend_cents":0, "review_at":(self.now+timedelta(days=7)).isoformat()}
+
+ def ready_candidate(self, **changes):
+  return dict(self.good, learning_evidence=self.learning_evidence(),
+              execution_plan=self.execution_plan(), **changes)
+
+ def test_missing_plan_or_stale_learning_cannot_occupy_shortlist(self):
+  x=w.weekly_report([self.good],self.now)
+  self.assertEqual(x["ranked_preparation_candidates"],[])
+  self.assertIn("execution_plan_required",x["execution_preparation_queue"][0]["requirements"])
+  item=self.ready_candidate()
+  item["learning_evidence"]["pricing_and_fees"]["checked_at"]=(self.now-timedelta(days=8)).isoformat()
+  self.assertEqual(w.weekly_report([item],self.now)["ranked_preparation_candidates"],[])
+
+ def test_source_prefix_alone_cannot_satisfy_execution_evidence(self):
+  for key in ("source_urls","buyer_evidence_url","payment_rail_evidence_url"):
+   for value in ("https://", "https://user:secret@example.org", "https://example.org/ bad"):
+    item=self.ready_candidate(**{key:[value] if key=="source_urls" else value})
+    self.assertEqual(w.weekly_report([item],self.now)["ranked_preparation_candidates"],[])
+
+ def test_expected_value_includes_costs_even_when_sale_fails(self):
+  result=w.weekly_report([self.ready_candidate()],self.now)["ranked_preparation_candidates"][0]
+  self.assertEqual(result["execution"]["estimated_expected_contribution_cents"],1750)
+  self.assertEqual(result["execution"]["estimated_expected_cents_per_hour"],875)
+  self.assertFalse(result["execution"]["estimate_is_collected_cash"])
+  self.assertFalse(result["execution"]["external_actions_authorized"])
+  self.assertFalse(result["execution"]["expertise_demonstrated"])
+
+ def test_effort_and_downside_can_outrank_larger_projected_margin(self):
+  modest=self.ready_candidate(model_id="modest")
+  large=self.ready_candidate(model_id="large",estimated_revenue_cents=100000)
+  large["execution_plan"]["estimated_total_minutes"]=10000
+  x=w.weekly_report([large,modest],self.now)
+  self.assertEqual([r["model_id"] for r in x["ranked_preparation_candidates"]],["modest","large"])
+
+ def test_time_to_cash_breaks_equal_efficiency_tie(self):
+  slow=self.ready_candidate(model_id="a-slow")
+  fast=self.ready_candidate(model_id="z-fast")
+  fast["execution_plan"]["estimated_days_to_cash"]=2
+  self.assertEqual(w.weekly_report([slow,fast],self.now)["ranked_preparation_candidates"][0]["model_id"],"z-fast")
+
+ def test_risky_positive_margin_is_not_shortlisted(self):
+  item=self.ready_candidate()
+  item["execution_plan"]["success_probability_bps"]=1000
+  x=w.weekly_report([item],self.now)
+  self.assertEqual(x["ranked_preparation_candidates"],[])
+  self.assertIn("no_positive_risk_adjusted_contribution",x["execution_preparation_queue"][0]["requirements"])
+
+ def test_plan_rejects_invalid_numbers_and_paid_experiments(self):
+  for key, values in {
+   "success_probability_bps":[True, -1, 10001, float("nan"), float("inf"), "5000"],
+   "estimated_total_minutes":[False, 0, -1], "estimated_days_to_cash":[0, 366],
+   "minimum_sample_size":[0, True], "max_new_spend_cents":[True, 1, -1],
+   "baseline":[-1,True], "target":[0,True]}.items():
+   for value in values:
+    with self.subTest(key=key,value=value):
+     item=self.ready_candidate();item["execution_plan"][key]=value
+     self.assertEqual(w.weekly_report([item],self.now)["ranked_preparation_candidates"],[])
+
+ def test_plan_requires_measurable_customer_result_and_review_deadline(self):
+  for key, values in {
+   "success_metric":["views","estimated_revenue","",{},[]],
+   "review_at":[None,"bad",self.now.isoformat(),self.now.replace(tzinfo=None).isoformat(),
+                (self.now+timedelta(days=15)).isoformat()],
+   "probability_evidence_url":["https://", "https://user:secret@example.org"],
+   "acceptance_test":["",None], "stop_rule":[""], "measurement_method":[""],
+   "probability_basis":[""],"hypothesis":[""],"customer_segment":[""],"next_action":[""]}.items():
+   for value in values:
+    with self.subTest(key=key,value=value):
+     item=self.ready_candidate();item["execution_plan"][key]=value
+     self.assertEqual(w.weekly_report([item],self.now)["ranked_preparation_candidates"],[])
+
+ def test_complete_plan_cannot_override_payment_or_access_blocker(self):
+  for key,value in (("payment_rail_name","Stripe"),("external_credentials_verified",False)):
+   item=self.ready_candidate(**{key:value})
+   result=w.weekly_report([item],self.now)
+   self.assertEqual(result["ranked_preparation_candidates"],[])
+   self.assertIn("resolve_preparation_blockers",result["execution_preparation_queue"][0]["requirements"])
+
+ def test_invalid_batch_and_duplicate_models_rejected(self):
+  for items in ([self.good,self.good],[{}],[None],[dict(self.good,model_id=[])],
+                [dict(self.good,model_id=str(i)) for i in range(31)]):
+   with self.assertRaises(ValueError):w.weekly_report(items,self.now)
+
+ def test_plan_private_details_not_echoed(self):
+  import json
+  item=self.ready_candidate()
+  item["execution_plan"]["next_action"]="PRIVATE_CUSTOMER_DETAIL"
+  item["execution_plan"]["probability_evidence_url"]="https://example.org/PRIVATE_RECEIPT"
+  report=json.dumps(w.weekly_report([item],self.now))
+  self.assertNotIn("PRIVATE_CUSTOMER_DETAIL",report)
+  self.assertNotIn("PRIVATE_RECEIPT",report)
 
  def learning_evidence(self):
   return {topic:{"finding":"Documented current requirement and practical delivery lesson",
