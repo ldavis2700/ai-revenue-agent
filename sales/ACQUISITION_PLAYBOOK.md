@@ -35,10 +35,10 @@ Do not claim the system automatically messages customers. The current offer prov
 
 Use the live landing page with UTM tags so the existing intake endpoint records acquisition source:
 
-- Direct outreach: `https://ai-revenue-agent-seven.vercel.app/?utm_source=direct&utm_medium=one_to_one&utm_campaign=free_preview`
-- Referral: `https://ai-revenue-agent-seven.vercel.app/?utm_source=referral&utm_medium=partner&utm_campaign=free_preview`
-- Organic social: `https://ai-revenue-agent-seven.vercel.app/?utm_source=social&utm_medium=organic&utm_campaign=free_preview`
-- Local community: `https://ai-revenue-agent-seven.vercel.app/?utm_source=community&utm_medium=organic&utm_campaign=free_preview`
+- Direct outreach: `https://apex-content-worker-production.up.railway.app/?utm_source=direct&utm_medium=one_to_one&utm_campaign=free_preview`
+- Referral: `https://apex-content-worker-production.up.railway.app/?utm_source=referral&utm_medium=partner&utm_campaign=free_preview`
+- Organic social: `https://apex-content-worker-production.up.railway.app/?utm_source=social&utm_medium=organic&utm_campaign=free_preview`
+- Local community: `https://apex-content-worker-production.up.railway.app/?utm_source=community&utm_medium=organic&utm_campaign=free_preview`
 
 Create more tags only when the source is materially different. Keep names short because the inbound function sanitizes and stores the campaign value.
 
@@ -104,3 +104,34 @@ Do not optimize only for message volume. Optimize for qualified preview requests
 ## Current source of truth
 
 The live funnel is the sales offer page backed by the `revenue-inbound` Supabase Edge Function. A valid preview request requires a business email, company name, affirmative contact consent, and privacy acknowledgement. The backend stores accepted leads for Property `003` in `inbound_leads` and records campaign attribution when supplied.
+
+## Prepare the cleaning-business pilot delivery
+
+Use the existing $100 pilot scope: fourteen editable replies (two per inquiry
+category), a response-use guide, a blank inquiry tracker, and one consolidated
+revision round agreed with the buyer. The optional $99/month support is separate.
+
+The offline pack builder prepares this draft without a model/API charge:
+
+```bash
+python scripts/build_response_pack.py --profile /private/business-profile.json --output /private/new-response-pack
+```
+
+The parent directory must already exist. Use a new private output path outside
+this repository. Keep buyer profiles and generated files out of Git. The profile
+is an object with exactly five single-line text fields (maximum 300 characters
+each): `company`, `services`, `service_area`, `quote_process`, and
+`escalation_contact`. Use only facts supplied or confirmed by the business. Do
+not include customer contact lists, passwords, access codes, or payment data.
+Missing facts require clarification; never invent them to pass validation.
+
+The output contains a printable/editable `response-pack.html`, editable
+`response-use-guide.md`, blank `inquiry-tracker.csv`, and SHA-256 `manifest.json`.
+Review all copy with the buyer before use. A generated pack does not send
+messages, complete delivery, record buyer acceptance, create an invoice, or
+prove payment. Delivery and payment evidence remain separate. The script is
+available to the operator workflow; it is not wired into the unattended worker.
+
+Use a fictional profile for internal smoke tests. Do not count that as a buyer,
+accepted delivery, or revenue. Before distributing any campaign, run the
+existing read-only live-offer audit and use the Railway campaign links above.
