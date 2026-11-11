@@ -128,8 +128,8 @@ def inspect(origin, *, job_id=None, token=None):
                     manifest = json.loads(body)
                     # A successful HTTP 200 is not enough: reject incomplete or
                     # inconsistent published-manifest metadata before claiming
-                    # private-artifact release acceptance. This validates the
-                    # metadata shape, not the actual MP4 checksum.
+                    # private-artifact release acceptance. The real MP4 checksum
+                    # is verified separately below with a bounded streaming GET.
                     digest = manifest.get('sha256') if isinstance(manifest, dict) else None
                     expected_bytes = manifest.get('bytes') if isinstance(manifest, dict) else None
                     valid = (isinstance(manifest, dict) and
