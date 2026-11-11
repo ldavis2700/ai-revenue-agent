@@ -1,5 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2.111.0";
-import { normalizeLeadPayload, text, insertUniqueLead } from "./lead-intake.mjs";
+import { normalizeLeadPayload, text, insertUniqueLead, readBoundedJson } from "./lead-intake.mjs";
 
 const MAX_BODY_BYTES = 16 * 1024;
 const PROPERTY_ID = "003";
@@ -55,15 +55,9 @@ Deno.serve(async (req: Request) => {
   }
   if (req.method !== "POST") return json({ accepted: false, errors: ["method_not_allowed"] }, 405, origin);
 
-  const contentLength = Number(req.headers.get("content-length") ?? "0");
-  if (contentLength > MAX_BODY_BYTES) return json({ accepted: false, errors: ["invalid_body_size"] }, 413, origin);
-
-  let payload: unknown;
-  try {
-    payload = await req.json();
-  } catch {
-    return json({ accepted: false, errors: ["invalid_json"] }, 400, origin);
-  }
+  const bounded = await readBoundedJson(req, MAX_BODY_BYTES);
+  if (!bounded.ok) return json({ accepted: false, errors: [bounded.error] }, bounded.status, origin);
+  const payload: unknown = bounded.value;
 
   const normalized = normalizeLeadPayload(payload);
   if (normalized.errors.length) return json({ accepted: false, errors: normalized.errors }, 422, origin);
