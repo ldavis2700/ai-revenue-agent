@@ -33,3 +33,76 @@ The next concrete conversion step while no funded buyer is verified is to establ
 `scripts/weekly_model_to_cash.py` also returns a separate `recreation` gate for each candidate. To claim that an externally inspired business mechanism has been recreated for a real buyer, independently verify original licensed assets (never imitate another company's identity or copy private/proprietary materials), an immutable SHA-256 of the tested delivery, HTTPS QA evidence, and a real buyer acceptance record. Missing evidence leaves the work in `preparation_only`. Complete operator-supplied fields yield `acceptance_evidence_supplied`, **not** proven fulfillment or cash: the script cannot independently verify claims, issue contracts, publish, charge or inspect buyer accounts. Real provider delivery and settlement receipts remain separately mandatory; statuses never grant permission to bypass reviews.
 
 Do not attempt to reproduce all popular business models. Prioritize funded requests and the existing narrow U.S. SMB customer-response offer; grow recurring support only after settled payments, proven direct costs and buyer retention. Continue the existing Monday research and hourly execution tasks even with no earnings, but do not call one background schedule a continuously running 24/7 worker.
+
+## Continuous learning and current business-model expertise
+
+The owner's November 10 directive makes learning, keeping current, and executing
+successful AI-enabled business models an indefinite objective. Maintain broad
+coverage in the opportunity backlog, while executing a bounded number of useful
+experiments. Expertise must develop through tested delivery and repeated real
+customer outcomes; reading, rankings and self-reported knowledge do not prove it.
+
+Use the existing Monday brief for comparative discovery, rotating through the
+catalog so other viable models are not permanently ignored. Every existing
+hourly run resumes funded delivery first, checks material changes affecting
+active models, and advances the next feasible research, skill test, delivery or
+collection step. Persist the playbook and actual outcome in existing private
+records, including failures. Do not create a second scheduler or reset ledgers.
+
+Each candidate can carry `learning_evidence` keyed by these topics:
+
+| Topic | Default review interval | Required practical knowledge |
+| --- | --- | --- |
+| `customer_demand` | 7 days | Buyer problem, dated demand, competing solutions |
+| `pricing_and_fees` | 7 days | Observed prices, fees, scope and pricing assumptions |
+| `platform_rules_and_rights` | 7 days | Eligibility, quotas, commercial rights, obligations |
+| `acquisition_and_consent` | 7 days | Available permitted channel, intake and conversion steps |
+| `delivery_and_qa` | 30 days | Original delivery procedure, skill test and acceptance criteria |
+| `collection_and_unit_economics` | 7 days | Authorized payment path, costs, refunds and settlement evidence |
+| `retention_and_failure_lessons` | 30 days | Repeat value, measured outcomes, failed assumptions and next test |
+
+Each topic contains `finding`, `next_action`, `source_urls` (HTTPS), and its own
+timezone-aware `checked_at`. Set `material_change: true` when a change invalidates
+the finding; clear it only after actually reviewing and updating the evidence.
+Use current authoritative sources and genuine permitted buyer/provider records.
+These intervals are operating defaults; known changes require immediate review.
+Never refresh a date without checking the source and updating the practical lesson.
+
+`scripts/weekly_model_to_cash.py --evidence <private-observations.json>` now returns
+a per-candidate `learning` review and `learning_refresh_queue`, even for candidates
+missing buyer evidence. Missing, malformed, future-dated or stale topic records
+produce targeted refresh tasks. The queue follows input order, not a claim of
+global market ranking. Funded obligations still take precedence. A current brief
+does not override the separate preparation, permission or recreation gates.
+
+The checker validates metadata only: it does not browse, verify source contents,
+train model weights, perform skill tests, declare expertise or execute an external
+action. The connected hourly/Monday workflows gather evidence and carry out
+authorized work; this change does not deploy the standalone revenue worker.
+Treat supplied evidence as unverified until independently checked. Keep source
+findings and buyer details private; the learning summary emits topic statuses
+and refresh dates without echoing findings or source credentials.
+
+For each selected viable model, proceed from studied requirements to original
+tested pilot, buyer acceptance, settled payment and repeated positive contribution.
+Record the exact next action and blocker. Scale on demonstrated delivery and
+economics; revise or retire failing experiments while continuing the overall
+mission. No end date or revenue milestone ends the objective. Owner controls,
+provider permissions and actual runtime availability remain authoritative.
+
+### Initial market lesson checked November 10, 2026 (Pacific)
+
+Upwork's [November 10 research](https://www.upwork.com/research/ai-how-work-comes-together)
+reports demand for technical implementation and finished deliverables, with AI
+projects combining capabilities such as chatbot development and app integration.
+This supports testing APEX's existing customer-response workflow as a complete
+integration with QA and human handoff. That is an inference for prioritization,
+not evidence of a buyer for APEX or proof of an autonomous business's profit.
+The research describes marketplace patterns and historical observations;
+publication recency does not make every underlying observation current.
+
+Next practical test: demonstrate the existing consent-first intake-to-handoff
+flow with permitted synthetic data, then validate scope with a genuine consenting
+buyer and establish the authorized non-Stripe collection path. Recheck this
+demand lesson by November 17, or earlier if contradictory evidence appears.
+Pricing, account eligibility, costs and buyer willingness remain separate unknowns.
