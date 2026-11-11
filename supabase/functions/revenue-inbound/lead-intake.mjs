@@ -29,3 +29,41 @@ export async function insertUniqueLead(table, record) {
     ignoreDuplicates: true,
   }).select("id").maybeSingle();
 }
+
+
+/** Bound actual incoming bytes rather than trusting the Content-Length header.
+ * A public intake endpoint must not call request.json() on an unlimited stream.
+ * This helper has no network, DB, or customer side effects.
+ */
+export async function readBoundedJson(request, maxBytes) {
+  const lengthHeader = request.headers.get("content-length");
+  if (lengthHeader !== null) {
+    const declared = Number(lengthHeader);
+    if (!Number.isSafeInteger(declared) || declared < 0 || declared > maxBytes) {
+      return { ok: false, status: 413, error: "invalid_body_size" };
+    }
+  }
+  if (!request.body) return { ok: false, status: 400, error: "invalid_json" };
+
+  const reader = request.body.getReader();
+  const bytes = new Uint8Array(maxBytes);
+  let count = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value.byteLength > maxBytes - count) {
+        await reader.cancel().catch(() => {});
+        return { ok: false, status: 413, error: "invalid_body_size" };
+      }
+      bytes.set(value, count);
+      count += value.byteLength;
+    }
+    const decoded = new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, count));
+    return { ok: true, value: JSON.parse(decoded) };
+  } catch {
+    return { ok: false, status: 400, error: "invalid_json" };
+  } finally {
+    reader.releaseLock();
+  }
+}
