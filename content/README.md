@@ -38,10 +38,30 @@ immutable; content digests reject accidental duplicates with new IDs. The worker
 checks its local queue every five minutes, runs one render at a time and remains
 online when the queue is empty or earnings are zero.
 
-`/health` returns current queue status. Finished originals are downloadable at
-`/artifacts/<job-id>/video.mp4`, `captions.srt`, and `manifest.json`. Only completed
-artifacts are served, with an atomic persistent 100 MB/day transfer allowance.
-Artifacts contain no customer records or credentials. Publication is a separate
+`/health` exposes only aggregate queue counts; detailed `/admin/jobs` and
+`/artifacts/<job-id>/video.mp4`, `captions.srt`, and `manifest.json` require the
+private `Authorization: Bearer` token in `CONTENT_ARTIFACT_TOKEN`. If the token
+is absent, access fails closed. An unauthorized request cannot consume egress.
+Before deploying this reviewed change, provision that secret in the content
+worker's Railway environment and securely configure each approved consumer;
+do not commit, log or share the token in tickets. Do not change the live service
+until required provider approval and private-consumer acceptance pass.
+
+The no-redirect, no-overwrite operator client is
+`scripts/fetch_content_artifact.py`. With a securely configured local environment
+variable `CONTENT_ARTIFACT_TOKEN`, fetch a reviewed asset using:
+
+```
+python scripts/fetch_content_artifact.py stop-duplicate-automation-20261110 video.mp4 ./original.mp4 --sha256 <pre-recorded-sha256>
+```
+
+The script targets only the approved Railway host, never follows redirects,
+streams into an atomic temporary file, enforces a bounded size and optionally
+verifies the pre-recorded SHA-256 before committing the file. Its local nine-test
+suite runs with `python -m unittest discover -s tests -p test_fetch_content_artifact.py -v`.
+Only completed artifacts are served, with an atomic persistent 100 MB/day
+transfer allowance. Artifacts contain no customer records or credentials.
+Publication is a separate
 step using an authorized channel connector after visual/audio/claims checks;
 provider-required approvals must not be fabricated. Store each resulting post ID
 and URL to prevent duplicate publication. A completed render is not a published
