@@ -167,6 +167,34 @@ class ApexUltraAdapterTests(unittest.TestCase):
             self.assertNotIn("goal", columns)
             self.assertEqual(row, ("request-1", "task-1", "queued"))
 
+    def test_replayed_handoff_cannot_replace_recorded_provider_identity(self):
+        payload = build_payload(**self.case)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "receipts.db")
+            submit_handoff(
+                **self.case, receipt_db_path=path,
+                transport=lambda req, timeout: Response(
+                    self.response_body(payload)))
+            # An ordinary deduplicated replay keeps the same provider IDs.
+            submit_handoff(
+                **self.case, receipt_db_path=path,
+                transport=lambda req, timeout: Response(
+                    self.response_body(payload, deduplicated=True)))
+            for forged in ({"id": "request-replaced"},
+                           {"task_id": "task-replaced"}):
+                with self.subTest(forged=forged):
+                    with self.assertRaisesRegex(
+                            HandoffError, "^provider_receipt_identity_mismatch$"):
+                        submit_handoff(
+                            **self.case, receipt_db_path=path,
+                            transport=lambda req, timeout, forged=forged:
+                                Response(self.response_body(payload, **forged)))
+            with sqlite3.connect(path) as db:
+                rows = db.execute(
+                    "SELECT request_id,task_id,deduplicated FROM "
+                    "apex_ultra_handoff_receipts").fetchall()
+            self.assertEqual(rows, [("request-1", "task-1", 1)])
+
     def test_backlog_and_network_failures_are_non_secret(self):
         def backlog(request, timeout):
             raise urllib.error.HTTPError(
