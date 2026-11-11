@@ -71,7 +71,8 @@ def record_intake(lead, path=DB_PATH):
         consent_recorded_at TEXT, received_at TEXT
     )''')
     email_hash = hashlib.sha256(lead['contact_email'].encode()).hexdigest()
-    conn.execute('''INSERT OR REPLACE INTO inbound_intake_audit
+    # Preserve the first consent audit record on duplicate or replayed IDs.
+    conn.execute('''INSERT OR IGNORE INTO inbound_intake_audit
         (lead_id,email_hash,source,consent_version,consent_recorded_at,received_at)
         VALUES (?,?,?,?,?,?)''', (
         lead['id'], email_hash, lead['source'], lead['metadata']['consent_version'],
