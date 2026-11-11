@@ -74,7 +74,8 @@ class ContentHTTPTests(unittest.TestCase):
         c.ingest(self.jobs)
         path=c.STATE/'artifacts'/self.m['id'];path.mkdir();(path/'video.mp4').write_bytes(b'video')
         target=self.url+'/artifacts/'+self.m['id']+'/video.mp4'
-        with self.assertRaises(HTTPError) as e:urlopen(target)
+        # A caller with valid credentials can learn a job is not yet complete.
+        with self.assertRaises(HTTPError) as e:self.authorized(target)
         self.assertEqual(e.exception.code,404)
         with c.connect() as db:db.execute("UPDATE jobs SET status='complete'")
         for request in (target,Request(target,headers={'Authorization':'Bearer wrong'})):
@@ -86,6 +87,24 @@ class ContentHTTPTests(unittest.TestCase):
             self.assertEqual(response.headers['Cache-Control'],'private, no-store')
             with self.assertRaises(HTTPError) as e:self.authorized(target)
             self.assertEqual(e.exception.code,429)
+    def test_anonymous_artifact_lookup_cannot_enumerate_unpublished_jobs(self):
+        c.ingest(self.jobs)
+        path=c.STATE/'artifacts'/self.m['id'];path.mkdir()
+        (path/'video.mp4').write_bytes(b'private')
+        with c.connect() as db:db.execute("UPDATE jobs SET status='complete'")
+        existing=self.url+'/artifacts/'+self.m['id']+'/video.mp4'
+        missing=self.url+'/artifacts/unknown-job/video.mp4'
+        for url in (existing,missing):
+            for request in (url,Request(url,headers={'Authorization':'Bearer wrong'})):
+                with self.assertRaises(HTTPError) as exc:urlopen(request)
+                self.assertEqual(exc.exception.code,401)
+            with patch.dict(c.os.environ,{'CONTENT_ARTIFACT_TOKEN':''}):
+                with self.assertRaises(HTTPError) as exc:urlopen(url)
+                self.assertEqual(exc.exception.code,503)
+        # After authentication, a genuinely missing job is still 404.
+        with self.assertRaises(HTTPError) as exc:self.authorized(missing)
+        self.assertEqual(exc.exception.code,404)
+
     def test_missing_artifact_token_fails_closed(self):
         c.ingest(self.jobs)
         path=c.STATE/'artifacts'/self.m['id'];path.mkdir();(path/'video.mp4').write_bytes(b'video')
