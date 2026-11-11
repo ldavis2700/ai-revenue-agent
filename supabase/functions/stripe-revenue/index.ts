@@ -1,5 +1,6 @@
 import { createClient } from "npm:@supabase/supabase-js@2.111.0";
 import { paidEvent } from "./paid-event.mjs";
+import { isApexRevenueEvent } from "./apex-ownership.mjs";
 
 const PROPERTY_ID = "003";
 const MAX_BODY_BYTES = 256 * 1024;
@@ -87,6 +88,12 @@ Deno.serve(async (req: Request) => {
 
   if (event.livemode !== true) {
     return json({ received: true, ignored: true, reason: "non_live_event" });
+  }
+
+  // This Stripe account serves multiple apps. Never record foreign or unknown
+  // payments as APEX property 003 revenue, even when Stripe signs the event.
+  if (!isApexRevenueEvent(event)) {
+    return json({ received: true, ignored: true, reason: "not_apex_property" });
   }
 
   const payment = paidEvent(event);
