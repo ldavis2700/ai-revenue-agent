@@ -76,4 +76,3 @@ if __name__ == '__main__':
     parser.add_argument('output', type=Path)
     arguments = parser.parse_args()
     print(json.dumps(process(arguments.input, arguments.output), indent=2))
-
