@@ -3,10 +3,22 @@
  *
  * Subscription Checkout emits both checkout.session.completed and invoice.paid
  * for the initial charge. We count subscription revenue only from invoice.paid
- * so the initial payment is not recorded twice.
+ * so the initial payment is not recorded twice. This account is shared by
+ * multiple apps: only explicit, non-conflicting APEX property metadata may
+ * enter its ledger. Customer email or a successful charge is not app ownership.
  */
-export function paidEvent(event) {
+export function paidEvent(event, propertyId = "003") {
   const object = event?.data?.object ?? {};
+
+  const scopes = [object.metadata?.apex_property_id];
+  if (event?.type === "invoice.paid") {
+    // Stripe snapshots subscription metadata onto its invoice. Support both
+    // the current parent shape and the older subscription_details shape.
+    scopes.push(object.parent?.subscription_details?.metadata?.apex_property_id);
+    scopes.push(object.subscription_details?.metadata?.apex_property_id);
+  }
+  const present = scopes.filter((value) => value !== undefined);
+  if (!present.length || present.some((value) => value !== propertyId)) return null;
 
   const checkoutSucceeded =
     event?.type === "checkout.session.completed" ||

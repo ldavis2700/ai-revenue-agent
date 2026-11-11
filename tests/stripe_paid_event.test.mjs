@@ -4,8 +4,49 @@ import assert from "node:assert/strict";
 import { paidEvent } from "../supabase/functions/stripe-revenue/paid-event.mjs";
 
 function event(type, object) {
-  return { type, data: { object } };
+  return { type, data: { object: { metadata: { apex_property_id: "003" }, ...object } } };
 }
+
+test("does not credit HAEVEN or untagged Checkout revenue to APEX", () => {
+  for (const metadata of [undefined, {}, { apex_property_id: "002" },
+    { apex_property_id: 3 }, { apex_property_id: " 003" }]) {
+    assert.equal(paidEvent(event("checkout.session.completed", {
+      id: "cs_other", metadata, mode: "payment", payment_status: "paid",
+      amount_total: 10000, currency: "usd", payment_intent: "pi_other",
+    })), null);
+  }
+});
+
+test("reads the subscription metadata snapshot on current and legacy invoices", () => {
+  for (const details of [
+    { subscription: "sub_apex", subscription_details: { metadata: { apex_property_id: "003" } } },
+    { parent: { subscription_details: { subscription: "sub_apex", metadata: { apex_property_id: "003" } } } },
+  ]) {
+    assert.equal(paidEvent(event("invoice.paid", {
+      metadata: {}, id: "in_apex", amount_paid: 9900, currency: "usd", ...details,
+    }))?.kind, "subscription_invoice");
+  }
+});
+
+test("ignores other-property and conflicting invoice metadata", () => {
+  for (const metadata of [{}, { apex_property_id: "003" }]) {
+    assert.equal(paidEvent(event("invoice.paid", {
+      metadata, id: "in_haeven", amount_paid: 9900, currency: "usd",
+      parent: { subscription_details: { subscription: "sub_haeven", metadata: { apex_property_id: "002" } } },
+    })), null);
+  }
+  assert.equal(paidEvent(event("invoice.paid", {
+    metadata: {}, id: "in_unknown", subscription: "sub_unknown", amount_paid: 9900, currency: "usd",
+  })), null);
+});
+
+test("Checkout cannot borrow scope from unrelated nested subscription metadata", () => {
+  assert.equal(paidEvent(event("checkout.session.completed", {
+    metadata: {}, id: "cs_unknown", mode: "payment", payment_status: "paid",
+    amount_total: 10000, currency: "usd",
+    parent: { subscription_details: { metadata: { apex_property_id: "003" } } },
+  })), null);
+});
 
 test("counts a paid one-time Checkout Session", () => {
   const payment = paidEvent(event("checkout.session.completed", {

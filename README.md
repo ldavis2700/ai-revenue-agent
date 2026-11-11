@@ -241,14 +241,31 @@ APEX_API_KEY=<server-side Supabase secret key>
 The Supabase Edge Function in `supabase/functions/stripe-revenue` is the production bridge for verified Stripe revenue. It:
 
 - verifies the raw request body with `STRIPE_REVENUE_WEBHOOK_SECRET` and rejects stale or invalid signatures;
-- accepts only paid `checkout.session.completed` and `invoice.paid` events;
+- accepts paid one-time `checkout.session.completed` / `checkout.session.async_payment_succeeded` events and subscription `invoice.paid` events;
+- requires explicit `apex_property_id=003` metadata on Checkout, or the invoice/subscription metadata snapshot, rejecting missing, other-app or conflicting tags;
+- ignores subscription Checkout completion so the initial subscription payment is recorded only from its invoice;
 - records each Stripe event exactly once in `verified_revenue_events`;
 - stores a customer email hash rather than a plaintext payment email and links to a consented inbound lead when hashes match; and
 - leaves the revenue table protected by RLS with no public client policy.
 
 Production endpoint: `https://wuzmqruxdclstezitsbf.supabase.co/functions/v1/stripe-revenue`
 
-Activation requires an owner-controlled Stripe webhook endpoint subscribed to `checkout.session.completed` and `invoice.paid`, plus its signing secret stored as the Supabase secret `STRIPE_REVENUE_WEBHOOK_SECRET`. Never commit or paste the signing secret into source, client code, logs, issues, or pull requests. Until the secret is configured, the deployed endpoint intentionally returns `503 service_not_configured` and cannot record events.
+Activation requires an owner-controlled Stripe webhook endpoint subscribed to `checkout.session.completed`, `checkout.session.async_payment_succeeded` and `invoice.paid`, plus its signing secret stored as the Supabase secret `STRIPE_REVENUE_WEBHOOK_SECRET`. Never commit or paste the signing secret into source, client code, logs, issues, or pull requests. Until the secret is configured, the deployed endpoint intentionally returns `503 service_not_configured` and cannot record events.
+
+Before deploying this source, verify the intended APEX Payment Links carry
+`metadata.apex_property_id=003`; subscription links must also set
+`subscription_data.metadata.apex_property_id=003`. Stripe copies these tags to
+Checkout Sessions and invoice subscription snapshots. Do not infer ownership
+from an email match or change HAEVEN's `002` tags. Existing untagged sessions
+will be ignored and require separate reconciliation, not automatic credit.
+Reject conflicting invoice/subscription tags rather than choosing one.
+
+Source and production may differ: inspect the deployed function files before
+claiming the fix is live. Validate signed synthetic events against an isolated
+database double, then perform only non-mutating live signature checks. Preserve
+the previous deployed bundle for rollback. This positive-payment ledger is not
+net profit, bank settlement, or refund/dispute reconciliation. Checkout remains
+paused until the complete payment lifecycle and merchant readiness are verified.
 
 Legacy APEX deployments remain supported by leaving `APEX_AUTH_MODE=bearer` and providing `APEX_ADMIN_TOKEN`.
 
