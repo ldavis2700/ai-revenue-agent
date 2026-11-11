@@ -269,14 +269,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200 if result['healthy'] else 503);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
         match=re.fullmatch(r'/artifacts/([a-z0-9][a-z0-9-]{2,79})/(video.mp4|captions.srt|manifest.json)',self.path)
         if not match:self.send_error(404);return
-        with connect() as db:
-            row=db.execute("SELECT status FROM jobs WHERE id=?",(match[1],)).fetchone()
-        path=STATE/'artifacts'/match[1]/match[2]
-        if not row or row['status']!='complete' or not path.is_file():self.send_error(404);return
+        # Authorize BEFORE reading queue state or probing the file system.
+        # Unauthenticated callers must not distinguish unpublished job IDs
+        # from nonexistent ones based on HTTP status or timing.
         if not os.environ.get('CONTENT_ARTIFACT_TOKEN'):
             self.send_error(503);return
         if not artifact_authorized(self.headers):
             self.send_response(401);self.send_header('WWW-Authenticate','Bearer');self.send_header('Content-Length','0');self.end_headers();return
+        with connect() as db:
+            row=db.execute("SELECT status FROM jobs WHERE id=?",(match[1],)).fetchone()
+        path=STATE/'artifacts'/match[1]/match[2]
+        if not row or row['status']!='complete' or not path.is_file():self.send_error(404);return
         size=path.stat().st_size
         if not reserve_egress(size):self.send_error(429);return
         self.connection.settimeout(10)
