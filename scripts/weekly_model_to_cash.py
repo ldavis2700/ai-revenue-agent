@@ -4,6 +4,79 @@ import argparse
 from datetime import datetime, timezone, timedelta
 import json
 from pathlib import Path
+from urllib.parse import urlsplit
+
+# Review intervals are operating defaults, not claims that a market stays stable.
+# A known material change invalidates a topic immediately, regardless of age.
+LEARNING_TOPICS = {
+    "customer_demand": 7,
+    "pricing_and_fees": 7,
+    "platform_rules_and_rights": 7,
+    "acquisition_and_consent": 7,
+    "delivery_and_qa": 30,
+    "collection_and_unit_economics": 7,
+    "retention_and_failure_lessons": 30,
+}
+
+
+def learning_review(candidate, now=None):
+    """Return an actionable refresh checklist; never infer expertise from claims.
+
+    Evidence remains operator supplied. This pure function neither fetches URLs
+    nor changes permission to fulfill existing funded customer obligations.
+    """
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("now must be timezone aware")
+    supplied = candidate.get("learning_evidence", {})
+    if not isinstance(supplied, dict):
+        supplied = {}
+    topics = []
+    for topic, days in LEARNING_TOPICS.items():
+        item = supplied.get(topic)
+        reasons = []
+        due_at = None
+        if not isinstance(item, dict):
+            reasons.append("missing_topic")
+        else:
+            for key in ("finding", "next_action"):
+                if not isinstance(item.get(key), str) or not item[key].strip():
+                    reasons.append("missing_" + key)
+            sources = item.get("source_urls")
+            if not isinstance(sources, list) or not sources or not all(_source_url(u) for u in sources):
+                reasons.append("source_urls_required")
+            try:
+                checked = datetime.fromisoformat(item["checked_at"].replace("Z", "+00:00"))
+                if checked.tzinfo is None or checked.utcoffset() is None:
+                    raise ValueError("naive time")
+                due = checked + timedelta(days=days)
+                due_at = due.isoformat()
+                if checked > now:
+                    reasons.append("future_check")
+                elif now >= due:
+                    reasons.append("stale_check")
+            except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
+                reasons.append("invalid_check_time")
+            if item.get("material_change", False) is not False:
+                reasons.append("material_change_requires_review")
+        topics.append({"topic": topic, "state": "refresh_required" if reasons else "documented_current",
+                       "reasons": reasons, "refresh_due_at": due_at})
+    pending = [t["topic"] for t in topics if t["state"] == "refresh_required"]
+    return {"state": "refresh_required" if pending else "documented_current",
+            "topics": topics, "next_learning_topics": pending,
+            "source_contents_verified": False, "expertise_demonstrated": False,
+            "external_actions_authorized": False}
+
+
+def _source_url(value):
+    if not isinstance(value, str) or any(c.isspace() or ord(c) < 32 for c in value):
+        return False
+    try:
+        url = urlsplit(value)
+        return (url.scheme == "https" and bool(url.hostname)
+                and url.username is None and url.password is None)
+    except ValueError:
+        return False
 
 REQUIRED = ("model_id", "observed_at", "source_urls", "buyer_evidence",
             "deliverable", "delivery_capabilities_verified", "demand_channel",
@@ -12,13 +85,13 @@ REQUIRED = ("model_id", "observed_at", "source_urls", "buyer_evidence",
             "estimated_revenue_cents", "estimated_direct_cost_cents", "estimated_support_cost_cents",
             "estimated_platform_fee_cents", "external_credentials_verified",
             "buyer_evidence_url", "payment_rail_evidence_url")
-ALLOWED_URL_PREFIXES = ("https://",)
 
 def evaluate(candidate, now=None):
     now=now or datetime.now(timezone.utc)
     missing=[x for x in REQUIRED if x not in candidate]
     if missing:
         return {"model_id":candidate.get("model_id","unknown"),"state":"insufficient_evidence",
+                "learning":learning_review(candidate, now),
                 "reasons":["missing:"+x for x in missing],"next_action":"Collect missing actual buyer/collection/delivery evidence"}
     reasons=[]
     try:
@@ -28,13 +101,13 @@ def evaluate(candidate, now=None):
     except (TypeError,ValueError,AttributeError):
         reasons.append("invalid_observation_time")
     urls=candidate["source_urls"]
-    if not isinstance(urls,list) or not urls or any(not isinstance(u,str) or not u.startswith(ALLOWED_URL_PREFIXES) for u in urls):
+    if not isinstance(urls,list) or not urls or any(not _source_url(u) for u in urls):
         reasons.append("grounded_source_urls_required")
     if not isinstance(candidate["buyer_evidence"],str) or not candidate["buyer_evidence"].strip():
         reasons.append("real_buyer_evidence_required")
     for evidence_key in ("buyer_evidence_url", "payment_rail_evidence_url"):
         value=candidate[evidence_key]
-        if not isinstance(value,str) or not value.startswith("https://"):
+        if not _source_url(value):
             reasons.append(evidence_key+"_required")
     if not isinstance(candidate["deliverable"],str) or len(candidate["deliverable"].strip())<12:
         reasons.append("specific_deliverable_required")
@@ -67,6 +140,7 @@ def evaluate(candidate, now=None):
             "next_action":("Prepare a truthful scoped offer and tested delivery artifact; validate with a consenting buyer"
                            if not reasons else "Resolve the listed blockers and recheck current provider evidence"),
             "external_action_executed":False,"receipt_verified":False,
+            "learning":learning_review(candidate, now),
             "recreation":recreation_gate(candidate)}
 
 def recreation_gate(candidate):
@@ -84,7 +158,7 @@ def recreation_gate(candidate):
     if not isinstance(artifact,str) or len(artifact)!=64 or any(c not in "0123456789abcdef" for c in artifact):
         reasons.append("immutable_delivery_artifact_required")
     qa=candidate.get("delivery_qa_evidence_url")
-    if not isinstance(qa,str) or not qa.startswith("https://"):
+    if not _source_url(qa):
         reasons.append("delivery_qa_receipt_required")
     if candidate.get("actual_buyer_acceptance_verified") is not True:
         reasons.append("real_buyer_acceptance_not_verified")
@@ -93,14 +167,110 @@ def recreation_gate(candidate):
             "external_delivery_performed":False,"settled_payment_verified":False}
 
 
+def execution_review(candidate, evaluation, now):
+    """Require a bounded, falsifiable experiment before shortlisting new work.
+
+    Forecasts and source links are supplied by an operator, never receipts.
+    This ranks reversible preparation; it cannot authorize external execution.
+    """
+    plan = candidate.get("execution_plan")
+    reasons = []
+    expected = rate = None
+    cash_days = None
+    if not isinstance(plan, dict):
+        reasons.append("execution_plan_required")
+    else:
+        for key in ("hypothesis", "customer_segment", "acceptance_test",
+                    "measurement_method", "stop_rule", "next_action",
+                    "probability_basis"):
+            if not isinstance(plan.get(key), str) or not plan[key].strip():
+                reasons.append(key + "_required")
+        if plan.get("success_metric") not in (
+            "qualified_opt_in_requests", "buyer_accepted_deliveries", "settled_paid_deliveries"
+        ):
+            reasons.append("customer_outcome_metric_required")
+        for key in ("baseline", "target"):
+            value = plan.get(key)
+            if type(value) is not int or value < 0:
+                reasons.append("nonnegative_integer_" + key + "_required")
+        if not any(r.startswith("nonnegative_integer_") for r in reasons):
+            if plan["target"] <= plan["baseline"]:
+                reasons.append("target_must_exceed_baseline")
+        for key, low, high in (("minimum_sample_size", 1, 1000000),
+                               ("estimated_total_minutes", 1, 525600),
+                               ("estimated_days_to_cash", 1, 365),
+                               ("success_probability_bps", 0, 10000)):
+            value = plan.get(key)
+            if type(value) is not int or not low <= value <= high:
+                reasons.append(key + "_invalid")
+        if type(plan.get("max_new_spend_cents")) is not int or plan["max_new_spend_cents"] != 0:
+            reasons.append("zero_new_spend_required")
+        if not _source_url(plan.get("probability_evidence_url")):
+            reasons.append("probability_evidence_required")
+        try:
+            deadline = datetime.fromisoformat(plan["review_at"].replace("Z", "+00:00"))
+            if deadline.tzinfo is None or not timedelta(0) < deadline - now <= timedelta(days=14):
+                reasons.append("review_must_be_within_fourteen_days")
+        except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
+            reasons.append("invalid_review_time")
+        if not reasons and evaluation.get("estimated_contribution_cents") is not None:
+            # Charge all estimated costs even in the failure case. Do not just
+            # multiply the successful-case margin by an optimistic probability.
+            costs = sum(candidate[k] for k in (
+                "estimated_direct_cost_cents", "estimated_support_cost_cents",
+                "estimated_platform_fee_cents"))
+            expected = (candidate["estimated_revenue_cents"] * plan["success_probability_bps"]
+                        // 10000 - costs)
+            rate = expected * 60 // plan["estimated_total_minutes"]
+            cash_days = plan["estimated_days_to_cash"]
+            if expected <= 0:
+                reasons.append("no_positive_risk_adjusted_contribution")
+    if evaluation["learning"]["state"] != "documented_current":
+        reasons.append("refresh_learning_before_shortlisting")
+    if evaluation["state"] != "prepare_only":
+        reasons.append("resolve_preparation_blockers")
+    return {"state": "documented_for_preparation" if not reasons else "needs_work",
+            "reasons": reasons, "estimated_expected_contribution_cents": expected,
+            "estimated_expected_cents_per_hour": rate,
+            "estimated_days_to_cash": cash_days,
+            "estimate_is_collected_cash": False, "source_contents_verified": False,
+            "external_actions_authorized": False, "expertise_demonstrated": False}
+
+
 def weekly_report(candidates,now=None):
     if not isinstance(candidates,list):raise ValueError("candidates must be a list")
-    results=[evaluate(item,now) for item in candidates[:30]]
-    eligible=[r for r in results if r["state"]=="prepare_only"]
-    eligible.sort(key=lambda x:x["estimated_contribution_cents"],reverse=True)
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("now must be timezone aware")
+    # Do not silently drop the 31st candidate or let duplicate models occupy
+    # both experiment slots. Reject the batch so operators can correct it.
+    if len(candidates) > 30:
+        raise ValueError("review at most 30 candidates per batch")
+    seen = set()
+    results = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            raise ValueError("each candidate must be an object")
+        model_id = item.get("model_id")
+        if not isinstance(model_id, str) or not model_id.strip() or model_id in seen:
+            raise ValueError("model_id must be a unique nonempty string")
+        seen.add(model_id)
+        result = evaluate(item, now)
+        result["execution"] = execution_review(item, result, now)
+        results.append(result)
+    eligible=[r for r in results if r["execution"]["state"]=="documented_for_preparation"]
+    eligible.sort(key=lambda x:(-x["execution"]["estimated_expected_cents_per_hour"],
+                                x["execution"]["estimated_days_to_cash"], x["model_id"]))
     return {"research_type":"weekly_ai_models","evidence_state":"operator_supplied_unverified_sources",
             "ranked_preparation_candidates":eligible[:2],
             "all_evaluations":results,"selected_experiments_limit":2,
+            "learning_refresh_queue":[{"model_id":r["model_id"],
+                                       "topics":r["learning"]["next_learning_topics"]}
+                                      for r in results if r["learning"]["next_learning_topics"]],
+            "execution_preparation_queue":[{"model_id":r["model_id"],
+                                            "requirements":r["execution"]["reasons"]}
+                                           for r in results if r["execution"]["reasons"]],
+            "ranking_basis":"estimated_expected_contribution_per_total_work_hour_then_days_to_cash",
             "verified_collected_revenue":"unknown",
             "allowed_actions":"research_and_reversible_preparation_only",
             "automatic_spend":False,"automatic_contracts":False,

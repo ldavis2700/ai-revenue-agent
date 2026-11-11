@@ -94,9 +94,42 @@ class ContentHTTPTests(unittest.TestCase):
             with self.assertRaises(HTTPError) as e:urlopen(self.url+'/artifacts/'+self.m['id']+'/video.mp4')
             self.assertEqual(e.exception.code,503)
     def test_traversal_and_arbitrary_files_unavailable(self):
-        for path in ['/artifacts/../../queue.db','/queue.db','/artifacts/abc/secret.txt']:
+        for path in ['/artifacts/../../queue.db','/queue.db','/artifacts/abc/secret.txt',
+                     '/sales/offer.html', '/content_worker.py', '/privacy/../queue.db',
+                     '/%2e%2e/queue.db', '/.env']:
             with self.assertRaises(HTTPError) as e:urlopen(self.url+path)
             self.assertEqual(e.exception.code,404)
+    def test_public_offer_is_checkout_paused_and_query_cannot_override_it(self):
+        with urlopen(self.url+'/?setup=https://evil.example&managed=https://evil.example') as response:
+            body=response.read().decode()
+            self.assertIn('Online checkout is paused',body)
+            self.assertNotIn('buy.stripe.com',body)
+            self.assertNotIn('evil.example',body)
+            self.assertNotIn('https://ai-revenue-agent-seven.vercel.app',body)
+            self.assertIn(c.PUBLIC_ORIGIN,body)
+            self.assertIn('frame-ancestors',response.headers['Content-Security-Policy'])
+            self.assertEqual(response.headers['X-Content-Type-Options'],'nosniff')
+    def test_all_public_pages_and_legacy_privacy_alias_are_served(self):
+        for path in c.PUBLIC_PAGES:
+            with urlopen(self.url+path+'?utm_source=test') as response:
+                self.assertEqual(response.status,200)
+                self.assertIn(b'<!doctype html>',response.read().lower())
+    def test_public_pages_respect_shared_transfer_cap_without_breaking_health(self):
+        with patch.object(c,'MAX_EGRESS_DAY',1):
+            with self.assertRaises(HTTPError) as exc:urlopen(self.url+'/')
+            self.assertEqual(exc.exception.code,429)
+            with c.connect() as db:
+                db.execute('INSERT INTO health VALUES (1,?)',(c.time.time(),))
+                self.assertEqual(db.execute('SELECT bytes FROM egress').fetchone()[0],0)
+            self.assertTrue(json.load(urlopen(self.url+'/health'))['healthy'])
+    def test_missing_or_oversized_public_asset_fails_closed(self):
+        with patch.object(c,'ROOT',Path(self.temp.name)):
+            with self.assertRaises(HTTPError) as exc:urlopen(self.url+'/')
+            self.assertEqual(exc.exception.code,503)
+            sales=Path(self.temp.name)/'sales';sales.mkdir()
+            (sales/'offer.html').write_bytes(b'x'*100001)
+            with self.assertRaises(HTTPError) as exc:urlopen(self.url+'/')
+            self.assertEqual(exc.exception.code,503)
     def test_stale_heartbeat_is_not_healthy(self):
         with self.assertRaises(HTTPError) as e:urlopen(self.url+'/health')
         self.assertEqual(e.exception.code,503)
@@ -129,6 +162,7 @@ class ContentHTTPTests(unittest.TestCase):
         self.assertTrue(details['rendering_overdue'])
         self.assertFalse(details['healthy'])
         self.assertNotIn('jobs',details)
+
     def test_active_render_remains_healthy(self):
         c.ingest(self.jobs)
         with c.connect() as db:
@@ -140,6 +174,5 @@ class ContentHTTPTests(unittest.TestCase):
         self.assertFalse(details['rendering_overdue'])
         self.assertNotIn('jobs',details)
 
+
 if __name__=='__main__':unittest.main()
-
-
