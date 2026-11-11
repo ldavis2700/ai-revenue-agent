@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { isApexRevenueEvent } from '../supabase/functions/stripe-revenue/apex-ownership.mjs';
 
 const e = (type, object, livemode = true) => ({ type, livemode, data: { object } });
@@ -84,4 +85,14 @@ test('rejects test-mode and unrelated events', () => {
     type: 'checkout.session.completed', livemode: true,
   }), false);
   assert.equal(isApexRevenueEvent(null), false);
+});
+
+// Guard the integration boundary: a tested helper alone must never be
+// confused with a webhook that actually calls it before any receipt insert.
+test('source webhook gates ownership before normalizing or storing revenue', () => {
+  const source = readFileSync(new URL('../supabase/functions/stripe-revenue/index.ts', import.meta.url), 'utf8');
+  const guard = source.indexOf('if (!isApexRevenueEvent(event))');
+  const normalize = source.indexOf('const payment = paidEvent(event);');
+  const insert = source.indexOf('from("verified_revenue_events")');
+  assert.ok(guard > 0 && normalize > guard && insert > normalize);
 });
