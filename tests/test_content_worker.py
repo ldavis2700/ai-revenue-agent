@@ -139,6 +139,20 @@ class ContentHTTPTests(unittest.TestCase):
                 urlopen(self.url+path)
             self.assertEqual(exc.exception.code,404)
 
+    def test_public_response_lab_stays_available_without_private_artifact_token(self):
+        c.ingest(self.jobs)
+        artifact=c.STATE/'artifacts'/self.m['id'];artifact.mkdir()
+        (artifact/'video.mp4').write_bytes(b'private')
+        with c.connect() as db:db.execute("UPDATE jobs SET status='complete'")
+        with patch.dict(c.os.environ,{'CONTENT_ARTIFACT_TOKEN':''}):
+            for route in ['/academy','/sales/academy.css','/sales/academy.js']:
+                with urlopen(self.url+route) as response:
+                    self.assertEqual(response.status,200)
+                    self.assertGreater(len(response.read()),100)
+            for route in ['/artifacts/'+self.m['id']+'/video.mp4','/admin/jobs']:
+                with self.assertRaises(HTTPError) as exc:urlopen(self.url+route)
+                self.assertEqual(exc.exception.code,503)
+
     def test_public_pages_respect_shared_transfer_cap_without_breaking_health(self):
         with patch.object(c,'MAX_EGRESS_DAY',1):
             with self.assertRaises(HTTPError) as exc:urlopen(self.url+'/')
