@@ -27,6 +27,10 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_self_improvement_cycle.py' -v
       - name: Test persistent content queue
         run: python -m unittest discover -s tests -p 'test_content_worker.py' -v
+      - name: Test APEX Response Lab in desktop and mobile Chromium
+        run: |
+          command -v google-chrome || command -v chromium || command -v chromium-browser
+          python -m unittest discover -s tests -p 'test_academy_browser.py' -v
       - name: Build and render with content container
         timeout-minutes: 12
         run: |
