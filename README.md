@@ -161,6 +161,38 @@ Safe defaults are intentionally strict:
 
 With those defaults, the agent may analyze, prioritize, draft, and prepare, but it may not take external actions. A nonzero daily cap and explicit execution enablement are both required before an approved runtime may act. Spending, contracts, automatic charging, customer-system changes, and irreversible production changes remain approval-gated regardless.
 
+### APEX ULTRA engineering handoff
+
+`scripts/submit_apex_ultra_handoff.py` provides the APEX-side half of the
+isolated APEX ULTRA command-center boundary. It submits one explicit business
+case to ULTRA's authenticated `/orchestration/requests` endpoint, reuses a
+stable idempotency key, verifies the returned request/task identity, and stores
+only non-secret receipt IDs in SQLite. The adapter rejects redirects, non-HTTPS
+or non-allowlisted hosts, oversized/non-JSON responses, and any response that
+claims execution, production, or outreach authorization.
+
+External submission is disabled by default. An authorized isolated deployment
+must configure all four values before the CLI can make a request:
+
+```bash
+export APEX_ULTRA_HANDOFF_ENABLED=true
+export APEX_ULTRA_URL=https://the-isolated-ultra-service.example
+export APEX_ULTRA_ALLOWED_HOST=the-isolated-ultra-service.example
+export APEX_ULTRA_API_TOKEN='configure-privately'
+python3 scripts/submit_apex_ultra_handoff.py \
+  --business-case-id revenue-case-0042 \
+  --project APEX \
+  --goal 'Plan a verified paid-service fulfillment improvement' \
+  --capability plan --capability code_change \
+  --receipt-db /persistent/revenue_agent.db
+```
+
+An accepted handoff is queued planning work, not a code change, deployment,
+customer action, production approval, or revenue event. ULTRA's separate
+proposal-digest and human-approval gate remains mandatory for code writing;
+production, destructive actions, spending, outreach, property commitments and
+signatures remain outside this adapter.
+
 ## Lead input
 
 Recommended fields:
