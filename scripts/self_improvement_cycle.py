@@ -23,18 +23,20 @@ def _choose_bottleneck(db):
     if "revenue_worker_runs" not in tables:
         return {"category":"runtime_observability","evidence":"worker run history unavailable",
                 "next_test":"Verify the existing persistent worker state and heartbeat on the authorized runtime."}
+    # The self-review runs *inside* the current cycle. Its in-progress
+    # "running" record is not evidence of a completed, failed, or paid cycle.
     rows=db.execute(
-        "SELECT status,stages_json FROM revenue_worker_runs ORDER BY id DESC LIMIT ?",
+        "SELECT status,stages_json FROM revenue_worker_runs "
+        "WHERE status != 'running' ORDER BY id DESC LIMIT ?",
         (MAX_SAMPLED_RUNS,)).fetchall()
     if not rows:
-        return {"category":"runtime_observability","evidence":"zero recorded production cycles",
+        return {"category":"runtime_observability","evidence":"zero finalized production cycles",
                 "next_test":"Verify actual continuous worker startup and durable cycle receipts on an authorized host."}
     failures=Counter()
-    completed=0
     for state,raw in rows:
-        if state=="completed":
-            completed+=1
-        if state in ("degraded","interrupted"):
+        if state not in VALID_STATUSES:
+            failures["invalid_cycle_status"]+=1
+        elif state in ("failed","timed_out","degraded","interrupted"):
             failures["cycle:"+state]+=1
         if not raw:
             continue
