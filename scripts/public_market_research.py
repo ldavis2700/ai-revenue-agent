@@ -12,6 +12,7 @@ from pathlib import Path
 import socket
 import sqlite3
 import time
+from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit
 from urllib.request import Request, build_opener, HTTPRedirectHandler, ProxyHandler
 from urllib.robotparser import RobotFileParser
@@ -26,6 +27,29 @@ USER_AGENT = 'APEXResearch/1.0'
 MAX_BYTES = 1_048_576
 REFRESH_SECONDS = 21600
 PUBLICATION_MAX_AGE_DAYS = 30
+
+# Diagnostics are deliberately fixed codes, never remote response text or URLs.
+SAFE_VALUE_FAILURES = frozenset({
+    'redirect_requires_review', 'robots_disallowed', 'no_research_items',
+    'source_too_large', 'xml_entities_forbidden', 'unsupported_content_type',
+    'non_public_address', 'source_not_allowed',
+})
+
+
+def classify_failure(exc):
+    if isinstance(exc, HTTPError):
+        return 'http_' + str(exc.code) if exc.code in (400, 401, 403, 404, 408, 429, 500, 502, 503, 504) else 'http_other'
+    if isinstance(exc, socket.gaierror):
+        return 'dns_resolution'
+    if isinstance(exc, TimeoutError):
+        return 'timeout'
+    if isinstance(exc, URLError):
+        return 'network_error'
+    if isinstance(exc, ValueError):
+        return str(exc) if str(exc) in SAFE_VALUE_FAILURES else 'invalid_source'
+    if isinstance(exc, OSError):
+        return 'network_error'
+    return 'unexpected_error'
 
 
 def publication_freshness(value, now):
@@ -142,6 +166,9 @@ def connect(path):
           source_id TEXT NOT NULL, url TEXT NOT NULL, title TEXT NOT NULL,
           publisher_date TEXT, discovered_at REAL NOT NULL, last_seen_at REAL NOT NULL,
           PRIMARY KEY(source_id,url));
+        CREATE TABLE IF NOT EXISTS public_research_failures (
+          source_id TEXT PRIMARY KEY, failure_code TEXT NOT NULL,
+          observed_at REAL NOT NULL);
     ''')
     return db
 
@@ -189,14 +216,19 @@ def run(path, *, fetcher=fetch, clock=time.time):
                         (source_id, target, title, published, stamp, stamp))
                 db.execute('UPDATE public_research_sources SET succeeded_at=?,next_due=?,failures=0,status=?,digest=? WHERE source_id=?',
                            (stamp, stamp+REFRESH_SECONDS, 'changed' if changed else 'unchanged', digest, source_id))
+                db.execute('DELETE FROM public_research_failures WHERE source_id=?', (source_id,))
                 results.append({'source': source_id, 'status': 'changed' if changed else 'unchanged', 'items': len(items)})
-            except Exception:
+            except Exception as exc:
                 db.rollback()
-                # Raw responses and exceptions can contain untrusted text; omit them.
+                # Raw responses and exceptions can contain untrusted text; emit only fixed codes.
+                safe_code = classify_failure(exc)
                 failures = min(failures+1, 6)
                 db.execute('UPDATE public_research_sources SET next_due=?,failures=?,status=? WHERE source_id=?',
                            (stamp+min(86400, 3600*2**(failures-1)), failures, 'unavailable', source_id))
-                results.append({'source': source_id, 'status': 'unavailable'})
+                db.execute('''INSERT INTO public_research_failures VALUES (?,?,?)
+                    ON CONFLICT(source_id) DO UPDATE SET failure_code=excluded.failure_code,
+                    observed_at=excluded.observed_at''', (source_id, safe_code, stamp))
+                results.append({'source': source_id, 'status': 'unavailable', 'failure_code': safe_code})
             db.execute('''DELETE FROM public_research_items WHERE rowid NOT IN
                 (SELECT rowid FROM public_research_items ORDER BY last_seen_at DESC,rowid DESC LIMIT 500)''')
             db.commit()
@@ -210,10 +242,18 @@ def summary(db, clock=time.time):
         total = db.execute('SELECT COUNT(*) FROM public_research_items').fetchone()[0]
     except sqlite3.OperationalError:
         return {'sources_checked': 0, 'fresh_sources': 0, 'items': 0, 'status': 'not_started'}
+    try:
+        failure_rows = db.execute('''SELECT f.source_id, f.failure_code FROM public_research_failures f
+            JOIN public_research_sources s USING (source_id)
+            WHERE s.status='unavailable' ORDER BY f.source_id LIMIT 10''').fetchall()
+    except sqlite3.OperationalError:
+        failure_rows = []
     return {'sources_checked': len(rows), 'fresh_sources': sum(
         row[2] is not None and 0 <= clock()-row[2] < 2*REFRESH_SECONDS for row in rows),
         'unavailable_sources': sum(row[1] == 'unavailable' for row in rows),
-        'items': total, 'status': 'discovery_only'}
+        'items': total, 'status': 'discovery_only',
+        'unavailable_details': [{'source': source, 'code': code}
+                                for source, code in failure_rows]}
 
 
 def review_queue(db, candidates, clock=time.time):

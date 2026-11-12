@@ -4,6 +4,7 @@ from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
+from urllib.error import HTTPError
 from unittest.mock import patch
 
 from scripts import public_market_research as research
@@ -56,6 +57,35 @@ class PublicResearchTests(unittest.TestCase):
         with research.connect(self.path) as db:
             row=db.execute("SELECT succeeded_at,next_due FROM public_research_sources WHERE source_id='upwork_research'").fetchone()
         self.assertEqual(row,(100000,133600))
+
+    def test_safe_diagnostics_are_durable_and_recover(self):
+        def rejected(url):
+            if 'upwork.com' in url:
+                raise HTTPError(url, 403, 'private customer token', None, None)
+            if 'stripe.com' in url:
+                raise RuntimeError('SECRET payment response')
+            return self.fetch(url)
+        result = research.run(self.path, fetcher=rejected, clock=lambda: 100000)
+        failures = {row['source']: row['failure_code'] for row in result['sources']
+                    if row['status'] == 'unavailable'}
+        self.assertEqual(failures, {'upwork_research': 'http_403',
+                                    'stripe_pricing': 'unexpected_error'})
+        self.assertNotIn('SECRET', str(result))
+        self.assertNotIn('private customer', str(result))
+        with research.connect(self.path) as db:
+            details = research.summary(db, clock=lambda: 100001)['unavailable_details']
+            self.assertEqual(details, [{'source': 'stripe_pricing', 'code': 'unexpected_error'},
+                                       {'source': 'upwork_research', 'code': 'http_403'}])
+            self.assertNotIn('SECRET', str(details))
+        research.run(self.path, fetcher=self.fetch, clock=lambda: 110000)
+        with research.connect(self.path) as db:
+            self.assertEqual(research.summary(db, clock=lambda: 110001)['unavailable_details'], [])
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM public_research_failures').fetchone()[0], 0)
+
+    def test_failure_code_never_uses_untrusted_exception_text(self):
+        self.assertEqual(research.classify_failure(ValueError('secret-from-source')), 'invalid_source')
+        self.assertEqual(research.classify_failure(ValueError('robots_disallowed')), 'robots_disallowed')
+        self.assertEqual(research.classify_failure(TimeoutError('SECRET')), 'timeout')
 
     def test_robots_disallow_blocks_page_fetch(self):
         calls=[]
