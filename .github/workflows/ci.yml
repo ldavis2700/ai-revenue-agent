@@ -34,6 +34,8 @@ jobs:
           docker run --rm --memory=256m --cpus=1 --read-only --tmpfs /tmp --tmpfs /data apex-content-ci /app/content-entrypoint.sh --once
       - name: Test consented autonomy routing
         run: |
+          python -m unittest discover -s tests -p 'test_public_market_research.py' -v
+          python -m unittest discover -s tests -p 'test_runtime_supervisor.py' -v
           python -m unittest discover -s tests -p 'test_revenue_cycle_consent.py' -v
           python -m unittest discover -s tests -p 'test_autonomous_cycle.py' -v
           python -m unittest discover -s tests -p 'test_dispatch_recovery.py' -v
@@ -46,6 +48,26 @@ jobs:
           python -m unittest discover -s tests -p 'test_setup_fulfillment.py' -v
           python -m unittest discover -s tests -p 'test_build_response_pack.py' -v
           python -m unittest discover -s tests -p 'test_sales_checkout_pause.py' -v
+      - name: Verify combined runtime and private state
+        timeout-minutes: 3
+        run: |
+          docker run -d --name apex-combined-ci --memory=256m --cpus=1 --read-only --tmpfs /tmp --tmpfs /data -e APEX_REVENUE_WORKER_ENABLED=true -e APEX_PUBLIC_RESEARCH_ENABLED=false -e DELIVERY_ENABLED=false apex-content-ci
+          trap 'docker logs apex-combined-ci; docker rm -f apex-combined-ci' EXIT
+          docker exec apex-combined-ci python3 -c '
+          import json,time,urllib.request,urllib.error
+          deadline=time.monotonic()+90
+          while time.monotonic()<deadline:
+              try:
+                  result=json.load(urllib.request.urlopen("http://127.0.0.1:8080/health",timeout=5))
+                  if result["healthy"] and result["revenue_worker"]["healthy"]: break
+              except (OSError,ValueError): pass
+              time.sleep(1)
+          else: raise SystemExit("combined worker never healthy")
+          for path in ("/revenue/revenue_agent.db","/data/revenue/revenue_agent.db","/scripts/public_market_research.py"):
+              try: urllib.request.urlopen("http://127.0.0.1:8080"+path,timeout=5)
+              except urllib.error.HTTPError as exc: assert exc.code==404
+              else: raise AssertionError("private route exposed")
+          '
       - name: Smoke test referral attribution loop
         env:
           REVENUE_DB_PATH: /tmp/referral_agent.db

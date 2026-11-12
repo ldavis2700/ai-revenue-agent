@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parent
 STAGES = (
+    ('research', 'scripts/public_market_research.py'),
     ('learn', 'scripts/experiment_learning.py'),
     ('plan', 'scripts/mission_control.py'),
     ('execute_authorized_inbound', 'autonomous_cycle.py'),
@@ -136,7 +137,12 @@ class RevenueWorker:
                        (now(), status, json.dumps(results), run_id))
             db.execute('DELETE FROM revenue_worker_runs WHERE id NOT IN (SELECT id FROM revenue_worker_runs ORDER BY id DESC LIMIT 1000)')
         self.heartbeat('idle')
-        return {'run_id': run_id, 'status': status, 'stages': results}
+        from scripts.public_market_research import summary
+        with self.connect() as db:
+            research = summary(db)
+        return {'run_id': run_id, 'status': status, 'stages': results,
+                'public_research': research,
+                'delivery_enabled': os.getenv('DELIVERY_ENABLED', 'false').lower() == 'true'}
 
     def wait(self, seconds):
         """Wake promptly when the owner pauses or resumes, not after the backoff.

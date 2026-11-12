@@ -207,7 +207,17 @@ def health():
             (now-1900,),
         ).fetchone()[0]
     alive=bool(heartbeat and 0 <= now-heartbeat[0] < 90)
+    revenue = {'state': 'disabled', 'healthy': False}
+    if os.getenv('APEX_REVENUE_WORKER_ENABLED', 'false').lower() == 'true':
+        from revenue_worker import status as worker_status
+        try:
+            revenue = worker_status(os.getenv('REVENUE_DB_PATH', '/data/revenue/revenue_agent.db'))
+        except (sqlite3.Error, ValueError, OSError):
+            revenue = {'state': 'unavailable', 'healthy': False}
+        # An intentional pause is not a crash and must not trigger restart loops.
+        alive = alive and (revenue['healthy'] or revenue['state'] == 'paused')
     return {'healthy':alive and not bool(overdue),
+            'revenue_worker': {'state': revenue['state'], 'healthy': revenue['healthy']},
             'rendering_overdue':bool(overdue),
             'paused':(STATE/'pause').exists(),
             'jobs':jobs,'publishing':'separate_connector_required','paid_api_usage':False}

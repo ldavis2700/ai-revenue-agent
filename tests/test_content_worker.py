@@ -54,6 +54,16 @@ class ContentWorkerTests(unittest.TestCase):
     def test_pause_preserves_queue(self):
         (c.STATE/'pause').touch()
         with patch.object(c,'render') as render:c.cycle(self.jobs);render.assert_not_called()
+    def test_combined_health_requires_worker_but_preserves_deliberate_pause(self):
+        with c.connect() as db:db.execute('INSERT OR REPLACE INTO health VALUES (1,?)',(c.time.time(),))
+        with patch.dict(c.os.environ,{'APEX_REVENUE_WORKER_ENABLED':'true'}):
+            with patch('revenue_worker.status',return_value={'state':'waiting','healthy':False}):
+                self.assertFalse(c.health()['healthy'])
+            with patch('revenue_worker.status',return_value={'state':'paused','healthy':False}):
+                self.assertTrue(c.health()['healthy'])
+            with patch('revenue_worker.status',return_value={'state':'working','healthy':True,'private':'secret'}):
+                self.assertTrue(c.health()['healthy'])
+                self.assertNotIn('private',c.health()['revenue_worker'])
     def test_invalid_manifest_does_not_stop_other_jobs(self):
         (self.jobs/'bad.json').write_text('[]')
         self.assertEqual(len(c.ingest(self.jobs)),1)
