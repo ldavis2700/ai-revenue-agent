@@ -6,6 +6,33 @@ on:
     branches: [main]
 
 jobs:
+  stripe-ledger:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: ci_only_password
+          POSTGRES_DB: apex_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: localhost
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: ci_only_password
+      PGDATABASE: apex_test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test ledger deduplication against disposable PostgreSQL
+        run: |
+          psql -v ON_ERROR_STOP=1 -c 'create role anon; create role authenticated; create table public.inbound_leads (id uuid primary key);'
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260813173601_verified_revenue_events.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20261112023000_revenue_source_deduplication.sql
+          psql -v ON_ERROR_STOP=1 -f tests/stripe_revenue_schema.sql
   test:
     runs-on: ubuntu-latest
     steps:
@@ -204,5 +231,5 @@ jobs:
       - name: Test consented inbound validation
         run: node --test tests/revenue_inbound_validation.test.mjs
       - name: Test Stripe revenue event normalization
-        run: node --test tests/stripe_paid_event.test.mjs tests/stripe_apex_ownership.test.mjs tests/stripe_webhook_body.test.mjs
+        run: node --test tests/stripe_paid_event.test.mjs tests/stripe_apex_ownership.test.mjs tests/stripe_webhook_body.test.mjs tests/stripe_lead_attribution.test.mjs
 
