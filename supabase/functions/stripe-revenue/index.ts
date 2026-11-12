@@ -2,6 +2,7 @@ import { createClient } from "npm:@supabase/supabase-js@2.111.0";
 import { paidEvent } from "./paid-event.mjs";
 import { isApexRevenueEvent } from "./apex-ownership.mjs";
 import { readBoundedStripeBody } from "./bounded-stripe-body.mjs";
+import { resolveLeadId } from "./lead-attribution.mjs";
 
 const PROPERTY_ID = "003";
 const MAX_BODY_BYTES = 256 * 1024;
@@ -107,14 +108,15 @@ Deno.serve(async (req: Request) => {
   const supabase = createClient(url, key, { auth: { persistSession: false } });
   const emailHash = payment.email ? await sha256(payment.email) : null;
   let leadId: string | null = null;
-  if (emailHash) {
-    const { data } = await supabase.from("inbound_leads")
-      .select("id").eq("property_id", PROPERTY_ID).eq("email_hash", emailHash).maybeSingle();
-    leadId = data?.id ?? null;
+  try {
+    leadId = await resolveLeadId(supabase, PROPERTY_ID, emailHash);
+  } catch {
+    return json({ received: false, error: "lead_lookup_failed" }, 500);
   }
 
   const { error } = await supabase.from("verified_revenue_events").upsert({
     processor_event_id: String(event.id),
+    source_object_id: payment.sourceObjectId,
     property_id: PROPERTY_ID,
     lead_id: leadId,
     processor: "stripe",
@@ -125,7 +127,7 @@ Deno.serve(async (req: Request) => {
     currency: payment.currency,
     customer_email_hash: emailHash,
     occurred_at: new Date(Number(event.created ?? 0) * 1000).toISOString(),
-  }, { onConflict: "processor_event_id", ignoreDuplicates: true });
+  }, { onConflict: "processor,property_id,source_object_id", ignoreDuplicates: true });
 
   if (error) return json({ received: false, error: "database_error" }, 500);
   return json({ received: true });
