@@ -4,19 +4,19 @@ These are **original, general-purpose drafting examples**, not customer testimon
 
 ## 1. New quote request
 
-> Thanks for reaching out about cleaning services. I can help gather the details needed for an accurate quote. What type of space needs cleaning, approximately how large is it, and which tasks matter most to you? Please share your preferred service date and general location, and we'll confirm whether we can help.
+> Thanks for asking about cleaning for [the specific space or task mentioned in the inquiry]. Approximately how large is the area? We'll check the service area and actual scope before discussing an estimate.
 
 **Before using:** Confirm that your business actually offers the requested service and location. Do not quote a price or promise availability without checking.
 
 ## 2. Availability question
 
-> Thanks for asking about scheduling. Which date or time window works best for you, and what type of cleaning do you need? I'll check the actual schedule and follow up with the available options.
+> Thanks for asking about [the specific cleaning service mentioned]. Which date or time window would work best? We'll check our actual calendar before offering options.
 
 **Before using:** Never treat a preferred date as a confirmed appointment. Replace the last sentence with your real process if you cannot check the schedule promptly.
 
 ## 3. What's included?
 
-> Good question. The exact cleaning checklist depends on the service selected and the space. Which rooms or tasks are most important to you? I can share our current service checklist so you can review what is and isn't included before deciding.
+> Thanks for asking whether [the specific task the customer named] is included. Which service option are you considering? We can share our actual checklist and exclusions before you decide.
 
 **Before using:** Supply your verified checklist; do not imply that deep cleaning, supplies, specialty treatments, or add-ons are included unless they really are.
 
@@ -28,17 +28,27 @@ These are **original, general-purpose drafting examples**, not customer testimon
 
 ## 5. Concern about a completed service
 
-> Thank you for telling us about your concern. I'm sorry the experience didn't meet your expectations. Could you describe what happened and the service date so we can review the details? We'll check the applicable policy and discuss an appropriate next step.
+> Thank you for telling us about your concern with [the service actually provided]. What happened during the appointment? We'll check the service record and our applicable policy before discussing an appropriate next step.
 
 **Before using:** Have a genuine escalation path. Do not promise a refund, free return visit, or specific outcome until authorized by your business policy.
 
 ## Quick response-use checklist
 
+- Where an inbound customer already named a job, reflect that **verified** detail and ask one focused next-step question, rather than asking for multiple details at once. Never invent a job detail or request a phone number unnecessarily.
 - Replace every placeholder or generic statement with **verified** details about your own business.
 - Check service area, availability, prices, what is included, and any cancellation or refund terms before making claims.
 - Keep customer details private. Do not paste addresses, phone numbers, or private messages into public files or AI examples.
 - Send messages only through channels you are authorized to use, with the customer's applicable consent.
 - Have a person review the final text and track what was genuinely sent, answered, and accepted. Drafts are not automatic messaging.
+
+
+## Evidence and limits of these example formats
+
+A **September 2026** LeadTruffle observational analysis of **4,699 first replies** on Yelp, Thumbtack, and Google Local Services Ads reported an association between naming the specific job, asking one clear question, avoiding an immediate phone-number request, and a higher 24-hour reply rate (60.5% versus 50.3%). The authors caution that channel-specific adjusted confidence ranges include zero; observational association is **not causal proof**. Source: https://www.leadtruffle.co/research/first-reply-benchmark/ .
+
+Separately, an **August 13, 2026** Rosebud study sent inquiries to **273 U.S. service businesses** during July 26–August 10. Its **commercial-cleaning subgroup** had 46 provably delivered inquiries and a 41.3% response rate within 72 hours. This measures **business responsiveness**, not the effect of any APEX script. The sample is small and its provider also sells inquiry handling. Source: https://rosebud.global/resources/2026-us-service-business-response-study .
+
+Neither vendor study measures APEX customer results, willingness to pay, or improved sales. Treat the examples as owner-reviewed drafting aids, not an automated sending service or a guaranteed conversion method.
 
 ## Want a preview tailored to your business?
 
