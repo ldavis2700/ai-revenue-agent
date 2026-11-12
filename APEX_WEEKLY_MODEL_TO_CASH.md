@@ -4,6 +4,12 @@
 
 Use the existing Monday 9 AM Pacific APEX SMB brief and existing hourly APEX Wealth Engine; do not create duplicate recurrent workflows. The existing Business Model Intelligence GitHub Action performs weekly deterministic ranking and tests. It does **not** browse current markets or execute buyers' work. The Monday connected workflow must gather dated live buyer evidence and pass genuine facts to `scripts/weekly_model_to_cash.py --evidence <private-observations.json>` (keep private buyer details out of GitHub artifacts). Store concise evidence and the next feasible conversion step in the existing durable APEX revenue checkpoint.
 
+## Current collection precedence — November 12, 2026 (supersedes historical non-Stripe-only wording)
+
+The owner expressly resumed **APEX-specific** Stripe integration. Recorded production acceptance: signed `stripe-revenue` v6 is ACTIVE with property/source deduplication, and the existing $100 one-time and separately opt-in $99/month payment links and four content-worker payment variable names were verified live. See [payment release receipt](https://github.com/ldavis2700/ai-revenue-agent/issues/85#issuecomment-6812580193) and [environment acceptance](https://github.com/ldavis2700/ai-revenue-agent/issues/85#issuecomment-6812445890). These are **configuration facts, not an actual paid end-to-end test, buyer agreement, accepted delivery or payout**. The **public sales-page checkout and standalone external delivery remain disabled** while buyer identification/payment synchronization, destination, scope, refund/dispute and owner/provider gates remain unresolved. Do not require an additional PayPal/Square merchant account or unpause checkout by inference. Do not borrow HAEVEN/other properties' links or credentials.
+
+At every run, funded obligations and verified buyer requests come first. For a genuinely agreed APEX sale, reconcile the actual payment object in the existing authorized Stripe account, including refunds/disputes and authenticated buyer linkage; follow the service-role-only preparation lease and separate external delivery rules in [paid fulfillment documentation](docs/PAID_FULFILLMENT_QUEUE.md). Fees, settlement, support time, and owner take-home are **unknown until provider and effort evidence is obtained**. Never equate a payment link, checkout view, invoice, webhook event, draft, or estimated gross with settled contribution. Upwork-originated contracts, if any, must use Upwork's own payment rail. This note changes operating guidance only; it does not deploy code, change financial configuration, authorize a customer charge, or unblock the documented identity gate.
+
 ## What “most successful” means
 
 Never assert an absolute global champion without complete data. Compare currently observable market demand, verified paid buyer intent, delivery feasibility, legally usable account/channel, gross versus actual contribution, startup/ongoing support costs, speed to collected cash, repeatability, customer retention, competition, platform/compliance requirements, and APEX-specific demonstrated capability. Cite current official/public sources and separately record private consented buyer evidence without leaking it. Label marketing earnings claims, projections and rankings as such, not collected revenue.
@@ -14,7 +20,7 @@ Never assert an absolute global champion without complete data. Compare currentl
 2. Compare up to ten candidates from `config/business_models*.json` and current real opportunity evidence, including customer-response automation, CRM integration, narrow software repair/QA, and tested AI workflows. Read the existing portfolio ranking as priors only.
 3. Select at most two unvalidated opportunities. Record exact buyer pain, provenance, deliverable, effort, fees, allowable channel, permissions, realistic cost and optional recurring support. Do not invent access, margins, buyer enthusiasm or provider receipts.
 4. Prepare a distinct lawful offer/pilot, original QA-tested delivery asset, consent-based intake and truthful tailored proposal. **Recreate a business mechanism, not brand identity, websites, copyrighted assets, proprietary code, private data or unlicensed content.**
-5. Before any revenue action validate the path `qualified demand → consented communication → accepted scope/funding → QA and buyer acceptance → authorized non-Stripe settlement → fees/refunds/costs → net contribution`. Stripe stays paused. No unapproved Connects, API usage, ads, recurring memberships, paid models, binding contracts, cold spam, account charges or bank/payout changes.
+5. Before any revenue action validate the path `qualified demand → consented communication → accepted scope/funding → original QA and buyer acceptance → verified authorized collection → fees/refunds/costs and provider settlement → net contribution`. The application checkout remains paused; do not silently publish or activate purchase controls. No unapproved Connects, API usage, ads, recurring memberships, paid models, binding contracts, cold spam, account charges or bank/payout changes.
 6. Execute independently authorized reversible free actions. For provider-required exact approvals, preserve specific draft and blocked operation; never mark it submitted/accepted without a receipt.
 7. Reconcile all cash from independently settled provider transactions. Separate draft, proposal submitted, buyer reply, funded contract, accepted delivery, invoice, settlement, processor balance, bank receipt and owner profit. Unknown costs mean unknown profit.
 
@@ -26,7 +32,7 @@ First genuine settled paid delivery; two independent customers with positive evi
 
 `scripts/weekly_model_to_cash.py` is a **fail-closed preparation gate** requiring supplied factual fields, sources and permission. Its input is never automatically verified against provider billing or private buyer channels; operators must independently authenticate it. `prepare_only` means only permission to prepare drafts and QA assets, not permission to contact buyers, deploy, invoice, sign or collect. Its estimate is not profit. Keep company credentials and personal buyer data outside public GitHub. The weekly Action outputs only the existing non-sensitive catalog candidate snapshot; buyer receipts and actual economics belong in a protected ledger. Coordinate technical repairs with Hourly App Completion.
 
-The next concrete conversion step while no funded buyer is verified is to establish a permitted non-Stripe payment route for the existing $100 consent-first customer-response setup, then complete one genuine requested pilot with QA, accepted deliverable and provider receipt. Avoid spawning a speculative app to satisfy the weekly report.
+The next concrete conversion step while no funded buyer is verified is to obtain one permitted consented buyer request for the existing $100 customer-response setup; use the already configured APEX Stripe route for buyer-specific collection only after identity, scope, payment-status and applicable checkout/financial gates are verified. Then complete one genuine requested pilot with QA, accepted deliverable and provider receipt. Avoid spawning a speculative app to satisfy the weekly report.
 
 ## Original recreation and monetization readiness (November 10, 2026)
 
@@ -103,7 +109,7 @@ publication recency does not make every underlying observation current.
 
 Next practical test: demonstrate the existing consent-first intake-to-handoff
 flow with permitted synthetic data, then validate scope with a genuine consenting
-buyer and establish the authorized non-Stripe collection path. Recheck this
+buyer and verify the existing authorized collection path, without reactivating paused public checkout. Recheck this
 demand lesson by November 17, or earlier if contradictory evidence appears.
 Pricing, account eligibility, costs and buyer willingness remain separate unknowns.
 
