@@ -1,6 +1,7 @@
 """Isolated, no-network paid preparation guard tests."""
 import tempfile
 from pathlib import Path
+import urllib.error
 import hashlib
 import unittest
 from unittest.mock import patch
@@ -27,6 +28,8 @@ class FakeGateway:
         self.claim = []
         self.renew = True
         self.finish = True
+        self.claim_timeout = False
+        self.lease_on_timeout = []
         self.charge = {
             "id": "cs_sample123",
             "customer_details": {"email": "buyer@example.test"},
@@ -40,7 +43,7 @@ class FakeGateway:
     def rows(self, table, **kwargs):
         self.calls.append(("rows", table))
         if table == "paid_fulfillment_queue":
-            return self.queue
+            return self.lease_on_timeout if "preparation_worker" in kwargs else self.queue
         if table == "verified_revenue_events":
             return [{"processor": "stripe", "revenue_kind": "one_time_checkout",
                      "amount_cents": 10000, "currency": "USD",
@@ -58,6 +61,8 @@ class FakeGateway:
     def rpc(self, name, payload):
         self.calls.append(("rpc", name))
         if name == "claim_paid_preparation":
+            if self.claim_timeout:
+                raise urllib.error.URLError("fake timeout")
             return self.claim
         if name == "renew_paid_preparation":
             return self.renew
@@ -121,6 +126,34 @@ class PreparationTests(unittest.TestCase):
         self.assertIn(("rpc", "renew_paid_preparation"), g.calls)
         self.assertIn(("rpc", "finish_paid_preparation"), g.calls)
         self.assertNotIn(("rpc", "block_paid_preparation"), g.calls)
+
+    def test_claim_timeout_recovers_same_worker_without_retry(self):
+        g = FakeGateway()
+        g.queue = [{"processor_event_id": "evt_sample123", "work_kind": "setup"}]
+        g.claim_timeout = True
+        g.lease_on_timeout = [{"processor_event_id": "evt_sample123",
+                               "preparation_token": "token"}]
+        with tempfile.TemporaryDirectory() as root:
+            d, a = Path(root) / "d", Path(root) / "a"
+            d.mkdir()
+            a.mkdir()
+            (d / "evt_sample123.json").write_text(json.dumps(DOSSIER))
+            self.assertEqual(prepare_once(g, d, a, worker="worker-test"),
+                             "prepared_not_delivered")
+        self.assertEqual(g.calls.count(("rpc", "claim_paid_preparation")), 1)
+
+    def test_claim_timeout_without_receipt_stops_without_retry(self):
+        g = FakeGateway()
+        g.queue = [{"processor_event_id": "evt_sample123", "work_kind": "setup"}]
+        g.claim_timeout = True
+        with tempfile.TemporaryDirectory() as root:
+            d, a = Path(root) / "d", Path(root) / "a"
+            d.mkdir()
+            a.mkdir()
+            (d / "evt_sample123.json").write_text(json.dumps(DOSSIER))
+            with self.assertRaises(RuntimeError):
+                prepare_once(g, d, a, worker="worker-test")
+        self.assertEqual(g.calls.count(("rpc", "claim_paid_preparation")), 1)
 
     def test_false_finish_or_expired_lease_never_reports_success(self):
         for field in ("finish", "renew"):
