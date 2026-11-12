@@ -219,7 +219,15 @@ def prepare_once(gateway, dossiers, artifact_root, worker=None):
     worker = worker or ("apex-prep-" + uuid.uuid4().hex)
     if len(worker) > 128 or not re.fullmatch("[A-Za-z0-9_-]+", worker):
         raise ValueError("Invalid worker ID")
-    claim = gateway.rpc("claim_paid_preparation", {"p_worker": worker, "p_lease_seconds": 600})
+    try:
+        claim = gateway.rpc("claim_paid_preparation", {"p_worker": worker, "p_lease_seconds": 600})
+    except (urllib.error.URLError, TimeoutError):
+        # RPC may have committed. Reconcile the unique worker ID before any
+        # attempt to claim again; never take a second lease after uncertainty.
+        claim = gateway.rows("paid_fulfillment_queue", preparation_worker="eq." + worker,
+                             status="eq.pending", select="processor_event_id,preparation_token,preparation_expires_at")
+        if not claim:
+            raise RuntimeError("Uncertain claim; no worker receipt, stop without retry")
     if not isinstance(claim, list) or not claim:
         return "claim_lost_to_concurrent_worker"
     leased = one(claim, "preparation lease")
