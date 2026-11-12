@@ -5,18 +5,28 @@ Railway content worker:
 
 `https://apex-content-worker-production.up.railway.app/`
 
-Its HTML comes from `sales/offer.html` and the other reviewed `sales/*.html`
-assets. The offer describes a proposed $100 setup and separately optional
-$99/month support; these are **not** an active checkout or a promise that APEX
-can accept money. The consent-based preview request does not create a purchase,
-subscription, customer contract, or permission to message anyone else.
+Its HTML comes from the reviewed `sales/offer.html` and related `sales/*.html`
+assets at the **deployed commit**, not necessarily the newest GitHub main.
+The offer describes the $100 one-time response-pack setup and separately opted-in
+$99/month support. Public checkout remains **disabled**. A consent-based preview
+request does not create a purchase, subscription, customer contract, or permission
+to message anyone else. The configured APEX Stripe links and signed receiver are
+collection infrastructure, not evidence of paid buyer work or a live public checkout.
 
-**Stripe is paused.** Do not add Stripe checkout links, query-parameter
-`setup`/`managed` redirects, external payment buttons, or subscription signup
-until the owner approves an actual merchant rail, its eligibility and payout
-are verified, and separately tested release gates pass. Old instructions for
-inserting checkout URLs into the URL query string were retired. Never treat a
-payment link, invoice draft, or web page as evidence of collection.
+**The public application checkout is paused, not the previously approved
+APEX-only Stripe integration.** Signed `stripe-revenue` v6, the existing $100
+setup and optional $99/month Stripe Payment Links, and the four runtime payment
+variable names have already been verified; see the [payment receiver receipt](https://github.com/ldavis2700/ai-revenue-agent/issues/85#issuecomment-6812580193)
+and [live payment-variable receipt](https://github.com/ldavis2700/ai-revenue-agent/issues/85#issuecomment-6812445890).
+Do not add public checkout buttons, query-parameter `setup`/`managed` redirects,
+or subscription signup. For a real buyer-specific agreement, verify the buyer,
+accepted scope, actual Stripe payment/refund/dispute state, authorized delivery
+destination, and applicable owner/provider gates before preparing or sending.
+Follow [paid fulfillment instructions](../docs/PAID_FULFILLMENT_QUEUE.md).
+Never regard a Payment Link, invoice draft, signed webhook, or website view as
+settled payment, fulfilled work, or profit. Do not ask for a duplicate merchant
+account, change the account's legal identity/payouts, or borrow HAEVEN links.
+This is guidance only and does not activate checkout or unattended delivery.
 
 ## Existing intake integration and safety
 
