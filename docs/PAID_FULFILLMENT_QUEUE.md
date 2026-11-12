@@ -74,3 +74,57 @@ trusted workers, not isolation against a compromised service-role credential.
 Additional disposable PostgreSQL tests cover active/expired/stale workers, durable
 checkpoints, dependency blockers, bounded retries, privilege checks, and eight
 concurrent sessions claiming distinct work while another session holds a row lock.
+
+## Supervised setup preparation adapter (source only; not deployed)
+
+`python -m scripts.paid_preparation_consumer` is an opt-in, server-only bridge
+from signed APEX setup receipts to the existing offline 14-response builder.
+It is **not** scheduled and is disabled unless both `--execute` and
+`APEX_PAID_PREPARATION_ENABLED=true` are present. It must run only on an
+authorized trusted server with `SUPABASE_URL` fixed to the existing APEX project,
+`SUPABASE_SERVICE_ROLE_KEY`, and a restricted live `STRIPE_SECRET_KEY`. Do not
+put those values into GitHub, public clients, command lines, logs or test fixtures.
+A paid invoice for the optional managed service is **not** handled by this
+setup-only adapter.
+
+Before even claiming, the operator must obtain and independently validate
+each buyer's paid scope and verified five-field business profile. Put one
+private `evt_*.json` dossier per signed event under a directory with mode
+0700. It must contain exactly grounded profile facts, the matching event and
+lead IDs, `scope_accepted: true`, `business_facts_verified: true` and an
+HTTPS `scope_evidence_url` to the actual authorized acceptance record. These
+boolean attestations and URLs are *operator-provided*, not themselves proof
+that a buyer agreed. Never manufacture them or trust a lead's free-text field
+as a customer contract. Confirm the actual purchaser, delivery channel,
+deadline, refund policy and permitted purpose outside the script.
+
+The consumer reads the oldest eligible pending setup before it can claim.
+It refuses missing dossiers, unmatched property-003 receipts and lead hashes,
+a different business name, any unconfirmed scope, any non-$100 setup event
+and Stripe Checkout without an expanded succeeded PaymentIntent, paid
+undisputed/unrefunded charge, matching live payer email, amount and currency.
+Only then may it claim via the PR255 bounded server-side lease. It builds a
+private ZIP using the PR247 builder, verifies its included checksums, flushes
+the private files to the existing persistent volume and renews before
+checkpointing through `finish_paid_preparation`. A false/expired finish
+never counts as success. A finish timeout is reconciled against the exact
+artifact reference and SHA-256, not blindly retried.
+
+For the current Railway /data volume, create **private**, non-web-served
+directories `/data/private-paid-dossiers` and
+`/data/private-paid-preparations` with mode 0700, verify the source and
+operator evidence, then invoke with:
+`python -m scripts.paid_preparation_consumer --execute --dossier-root /data/private-paid-dossiers --artifact-root /data/private-paid-preparations`.
+Do not enable this in the persistent hourly worker or provider configuration
+until trusted credentials, the dossier intake, validated genuine payment,
+private volume and acceptance safeguards have passed production preflight.
+Never use synthetic production receipts or live test charges.
+
+The result `prepared_not_delivered` means **only** that a draft artifact
+was privately checkpointed; it is not payment settlement, buyer acceptance,
+customer contact or a completed delivery. External delivery requires a
+separate idempotent consumer, renewed refund/dispute checks, an independently
+verified recipient and scope, a provider receipt and failure reconciliation.
+The existing `DELIVERY_ENABLED=false` remains controlling. Keep both the
+prepared artifact and payment ledger private, and inspect real obligations
+before acquisition each cycle.
