@@ -1,6 +1,6 @@
-Inquiry ID,Date Received (YYYY-MM-DD),Source Channel,Service Category,Question Category,Follow-up Consent (Yes/No/Unknown),Owner-reviewed Reply (Yes/No),Reply Sent Date (YYYY-MM-DD),Inquiry Status,Next Permitted Action,Next Action Date (YYYY-MM-DD),Outcome,Non-sensitive Notes
-,,,,,,,,,,,,
-,,,,,,,,,,,,
-,,,,,,,,,,,,
-,,,,,,,,,,,,
-,,,,,,,,,,,,
+Inquiry ID,Date Received (YYYY-MM-DD),Source Channel,Service Category,Question Category,Follow-up Consent (Yes/No/Unknown),Owner-reviewed Reply (Yes/No),Reply Sent Date (YYYY-MM-DD),Inquiry Status,Next Permitted Action,Next Action Date (YYYY-MM-DD),Outcome,Non-sensitive Notes,Received Time (HH:MM local),First Human-reviewed Reply Sent Time (HH:MM local)
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,
