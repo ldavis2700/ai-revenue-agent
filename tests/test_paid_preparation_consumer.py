@@ -1,12 +1,16 @@
 """Isolated, no-network paid preparation guard tests."""
 import tempfile
 from pathlib import Path
+import hashlib
 import unittest
 from unittest.mock import patch
+import json
+import zipfile
 
 from scripts.paid_preparation_consumer import (PreparationBlocked, make_archive,
                                                prepare_once, verified_setup)
 
+EMAIL_HASH = hashlib.sha256(b"buyer@example.test").hexdigest()
 PROFILE = {"company": "Example Cleaning", "services": "residential cleaning",
            "service_area": "Example City", "quote_process": "human review",
            "escalation_contact": "support team"}
@@ -24,10 +28,12 @@ class FakeGateway:
         self.renew = True
         self.finish = True
         self.charge = {
+            "id": "cs_sample123",
+            "customer_details": {"email": "buyer@example.test"},
             "mode": "payment", "status": "complete", "payment_status": "paid",
             "metadata": {"apex_property_id": "003"},
             "amount_total": 10000, "currency": "usd",
-            "payment_intent": {"status": "succeeded", "amount_received": 10000,
+            "payment_intent": {"id": "pi_sample123", "status": "succeeded", "amount_received": 10000,
                                "latest_charge": {"paid": True, "disputed": False,
                                                  "refunded": False, "amount_refunded": 0}}}
 
@@ -38,9 +44,11 @@ class FakeGateway:
         if table == "verified_revenue_events":
             return [{"processor": "stripe", "revenue_kind": "one_time_checkout",
                      "amount_cents": 10000, "currency": "USD",
-                     "source_object_id": "cs_sample123", "lead_id": "lead-one"}]
+                     "source_object_id": "cs_sample123", "lead_id": "lead-one",
+                     "customer_email_hash": EMAIL_HASH, "payment_reference": "pi_sample123"}]
         if table == "inbound_leads":
-            return [{"id": "lead-one", "company_name": "Example Cleaning"}]
+            return [{"id": "lead-one", "company_name": "Example Cleaning",
+                     "email_hash": EMAIL_HASH}]
         raise AssertionError(table)
 
     def stripe_checkout(self, source_id):
@@ -91,7 +99,10 @@ class PreparationTests(unittest.TestCase):
             import hashlib
             self.assertEqual(hashlib.sha256(archive.read_bytes()).hexdigest(), digest)
             self.assertTrue((archive.parent / "manifest.json").is_file())
-            self.assertNotIn(b'"delivery_verified": true', archive.read_bytes())
+            with zipfile.ZipFile(archive) as bundle:
+                manifest = json.loads(bundle.read("manifest.json"))
+            self.assertFalse(manifest["delivery_verified"])
+            self.assertFalse(manifest["buyer_acceptance_verified"])
 
     def test_current_lease_prepares_without_delivery(self):
         g = FakeGateway()
