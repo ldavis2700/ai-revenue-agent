@@ -8,6 +8,10 @@ The proposed setup contains **14 tailored customer responses, a response-use gui
 
 AI Revenue Agent is an automation-first revenue pipeline for ingesting business prospects, qualifying them, generating tailored offers, tracking lifecycle state, and feeding approved outreach workflows.
 
+## Free sample replies for cleaning inquiries
+
+For a practical example before requesting a preview, read the [free cleaning inquiry reply starters](docs/FREE_CLEANING_INQUIRY_REPLY_STARTERS.md). They contain five original, human-reviewed drafting examples, usage safeguards and an optional consent-based inquiry path. They are educational samples, not customer results or the completed 14-response paid pack.
+
 ## Current revenue offer
 
 Default offer stack:
