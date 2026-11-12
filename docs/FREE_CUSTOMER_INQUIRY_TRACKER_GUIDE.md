@@ -12,6 +12,14 @@ This **free, blank CSV** is a simple way for a small service business to organiz
 4. Draft an answer grounded in your verified services, current schedule and approved prices. Mark "Owner-reviewed Reply" Yes only after a human has reviewed it; mark a reply sent only when that actually occurred.
 5. Track the current status, the **next permitted action** and its date, then record outcomes from real replies rather than assumptions.
 
+## Optional first-response timing audit
+
+The CSV also has **two optional time-of-day fields** appended after its original 13 columns: **Received Time (HH:MM local)** and **First Human-reviewed Reply Sent Time (HH:MM local)**. Enter 24-hour times only when they are actually known and use the same local timezone as the existing date fields. Preserve the receipt and reply dates for after-midnight responses; a time alone does not identify a duration. Older copies of the 13-column tracker remain usable.
+
+To measure the first meaningful response, compare the actual received date/time with the first **sent, owner-reviewed, relevant reply** date/time. A prepared draft, automatic acknowledgement or scheduled message is not proof of a conversation or customer response. If either timestamp is missing, ambiguous or recorded in a different timezone, leave the interval **unknown** rather than guessing. Do not mark a response sent until a real channel confirms it. The template intentionally contains **no formulas, example customer records or fabricated elapsed-time results**.
+
+For a bounded internal review, count only actual inquiries with usable timestamps and report the number of verified meaningful first replies within 60 minutes alongside the total eligible inquiries. Treat other cases separately as unknown; do not infer bookings, revenue or causality from faster replies. Time recording is optional and must not compromise customer privacy.
+
 ## Useful status values
 
 `New` · `Needs business facts` · `Draft ready for review` · `Reply sent` · `Awaiting customer` · `Closed` · `Opted out`.
