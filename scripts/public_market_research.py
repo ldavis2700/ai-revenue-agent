@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Bounded primary-source discovery. Public signals are never buyer/payment evidence."""
 import hashlib
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 import ipaddress
 import json
@@ -23,6 +25,27 @@ SOURCES = (
 USER_AGENT = 'APEXResearch/1.0'
 MAX_BYTES = 1_048_576
 REFRESH_SECONDS = 21600
+PUBLICATION_MAX_AGE_DAYS = 30
+
+
+def publication_freshness(value, now):
+    """A new fetch does not make an old article current market evidence."""
+    if not value:
+        return 'undated_requires_verification'
+    try:
+        try:
+            published = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        except ValueError:
+            published = parsedate_to_datetime(value)
+        # Do not invent a timezone for ambiguous publisher timestamps.
+        if published.tzinfo is None:
+            return 'invalid_date'
+        age = now - published.astimezone(timezone.utc).timestamp()
+    except (TypeError, ValueError, OverflowError):
+        return 'invalid_date'
+    if age < 0:
+        return 'future_date'
+    return 'current' if age <= PUBLICATION_MAX_AGE_DAYS * 86400 else 'stale'
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -200,23 +223,48 @@ def review_queue(db, candidates, clock=time.time):
     no match increases a profitability score, satisfies capability QA or grants
     permission to execute. Titles remain untrusted data for the reviewing agent.
     """
+    now = clock()
     try:
         rows = db.execute('''SELECT i.url,i.title,i.publisher_date,s.topic
             FROM public_research_items i JOIN public_research_sources s USING(source_id)
             WHERE s.succeeded_at BETWEEN ? AND ? AND i.last_seen_at=s.succeeded_at
             ORDER BY i.discovered_at DESC,i.url LIMIT 150''',
-            (clock()-2*REFRESH_SECONDS, clock())).fetchall()
+            (now-2*REFRESH_SECONDS, now)).fetchall()
     except sqlite3.OperationalError:
-        return []
+        rows = []
     ignored = {'ai','the','and','for','service','services','business','paid','original'}
     queue=[]
     for candidate in candidates:
+        if candidate.get('eligible') is False:
+            continue
         terms=set(re.findall(r'[a-z]+',candidate['name'].lower()))-ignored
-        references=[{'url':r[0],'untrusted_title':r[1],'publisher_date':r[2],'topic':r[3]}
-                    for r in rows if terms.intersection(re.findall(r'[a-z]+',r[1].lower()))][:3]
-        if references:
-            queue.append({'model_id':candidate['id'],'references':references,
-                          'status':'requires_demand_capability_and_economics_validation'})
+        references=[]
+        excluded=0
+        for row in rows:
+            if not terms.intersection(re.findall(r'[a-z]+',row[1].lower())):
+                continue
+            freshness = publication_freshness(row[2], now)
+            if freshness in ('stale', 'future_date', 'invalid_date'):
+                excluded += 1
+                continue
+            if len(references) < 3:
+                references.append({'url':row[0], 'untrusted_title':row[1],
+                                   'publisher_date':row[2], 'topic':row[3],
+                                   'publication_freshness':freshness})
+        # Missing/blocked sources must create a research task, not silently
+        # remove the best candidate. This is a brief, never execution approval.
+        queue.append({'model_id':candidate['id'], 'references':references,
+                      'excluded_dated_references':excluded,
+                      'status':'requires_demand_capability_and_economics_validation',
+                      'next_action':'verify_current_sources' if references else 'find_current_primary_and_buyer_evidence',
+                      'validation_requirements':[
+                          'Compare at least two independent dated sources; separate vendor claims from buyer purchases and APEX results.',
+                          'Record customer problem, current willingness to pay, acquisition access and competing offers.',
+                          'Demonstrate an original deliverable; measure quality, delivery time, automation limits and reusable components.',
+                          'Estimate price minus acquisition, tools, delivery labor, support, fees and refunds; label unknowns.',
+                          'Define one bounded experiment, success metric, cost/time cap and stop rule; record results before scaling.',
+                      ],
+                      'external_actions_allowed':False})
         if len(queue)==2:break
     return queue
 

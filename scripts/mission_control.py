@@ -551,7 +551,7 @@ def run(path=DB_PATH):
     plan = build_plan(metrics, model_intelligence, validation_queue)
     research = public_market_research.summary(conn)
     research_queue = public_market_research.review_queue(conn, model_intelligence.get('top_candidates', []))
-    if research['items']:
+    if research_queue:
         plan.append({'priority': 6, 'action': 'review_public_market_signals',
                      'mode': 'analyze', 'fresh_sources': research['fresh_sources'],
                      'reason': 'Compare primary-source discovery with actual buyer demand, delivery capability and measured costs; public signals alone never authorize execution or prove profit.'})
