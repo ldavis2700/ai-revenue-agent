@@ -6,6 +6,8 @@ Run a U.S. home-service business? [Request a **free tailored preview** of the cu
 
 The proposed setup contains **14 tailored customer responses, a response-use guide, a blank inquiry tracker, and one consolidated revision**, using only business information the requester confirms. A preview request does **not** purchase anything, authorize automated customer messaging, or enroll anyone in recurring payments. The form asks for affirmative contact consent; checkout is currently paused.
 
+**Who this is for:** Owners who already receive real cleaning or home-service quote, schedule, or service-scope questions and want **business-specific, owner-reviewed draft answers plus a simple inquiry tracker**. This is a done-for-you drafting pack, not a generic DIY prompt library, an inbox/CRM integration, instant AI autoresponder, or guaranteed booked-job service. To tailor a paid pack, the requester first confirms the services offered, service area, how availability and prices are approved, and a contact authorized to review the drafts. A free preview request does not establish an order; work requires separately agreed scope and verified payment.
+
 AI Revenue Agent is an automation-first revenue pipeline for ingesting business prospects, qualifying them, generating tailored offers, tracking lifecycle state, and feeding approved outreach workflows.
 
 ## Free sample replies for cleaning inquiries
