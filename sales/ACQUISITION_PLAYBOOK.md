@@ -8,7 +8,7 @@ Drive qualified small-business owners into the existing free tailored preview fu
 
 - Target relevance over volume.
 - Do not buy scraped lists or blast unsolicited bulk messages.
-- Prefer public business contact channels, inbound communities where promotion is allowed, referrals, and direct one-to-one outreach based on a specific observed business need.
+- Prioritize genuinely opted-in inbound requests and owner-controlled resources. A publicly listed business address, contact form, social profile, or observed need is **not** itself contact consent. Use one-to-one contact only when the particular channel, consent and authorization permit that exact action.
 - Respect platform terms, CAN-SPAM requirements where applicable, opt-outs, and all stated contact preferences.
 - Never imply a relationship, endorsement, guarantee, or prior consent that does not exist.
 - Keep the free preview genuinely free and separate from checkout.
@@ -66,10 +66,10 @@ Use only in places where business promotion is permitted.
 
 ## Daily acquisition loop
 
-1. Identify 10-20 highly relevant businesses or permitted communities.
-2. Qualify for fit before contacting: active business, real inquiry flow, useful response-system use case.
-3. Send only personalized or context-appropriate outreach.
-4. Use the correct UTM-tagged link.
+1. First reconcile funded work, consented inbound requests and existing conversations; paid fulfillment takes precedence.
+2. If none is actionable, choose at most one bounded **authorized** organic distribution action on an APEX-controlled account or an explicitly promotion-permitting channel.
+3. Do not send new messages solely because a business is public or relevant. Check exact platform rules, permission, opt-outs and approval gates before any outreach.
+4. Use the correct UTM-tagged link only for the source actually used, never as proof a visitor or buyer existed.
 5. Check `inbound_leads` for new Property `003` leads.
 6. Prepare each requested preview promptly using the business facts submitted by the prospect.
 7. Present the $100 setup only after delivering or showing the preview.
@@ -100,6 +100,21 @@ Do not optimize only for message volume. Optimize for qualified preview requests
 - If one segment converts materially better, concentrate effort there.
 - Do not introduce discounts until enough real prospects have seen the $100 offer to provide evidence that price is the constraint.
 - Do not add automated outbound sending without explicit authorization, compliance review, opt-out handling, and platform-specific safeguards.
+
+
+## Prepared free LinkedIn Service Page distribution (not published)
+
+**Channel decision — reviewed November 12, 2026:** LinkedIn's [official Service Pages FAQ](https://www.linkedin.com/help/linkedin/answer/a569535) (displayed as updated about seven months before this review; precise publication date unavailable) says an ordinary member may create a free Service Page and receive member inquiries, while additional promotion and media features require Premium. The independent [Google Business Profile eligibility rules](https://support.google.com/business/answer/3038177?hl=en) (publication/effective date not shown; checked November 12, 2026) require a real in-person customer location or traveling to customers. Do **not** invent a local presence or create a Google Business Profile for APEX's currently online-only offer. This is a **platform-access comparison**, not proof of buyer demand, conversion or profit.
+
+Before any LinkedIn publication, independently verify the exact APEX-owned company page or authorized profile, admin permissions, public business identity, profile-versus-company ownership choice, acceptable service categories and any provider-required preview. No connected LinkedIn posting entitlement has been established by this playbook; do not impersonate the owner or create a personal profile on their behalf. Do not buy Premium, send cold DMs or create a second business-model experiment to complete this preparation.
+
+**Original prepared Service Page description — UNSENT and UNPUBLISHED:**
+
+> Practical customer-inquiry response drafts for U.S. cleaning and home-service businesses. Request a free tailored preview. The optional $100 one-time pack includes 14 business-specific draft replies, a response-use guide, a blank inquiry tracker and one consolidated revision after scope and business facts are agreed. Optional $99/month support is a separate, explicitly accepted service. Replies are human-reviewed; this is not automated calling, SMS, a CRM integration or a promise of more bookings. No payment is needed to request the preview.
+
+**Approved destination to verify before use:** `https://apex-content-worker-production.up.railway.app/?utm_source=linkedin&utm_medium=service_page&utm_campaign=apex_pilot_20261112#lead-form`. Verify that the preview page and privacy/consent form are operational through the actual provider before placing the link. Do not publish an unverified destination or assume landing analytics are configured.
+
+**Bounded acceptance:** An authorized, verified APEX service listing with a real returned URL/post ID and working consented preview link is a *distribution receipt*, not a lead or sale. Review within 14 days of any actual publication for source-attributed opted-in inquiries, separately accepted paid work, delivery labor/cost and settled contribution. Zero qualified inquiries after a properly measured period calls for channel/positioning revision, not paid amplification. Unknown impressions, responses and conversion remain unknown; this draft is not an active experiment until authorized publication.
 
 ## Current source of truth
 
