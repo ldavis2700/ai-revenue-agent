@@ -36,6 +36,11 @@ class PausedCheckoutOfferTests(unittest.TestCase):
         self.assertIn('href="/privacy"', self.html)
         self.assertIn('data-lead-endpoint="https://wuzmqruxdclstezitsbf.supabase.co/functions/v1/revenue-inbound"', self.html)
 
+    def test_full_fictional_pack_is_accessible_without_pretending_a_sale(self):
+        self.assertIn("docs/FICTIONAL_14_RESPONSE_PACK_DEMONSTRATION.md", self.html)
+        self.assertIn("not a real client result", self.html)
+        self.assertIn("not an automated sending service", self.html)
+
     def test_visible_copy_does_not_promise_live_checkout(self):
         self.assertIn("Online checkout is paused", self.html)
         self.assertIn("does not currently accept payments or subscriptions", self.html)
