@@ -98,6 +98,9 @@ class ContentHTTPTests(unittest.TestCase):
         with urlopen(self.url+'/?setup=https://evil.example&managed=https://evil.example') as response:
             body=response.read().decode()
             self.assertIn('Online checkout is paused',body)
+            self.assertIn('FREE_CUSTOMER_INQUIRY_TRACKER.csv',body)
+            self.assertIn('FREE_CUSTOMER_INQUIRY_TRACKER_GUIDE.md',body)
+            self.assertIn('without signing up or sharing customer information',body)
             self.assertNotIn('buy.stripe.com',body)
             self.assertNotIn('evil.example',body)
             self.assertNotIn('https://ai-revenue-agent-seven.vercel.app',body)
