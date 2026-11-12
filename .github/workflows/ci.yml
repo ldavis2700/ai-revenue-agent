@@ -29,10 +29,12 @@ jobs:
       - uses: actions/checkout@v4
       - name: Test ledger deduplication against disposable PostgreSQL
         run: |
-          psql -v ON_ERROR_STOP=1 -c 'create role anon; create role authenticated; create table public.inbound_leads (id uuid primary key);'
+          psql -v ON_ERROR_STOP=1 -c 'create role anon; create role authenticated; create role service_role bypassrls; create table public.inbound_leads (id uuid primary key);'
           psql -v ON_ERROR_STOP=1 -f supabase/migrations/20260813173601_verified_revenue_events.sql
           psql -v ON_ERROR_STOP=1 -f supabase/migrations/20261112023000_revenue_source_deduplication.sql
           psql -v ON_ERROR_STOP=1 -f tests/stripe_revenue_schema.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20261112030000_paid_fulfillment_queue.sql
+          psql -v ON_ERROR_STOP=1 -f tests/paid_fulfillment_queue.sql
   test:
     runs-on: ubuntu-latest
     steps:
