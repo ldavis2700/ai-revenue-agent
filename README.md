@@ -2,7 +2,7 @@
 
 ## Free customer-response preview for small businesses
 
-Run a U.S. home-service business? [See the current $100 one-time customer-response pilot and request a **free tailored preview**](https://apex-content-worker-production.up.railway.app/home-services?utm_source=github&utm_medium=readme&utm_campaign=apex_pilot_20261111). The optional $99/month support service is separate and requires its own agreement.
+Run a U.S. home-service business? [Request a **free tailored preview** of the current $100 one-time customer-response pilot](https://apex-content-worker-production.up.railway.app/?utm_source=github&utm_medium=readme&utm_campaign=apex_pilot_20261111#lead-form) or [view home-service examples](https://apex-content-worker-production.up.railway.app/home-services). The optional $99/month support service is separate and requires its own agreement.
 
 The proposed setup contains **14 tailored customer responses, a response-use guide, a blank inquiry tracker, and one consolidated revision**, using only business information the requester confirms. A preview request does **not** purchase anything, authorize automated customer messaging, or enroll anyone in recurring payments. The form asks for affirmative contact consent; checkout is currently paused.
 
