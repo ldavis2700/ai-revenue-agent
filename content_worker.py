@@ -225,6 +225,14 @@ def health():
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):pass
     def do_GET(self):
+        self._serve(include_body=True)
+
+    def do_HEAD(self):
+        # Allow monitors and link checks to inspect public routes without
+        # consuming the metered media/public-page egress allowance.
+        self._serve(include_body=False)
+
+    def _serve(self, include_body):
         # Exact allowlist: never map arbitrary URLs onto the repository or /data.
         try:
             public_page = PUBLIC_PAGES.get(urlsplit(self.path).path)
@@ -239,7 +247,7 @@ class Handler(BaseHTTPRequestHandler):
             if len(body) > 100_000:
                 self.send_error(503);return
             body = body.replace(b'https://ai-revenue-agent-seven.vercel.app', PUBLIC_ORIGIN.encode())
-            if not reserve_egress(len(body)):
+            if include_body and not reserve_egress(len(body)):
                 self.send_error(429);return
             self.connection.settimeout(10)
             self.send_response(200)
@@ -251,14 +259,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
             self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src https://wuzmqruxdclstezitsbf.supabase.co; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
             self.end_headers()
-            try:
-                self.wfile.write(body)
-            except (OSError, TimeoutError):
-                pass
+            if include_body:
+                try:
+                    self.wfile.write(body)
+                except (OSError, TimeoutError):
+                    pass
             return
         if self.path=='/health':
             result=health(); body=json.dumps(result).encode()
-            self.send_response(200 if result['healthy'] else 503);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
+            self.send_response(200 if result['healthy'] else 503);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers()
+            if include_body:self.wfile.write(body)
+            return
         match=re.fullmatch(r'/artifacts/([a-z0-9][a-z0-9-]{2,79})/(video.mp4|captions.srt|manifest.json)',self.path)
         if not match:self.send_error(404);return
         with connect() as db:
@@ -266,12 +277,13 @@ class Handler(BaseHTTPRequestHandler):
         path=STATE/'artifacts'/match[1]/match[2]
         if not row or row['status']!='complete' or not path.is_file():self.send_error(404);return
         size=path.stat().st_size
-        if not reserve_egress(size):self.send_error(429);return
+        if include_body and not reserve_egress(size):self.send_error(429);return
         self.connection.settimeout(10)
         self.send_response(200);self.send_header('Content-Length',str(size));self.send_header('Content-Type','video/mp4' if match[2]=='video.mp4' else 'text/plain');self.end_headers()
-        try:
-            with path.open('rb') as source:shutil.copyfileobj(source,self.wfile,64*1024)
-        except (OSError,TimeoutError):pass
+        if include_body:
+            try:
+                with path.open('rb') as source:shutil.copyfileobj(source,self.wfile,64*1024)
+            except (OSError,TimeoutError):pass
 
 def heartbeat():
     while not STOP.is_set():

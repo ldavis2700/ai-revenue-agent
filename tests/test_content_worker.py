@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 from urllib.error import HTTPError
 from unittest.mock import patch
 
@@ -125,6 +125,48 @@ class ContentHTTPTests(unittest.TestCase):
             (sales/'offer.html').write_bytes(b'x'*100001)
             with self.assertRaises(HTTPError) as exc:urlopen(self.url+'/')
             self.assertEqual(exc.exception.code,503)
+    def test_head_checks_public_pages_and_health_without_transferring_body(self):
+        with patch.object(c, 'MAX_EGRESS_DAY', 1):
+            for route in ('/', '/offer.html', '/privacy', '/home-services'):
+                with urlopen(Request(self.url+route+'?utm_source=monitor', method='HEAD')) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(response.read(), b'')
+                    self.assertGreater(int(response.headers['Content-Length']), 0)
+                    self.assertIn('frame-ancestors', response.headers['Content-Security-Policy'])
+            with c.connect() as db:
+                self.assertEqual(db.execute('SELECT COUNT(*) FROM egress').fetchone()[0], 0)
+                db.execute('INSERT OR REPLACE INTO health VALUES (1,?)', (c.time.time(),))
+            with urlopen(Request(self.url+'/health', method='HEAD')) as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.read(), b'')
+                self.assertGreater(int(response.headers['Content-Length']), 0)
+            with self.assertRaises(HTTPError) as exc:
+                urlopen(self.url+'/')
+            self.assertEqual(exc.exception.code, 429)
+
+    def test_head_artifact_requires_completed_job_and_does_not_consume_egress(self):
+        c.ingest(self.jobs)
+        path=c.STATE/'artifacts'/self.m['id'];path.mkdir()
+        (path/'video.mp4').write_bytes(b'video')
+        url=self.url+'/artifacts/'+self.m['id']+'/video.mp4'
+        with self.assertRaises(HTTPError) as exc:
+            urlopen(Request(url, method='HEAD'))
+        self.assertEqual(exc.exception.code,404)
+        with c.connect() as db:
+            db.execute("UPDATE jobs SET status='complete'")
+        with patch.object(c, 'MAX_EGRESS_DAY', 5):
+            with urlopen(Request(url, method='HEAD')) as response:
+                self.assertEqual(response.status,200)
+                self.assertEqual(int(response.headers['Content-Length']),5)
+                self.assertEqual(response.read(),b'')
+            self.assertEqual(urlopen(url).read(),b'video')
+            with self.assertRaises(HTTPError) as exc:
+                urlopen(url)
+            self.assertEqual(exc.exception.code,429)
+        with self.assertRaises(HTTPError) as exc:
+            urlopen(Request(self.url+'/queue.db',method='HEAD'))
+        self.assertEqual(exc.exception.code,404)
+
     def test_stale_heartbeat_is_not_healthy(self):
         with self.assertRaises(HTTPError) as e:urlopen(self.url+'/health')
         self.assertEqual(e.exception.code,503)
