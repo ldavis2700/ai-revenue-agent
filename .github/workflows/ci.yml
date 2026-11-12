@@ -35,6 +35,9 @@ jobs:
           psql -v ON_ERROR_STOP=1 -f tests/stripe_revenue_schema.sql
           psql -v ON_ERROR_STOP=1 -f supabase/migrations/20261112030000_paid_fulfillment_queue.sql
           psql -v ON_ERROR_STOP=1 -f tests/paid_fulfillment_queue.sql
+          psql -v ON_ERROR_STOP=1 -f supabase/migrations/20261112034920_paid_preparation_leases.sql
+          psql -v ON_ERROR_STOP=1 -f tests/paid_preparation_leases.sql
+          APEX_DISPOSABLE_POSTGRES=1 python3 tests/paid_preparation_concurrency.py
   test:
     runs-on: ubuntu-latest
     steps:
