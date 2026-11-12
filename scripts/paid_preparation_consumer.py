@@ -26,6 +26,12 @@ EVENT_RE = re.compile(r"evt_[A-Za-z0-9_]{3,120}\Z")
 HEX_RE = re.compile(r"[a-f0-9]{64}\Z")
 EXPECTED_FILES = ("response-pack.html", "response-use-guide.md",
                   "inquiry-tracker.csv", "manifest.json")
+OWNED_SUPABASE_HOST = "wuzmqruxdclstezitsbf.supabase.co"
+
+
+class RejectRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        raise PreparationBlocked("Authenticated request redirect refused")
 
 
 class PreparationBlocked(RuntimeError):
@@ -37,7 +43,9 @@ class Transport:
 
     def __init__(self, supabase_url, service_key, stripe_key):
         parsed = urllib.parse.urlsplit(supabase_url)
-        if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        if (parsed.scheme != "https" or parsed.hostname != OWNED_SUPABASE_HOST
+                or parsed.path not in ("", "/") or parsed.query or parsed.fragment
+                or parsed.username or parsed.password):
             raise ValueError("A valid HTTPS Supabase project origin is required")
         if not service_key or not stripe_key.startswith("sk_live_"):
             raise ValueError("Server-only service role and live Stripe secret required")
@@ -49,7 +57,7 @@ class Transport:
     def request(url, headers, data=None):
         request = urllib.request.Request(url, data=data, headers=headers,
                                          method="POST" if data is not None else "GET")
-        with urllib.request.urlopen(request, timeout=20) as response:
+        with urllib.request.build_opener(RejectRedirect).open(request, timeout=20) as response:
             if response.status < 200 or response.status >= 300:
                 raise PreparationBlocked("Upstream verification failed")
             return json.loads(response.read(131072))
@@ -105,19 +113,29 @@ def verified_setup(gateway, event_id, dossier):
     if str(dossier.get("lead_id")) != str(event["lead_id"]):
         raise PreparationBlocked("Buyer dossier does not match verified lead identifier")
     lead = one(gateway.rows("inbound_leads", id="eq." + str(event["lead_id"]),
-                            property_id="eq.003", select="id,company_name"), "APEX buyer lead")
+                            property_id="eq.003", select="id,company_name,email_hash"), "APEX buyer lead")
     if lead.get("company_name") != profile["company"]:
         raise PreparationBlocked("Business identity does not match approved buyer profile")
+    email_hash = event.get("customer_email_hash")
+    if (not isinstance(email_hash, str) or not HEX_RE.fullmatch(email_hash)
+            or lead.get("email_hash") != email_hash):
+        raise PreparationBlocked("Signed payment and buyer email hash do not match")
     checkout = gateway.stripe_checkout(event.get("source_object_id"))
+    if checkout.get("id") != event.get("source_object_id"):
+        raise PreparationBlocked("Stripe source object differs from signed receipt")
+    customer_email = (checkout.get("customer_details") or {}).get("email")
+    if (not isinstance(customer_email, str) or
+            hashlib.sha256(customer_email.strip().lower().encode()).hexdigest() != email_hash):
+        raise PreparationBlocked("Stripe payer email differs from verified lead")
     intent = checkout.get("payment_intent")
-    if not isinstance(intent, dict):
-        raise PreparationBlocked("PaymentIntent/charge not independently expanded")
+    if not isinstance(intent, dict) or intent.get("id") != event.get("payment_reference"):
+        raise PreparationBlocked("PaymentIntent not independently matched")
     charge = intent.get("latest_charge")
     if not isinstance(charge, dict):
         raise PreparationBlocked("Charge not independently expanded")
     if (checkout.get("mode") != "payment" or checkout.get("status") != "complete"
             or checkout.get("payment_status") != "paid"
-            or checkout.get("metadata", {}).get("apex_property_id") != "003"
+            or (checkout.get("metadata") or {}).get("apex_property_id") != "003"
             or checkout.get("amount_total") != 10000
             or (checkout.get("currency") or "").upper() != "USD"
             or intent.get("status") != "succeeded"
@@ -155,6 +173,16 @@ def make_archive(profile, root, worker):
         for name, digest in manifest["files"].items():
             if hashlib.sha256(bundle.read(name)).hexdigest() != digest:
                 raise RuntimeError("Archive content does not match manifest")
+    # A verified private archive must reach the persistent filesystem before
+    # its database checkpoint. The parent directory entry is fsynced as well.
+    with archive.open("rb") as handle:
+        os.fsync(handle.fileno())
+    for directory in (target, root):
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     if not HEX_RE.fullmatch(digest):
         raise RuntimeError("Bad artifact digest")
@@ -164,7 +192,7 @@ def make_archive(profile, root, worker):
 def prepare_once(gateway, dossiers, artifact_root, worker=None):
     """Never claim unless the current oldest eligible setup has all evidence."""
     candidates = gateway.rows("paid_fulfillment_queue", status="eq.pending",
-                              prepared_at="is.null", order="created_at.asc",
+                              prepared_at="is.null", order="created_at.asc,processor_event_id.asc",
                               select="processor_event_id,work_kind,preparation_expires_at,preparation_attempts",
                               limit="100")
     if not isinstance(candidates, list):
@@ -235,6 +263,8 @@ def main():
             parser.error("Existing private directories outside the repository are required")
         if p.stat().st_mode & 0o077:
             parser.error("Private directories must deny group/other access")
+    if args.artifact_root.resolve() != Path("/data/private-paid-preparations"):
+        parser.error("Artifacts must use /data/private-paid-preparations, not public content paths")
     gateway = Transport(os.environ.get("SUPABASE_URL", ""),
                         os.environ.get("SUPABASE_SERVICE_ROLE_KEY", ""),
                         os.environ.get("STRIPE_SECRET_KEY", ""))
