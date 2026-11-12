@@ -14,6 +14,7 @@ if SCRIPT_DIR not in sys.path:
 from business_model_intelligence import load_catalog, pursuit_plan, rank_models
 from portfolio_competition import compare_candidates
 import experiment_queue
+import public_market_research
 
 DB_PATH = os.getenv('REVENUE_DB_PATH', '/files/data/revenue_agent.db')
 KILL_SWITCH = os.getenv('REVENUE_AGENT_KILL_SWITCH', 'false').lower() == 'true'
@@ -548,6 +549,12 @@ def run(path=DB_PATH):
     model_intelligence = business_model_snapshot(conn)
     validation_queue = ensure_zero_cost_validation(path, model_intelligence)
     plan = build_plan(metrics, model_intelligence, validation_queue)
+    research = public_market_research.summary(conn)
+    research_queue = public_market_research.review_queue(conn, model_intelligence.get('top_candidates', []))
+    if research['items']:
+        plan.append({'priority': 6, 'action': 'review_public_market_signals',
+                     'mode': 'analyze', 'fresh_sources': research['fresh_sources'],
+                     'reason': 'Compare primary-source discovery with actual buyer demand, delivery capability and measured costs; public signals alone never authorize execution or prove profit.'})
     mode = 'execution_authorized' if allowed else 'analysis_and_preparation_only'
     result = {
         'generated_at': now_iso(),
@@ -562,6 +569,8 @@ def run(path=DB_PATH):
         'metrics': metrics,
         'objective_score': objective_score(metrics),
         'business_model_intelligence': model_intelligence,
+        'public_market_research': research,
+        'public_research_review_queue': research_queue,
         'zero_cost_validation_queue': validation_queue,
         'plan': plan,
         'approval_required_for': ['outbound_send', 'spending', 'contracts', 'automatic_charge',
@@ -570,6 +579,7 @@ def run(path=DB_PATH):
     conn.execute('INSERT INTO agent_mission_runs (run_day,mode,objective_score,plan,created_at) VALUES (?,?,?,?,?)',
                  (today, mode, result['objective_score'], json.dumps(plan), result['generated_at']))
     conn.commit()
+    conn.close()
     return result
 
 
