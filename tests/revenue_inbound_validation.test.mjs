@@ -16,6 +16,7 @@ test("normalizes a valid consented lead", () => {
   const result = normalizeLeadPayload({
     contact_email: "  Buyer@Example.COM  ",
     company_name: "  Buyer Co  ",
+    pain_point: "  We need clearer responses to new inquiries.  ",
     contact_consent: true,
     privacy_acknowledged: true,
   });
@@ -28,6 +29,7 @@ test("supports legacy email and company aliases", () => {
   const result = normalizeLeadPayload({
     email: "owner@example.com",
     company: "Owner Co",
+    pain_point: "We need help responding to appointment inquiries.",
     contact_consent: true,
     privacy_acknowledged: true,
   });
@@ -38,6 +40,7 @@ test("requires explicit contact consent and privacy acknowledgement", () => {
   const result = normalizeLeadPayload({
     email: "owner@example.com",
     company: "Owner Co",
+    pain_point: "Help us respond to new buyers faster.",
     contact_consent: "true",
     privacy_acknowledged: 1,
   });
@@ -45,6 +48,23 @@ test("requires explicit contact consent and privacy acknowledgement", () => {
     "affirmative_contact_consent_required",
     "privacy_acknowledgement_required",
   ]);
+});
+
+test("requires meaningful preview context at the API boundary", () => {
+  const base = {
+    contact_email: "buyer@example.com",
+    company_name: "Buyer Co",
+    contact_consent: true,
+    privacy_acknowledged: true,
+  };
+  const code = "problem_description_12_to_1000_characters_required";
+  for (const pain_point of [undefined, "", "            ", "short", 123, {}, "x".repeat(1001)]) {
+    const result = normalizeLeadPayload({ ...base, pain_point });
+    assert.ok(result.errors.includes(code), String(pain_point));
+  }
+  for (const pain_point of ["x".repeat(12), "x".repeat(1000), "  Need help replying to buyers.  "]) {
+    assert.deepEqual(normalizeLeadPayload({ ...base, pain_point }).errors, []);
+  }
 });
 
 test("rejects the honeypot and malformed email addresses", () => {
