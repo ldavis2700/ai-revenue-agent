@@ -41,6 +41,8 @@ class PausedCheckoutOfferTests(unittest.TestCase):
         self.assertIn("Do not include customer names, addresses, door codes", self.html)
         self.assertRegex(self.html, r'<textarea[^>]+id="pain"[^>]+minlength="12"[^>]+maxlength="1000"[^>]+required>')
         self.assertIn('aria-describedby="pain-help"', self.html)
+        self.assertIn("payload.pain_point = String(payload.pain_point || '').trim()", self.html)
+        self.assertIn("payload.pain_point.length < 12", self.html)
 
     def test_full_fictional_pack_is_accessible_without_pretending_a_sale(self):
         self.assertIn("docs/FICTIONAL_14_RESPONSE_PACK_DEMONSTRATION.md", self.html)
