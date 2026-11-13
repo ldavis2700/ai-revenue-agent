@@ -44,6 +44,22 @@ class RevenueWorkerTests(unittest.TestCase):
             self.assertEqual(db.execute('SELECT COUNT(*) FROM agent_mission_runs').fetchone()[0], 3)
         self.assertEqual(waits, [900]*3)
 
+    def test_buyer_actions_run_before_research_and_research_failure(self):
+        self.assertEqual(STAGES[0][0], 'execute_authorized_inbound')
+        worker = self.worker()
+        worker.acquire()
+        seen = []
+        def stage(name, script):
+            seen.append(name)
+            if name == 'research':
+                return {'stage': name, 'status': 'failed'}
+            return {'stage': name, 'status': 'completed'}
+        with patch.object(worker, 'stage', side_effect=stage):
+            result = worker.cycle()
+        self.assertEqual(seen[0], 'execute_authorized_inbound')
+        self.assertEqual(seen, [name for name, _ in STAGES])
+        self.assertEqual(result['status'], 'degraded')
+
     def test_stage_failure_does_not_starve_other_work(self):
         worker = self.worker()
         worker.acquire()
