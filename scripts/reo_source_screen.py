@@ -94,14 +94,16 @@ def screen(payload: dict) -> dict:
         current_price = amount(item.get("asking_price"))
         if current_price is None or current_price == 0:
             issues.append("current_ask_missing")
-        listed_on = dated(item.get("first_listed_on"), cutoff)
+        listed_on = (dated(item.get("first_listed_on"), cutoff)
+                     if item.get("first_listed_verified") is True and source_url(item.get("first_listed_source_url"))
+                     else None)
         days = (cutoff - listed_on).days if listed_on else None
         history = item.get("price_history") or []
         cuts = 0
         last = None
         valid_history = isinstance(history, list)
         for h in history if valid_history else []:
-            if not isinstance(h, dict) or not source_url(h.get("source_url")) or not dated(h.get("dated_on"), cutoff) or amount(h.get("price")) is None:
+            if not isinstance(h, dict) or not source_url(h.get("source_url")) or not dated(h.get("dated_on"), cutoff) or h.get("verified") is not True or amount(h.get("price")) is None:
                 valid_history = False
                 break
             price = amount(h["price"])
@@ -113,7 +115,8 @@ def screen(payload: dict) -> dict:
             issues.append("price_history_not_verified")
         if not ((days is not None and days >= 90) or cuts >= 2):
             issues.append("no_verified_90_day_or_two_cut_trigger")
-        underwriting = underwrite(item, cutoff)
+        underwriting = (underwrite(item, cutoff) if item.get("investor_purchase_permitted") is True
+                        else {"ready": False, "reasons": ["investor_eligibility_not_confirmed_or_prohibited"], "scenario_max_offer": None})
         # No deal is ever auto-qualified; transaction/title/inspection and buyer gates are separate.
         rows.append({"address": item.get("address"), "official_listing_url": link, "asking_price": str(current_price) if current_price is not None else None,
             "days_on_market_verified": days, "verified_price_cuts": cuts,
