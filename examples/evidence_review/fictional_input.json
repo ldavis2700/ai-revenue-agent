@@ -1,0 +1,16 @@
+[
+  {
+    "record_id": "fiction-001",
+    "field_name": "supplier_delivery_time",
+    "proposed_value": "3 business days",
+    "source_label": "FICTIONAL supplier message / no real buyer",
+    "excerpt": "Illustrative test record only: delivery is usually within three business days."
+  },
+  {
+    "record_id": "fiction-002",
+    "field_name": "refund_policy",
+    "proposed_value": "unverified",
+    "source_label": "FICTIONAL excerpt / intentionally insufficient evidence",
+    "excerpt": "Illustrative test record only: no refund policy is stated in this excerpt."
+  }
+]
