@@ -39,8 +39,7 @@ def render(profile: dict) -> str:
                 # Avoid injection into markdown as markup. Sensitive data must not be included as input.
                 safe = str(val).replace("\r", " ").replace("\n", " ")
                 status = fact["evidence_status"]
-                citation = ("; private reference: " + str(fact["source_reference"]).replace("\n"," "))
-                           if status == "documented" else ""
+                citation = ("; private reference: " + str(fact["source_reference"]).replace("\n"," ")) if status == "documented" else ""
                 lines.append(f"- {key.replace('_', ' ').capitalize()}: {safe} [{status}{citation}]")
             else:
                 lines.append(f"- {key.replace('_', ' ').capitalize()}: **MISSING / UNVERIFIED**")
