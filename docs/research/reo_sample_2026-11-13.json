@@ -1,0 +1,27 @@
+{
+  "as_of": "2026-11-13",
+  "listings": [
+    {
+      "address": "5210 Maplewood Ln, Gainesville, GA 30504",
+      "official_listing_url": "https://www.homesteps.com/listingdetails/5210-maplewood-ln-gainesville-ga-30504",
+      "source_verified": true,
+      "checked_on": "2026-11-13",
+      "status": "active",
+      "asking_price": 519900,
+      "investor_purchase_permitted": null,
+      "first_listed_on": null,
+      "price_history": []
+    },
+    {
+      "address": "2012 W 111th St Unit 3S, Chicago, IL 60643",
+      "official_listing_url": "https://www.homesteps.com/listingdetails/2012-west-111th-street-3s-chicago-il-60643",
+      "source_verified": false,
+      "checked_on": "2026-11-13",
+      "status": "active",
+      "asking_price": 44900,
+      "investor_purchase_permitted": false,
+      "first_listed_on": null,
+      "price_history": []
+    }
+  ]
+}

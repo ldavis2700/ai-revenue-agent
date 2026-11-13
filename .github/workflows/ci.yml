@@ -69,6 +69,19 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_content_worker.py' -v
       - name: Test guarded paid preparation consumer
         run: python -m unittest discover -s tests -p 'test_paid_preparation_consumer.py' -v
+      - name: Test offline, research-only REO listing gates
+        run: |
+          python -m unittest discover -s tests -p 'test_reo_source_screen.py' -v
+          python scripts/reo_source_screen.py --input docs/research/reo_sample_2026-11-13.json > /tmp/apex-reo-research.json
+          python - <<'PY'
+          import json
+          report = json.load(open('/tmp/apex-reo-research.json'))
+          assert report['screened'] == 2
+          assert report['external_action_allowed'] is False
+          assert report['collected_revenue'] == '0'
+          assert report['listings'][0]['screen_status'] == 'needs_evidence'
+          assert report['listings'][1]['screen_status'] == 'excluded'
+          PY
       - name: Test release source-pin preflight (no provider writes)
         run: python -m unittest discover -s tests -p 'test_source_pin_preflight.py' -v
       - name: Build and render with content container
