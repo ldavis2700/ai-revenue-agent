@@ -15,7 +15,7 @@ python research_evidence_demo.py --db /tmp/apex-fictional-pilot.sqlite export
 python -m unittest -v test_research_evidence_demo
 ```
 
-The first export contains no approved records. After the operator's explicit correction, export contains only the accepted value plus its original source label and SHA-256 evidence digest. Re-ingesting changed evidence for the same ID fails closed. Repeated identical decisions are idempotent; changing a completed review requires a new evidence record. No automatic approval, production webhook, cloud transmission, email, API key, or deployment is involved.
+The first export contains no approved records. After the operator's explicit correction, export contains only the accepted value plus its original source label, optional `source_url`, and SHA-256 evidence digest. When a public HTTPS source URL is supplied, the digest also binds that URL. Unsafe non-HTTPS, credential-bearing, localhost/internal, fragmented, and custom-port URLs are rejected. No source is fetched or authenticated, and a supplied link is not proof of truth. Existing local demo databases gain the nullable-by-default text field without dropping decisions. Re-ingesting changed evidence for the same ID fails closed. Repeated identical decisions are idempotent; changing a completed review requires a new evidence record. No automatic approval, production webhook, cloud transmission, email, API key, or deployment is involved.
 
 ### Buyer-scoped paid pilot handoff (not yet performed)
 
@@ -23,4 +23,4 @@ Only after a funded contract and written scope: obtain **buyer-provided**, expli
 
 ### Limits
 
-This is an operator-run prototype, not a robust untrusted-document parser: values are supplied in a JSON fixture, not extracted by an LLM. Evidence excerpts are *claims to be checked*, not authoritative truth. A reviewer must inspect the actual underlying source and independently verify each proposed value. SHA-256 binds the submitted source label and excerpt, but does not prove either one is truthful or authenticated. The tool omits concurrency controls and access-control roles, intentionally has no automatic writer to live services, and must not be marketed as production-ready.
+This is an operator-run prototype, not a robust untrusted-document parser: values are supplied in a JSON fixture, not extracted by an LLM. Evidence excerpts and optional HTTPS source links are *claims to be checked*, not authoritative truth. A reviewer must inspect the actual underlying source and independently verify each proposed value. SHA-256 binds the submitted source label and excerpt (and a source URL when provided), but does not prove any of them truthful or authenticated. The tool omits concurrency controls and access-control roles, intentionally has no automatic writer to live services, and must not be marketed as production-ready.
