@@ -36,9 +36,39 @@ class WeeklyModelTests(unittest.TestCase):
   self.assertEqual(x["estimated_contribution_cents"],6750)
   self.assertFalse(x["external_action_executed"])
   self.assertFalse(x["receipt_verified"])
- def test_stripe_paused(self):
+ def test_stripe_requires_apex_specific_current_evidence(self):
   self.good["payment_rail_name"]="Stripe"
-  self.assertIn("stripe_paused",w.evaluate(self.good,self.now)["reasons"])
+  x=w.evaluate(self.good,self.now)
+  self.assertEqual(x["state"],"blocked")
+  for reason in ("apex_stripe_property_scope_required",
+                 "apex_stripe_provider_verification_required",
+                 "stripe_buyer_reconciliation_required",
+                 "public_checkout_must_remain_paused"):
+   self.assertIn(reason,x["reasons"])
+  self.assertFalse(x["external_action_executed"])
+
+ def test_apex_scoped_stripe_can_only_prepare_not_collect_or_send(self):
+  self.good.update(payment_rail_name="Stripe", property_id="003",
+                   apex_stripe_provider_verified=True,
+                   stripe_buyer_reconciliation_verified=True,
+                   public_checkout_paused=True)
+  x=w.evaluate(self.good,self.now)
+  self.assertEqual(x["state"],"prepare_only")
+  self.assertFalse(x["receipt_verified"])
+  self.assertFalse(x["external_action_executed"])
+  self.assertFalse(x["estimate_is_collected_cash"])
+
+ def test_stripe_cross_property_and_checkout_fail_closed(self):
+  self.good.update(payment_rail_name="HAEVEN Stripe", property_id="002",
+                   apex_stripe_provider_verified=True,
+                   stripe_buyer_reconciliation_verified=True,
+                   public_checkout_paused=True)
+  self.assertIn("apex_stripe_property_scope_required",w.evaluate(self.good,self.now)["reasons"])
+  self.good.update(payment_rail_name="APEX Stripe",property_id="003",
+                   public_checkout_paused=False)
+  self.assertIn("public_checkout_must_remain_paused",w.evaluate(self.good,self.now)["reasons"])
+  self.good["stripe_buyer_reconciliation_verified"]="true"
+  self.assertIn("stripe_buyer_reconciliation_required",w.evaluate(self.good,self.now)["reasons"])
  def test_unauthorized_spending_blocked(self):
   self.good["spend_required"]=True
   self.assertEqual(w.evaluate(self.good,self.now)["state"],"blocked")
