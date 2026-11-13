@@ -30,3 +30,31 @@ Microloans cannot be used to buy real estate or refinance debt; SBA Lender Match
 
 ## Acceptance before automation expansion
 Pass unit tests; document an authorized representative's approval mechanism; prove no outbound calls or hard credit checks; maintain evidence and access controls for sensitive materials; review full lender terms with owner; validate the actual deployed worker version. Merging this change does not by itself activate an hourly research process.
+
+## Integration checkpoint (Nov 13, 2026)
+
+The proposed branch now adds `('financing_readiness', 'scripts/business_financing_cycle.py')`
+to the existing `revenue_worker.py` stage list **after** authorized inbound, planning,
+and market research. This is a once-per-UTC-day local-only readiness check using the
+same revenue SQLite database for **state and missing-item count only**. A missing
+`APEX_FINANCING_PROFILE_PATH` is a harmless unready state; no fake company profile
+is generated. Configure the optional path only to an owner-authorized local JSON
+file outside source control, never inside a public repository. Merely running the
+cycle does not research live lenders, query financial accounts, submit applications
+or authorize any private-data sharing. The existing scheduled research workflow
+can independently evaluate currently published lender options and prepare a sourced
+owner review.
+
+Generate a human-readable, evidence-labeled financing profile packet locally:
+
+`python scripts/business_financing_packet.py /private/approved_business_facts.json --output /private/financing_packet.md`
+
+No claimed lender approval, automatic underwriting or funding is implied. Do not
+place private packet contents in PR comments, CI artifacts, analytics or worker logs.
+The packet is *only* a preparation document; real eligibility and affordable loan
+terms must be confirmed by the actual lender and owner.
+
+Tests added: `tests/test_business_financing_readiness.py`,
+`tests/test_business_financing_cycle.py`,
+`tests/test_business_financing_packet.py`. Validate the whole worker CI suite and
+the actual deployed commit before treating the addition as live.
