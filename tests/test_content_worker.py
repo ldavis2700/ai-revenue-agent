@@ -107,6 +107,24 @@ class ContentHTTPTests(unittest.TestCase):
             self.assertIn(c.PUBLIC_ORIGIN,body)
             self.assertIn('frame-ancestors',response.headers['Content-Security-Policy'])
             self.assertEqual(response.headers['X-Content-Type-Options'],'nosniff')
+    def test_response_gap_audit_is_owned_safe_and_linked(self):
+        for path in ('/response-gap-audit', '/response-gap-audit.html'):
+            with urlopen(self.url+path+'?utm_source=public') as response:
+                page=response.read().decode()
+                self.assertEqual(response.status,200)
+                self.assertIn('Free seven-day response gap audit',page)
+                self.assertIn('aggregate counts only',page)
+                self.assertIn('utm_source=railway',page)
+                self.assertNotIn('fetch(',page)
+                self.assertNotIn('localStorage',page)
+                self.assertNotIn('buy.stripe.com',page)
+                self.assertIn("frame-ancestors 'none'",response.headers['Content-Security-Policy'])
+        with urlopen(self.url+'/') as response:
+            self.assertIn('href="/response-gap-audit"',response.read().decode())
+        with self.assertRaises(HTTPError) as exc:
+            urlopen(self.url+'/sales/response-gap-audit.html')
+        self.assertEqual(exc.exception.code,404)
+
     def test_all_public_pages_and_legacy_privacy_alias_are_served(self):
         for path in c.PUBLIC_PAGES:
             with urlopen(self.url+path+'?utm_source=test') as response:
