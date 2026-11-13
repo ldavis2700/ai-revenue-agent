@@ -52,6 +52,8 @@ Neither vendor study measures APEX customer results, willingness to pay, or impr
 
 ## Free seven-day response gap self-audit
 
+**Prefer a downloadable offline calculator?** [Open the original seven-day aggregate response audit HTML file](./cleaning-response-gap-audit.html), select **Download raw file** on GitHub, and open it locally. It calculates the same 24-hour reply share and staff review minutes without cookies, network requests, storage, account signup, or customer-level details. This optional tool is a free self-audit, not a paid service, buyer result, or sales forecast.
+
 If you already receive customer inquiries, a basic aggregate tally can show **which unanswered questions deserve a human-reviewed draft** before buying software or services. This is a free self-use worksheet, not an APEX customer result or a promise of faster bookings. The time spent recording and reviewing inquiries is a real operating cost.
 
 1. Over seven consecutive days, count genuine **new** customer-service inquiries on channels you are authorized to inspect. Exclude spam, duplicate messages within one inquiry, and tests. Do not copy customer names, phone numbers, addresses, door codes, messages or payment information into any public file or AI prompt.
