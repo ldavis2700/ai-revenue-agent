@@ -30,6 +30,34 @@ Validation uses disposable PostgreSQL: replayed payments, setup and renewal work
 foreign-property exclusion, unmatched buyers, atomic rollback when queue insertion
 fails, and server-only permissions. Never insert these fixtures into production.
 
+### Queue schema: lease fields are on the existing queue
+
+The production migration named `paid_preparation_leases` **does not create a
+standalone `public.paid_preparation_leases` table**. It adds lease, attempt,
+blocker, and durable preparation checkpoint columns and the four service-role
+RPCs to `public.paid_fulfillment_queue`. Do not query a guessed leases table:
+that returns relation-not-found and does not inspect real funded work.
+
+For a read-only, server-authorized triage, count obligations first, including
+blocked and prepared-but-not-delivered work:
+
+```sql
+SELECT status,
+       count(*) AS obligations,
+       count(*) FILTER (WHERE preparation_token IS NOT NULL) AS leased,
+       count(*) FILTER (WHERE prepared_at IS NOT NULL) AS prepared
+FROM public.paid_fulfillment_queue
+GROUP BY status
+ORDER BY status;
+```
+
+An empty result means no rows **in that queue at that read time**, not that no
+customer, payment, refund, or claim exists elsewhere. Prepared items still
+require independently authorized delivery; do not re-claim or silently
+count them as delivered. Inspect joined signed payment and consented buyer
+evidence before making any claim or external action. Never expose service
+credentials, buyers, identifiers, or artifacts in a public issue.
+
 ## Preparation reservations and recovery
 
 Authorized server workers must use the following RPCs when preparing paid work.
