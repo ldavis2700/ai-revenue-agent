@@ -25,7 +25,7 @@ MAX_DISK = 600_000_000
 MAX_EGRESS_DAY = 100_000_000
 PUBLIC_ORIGIN = 'https://apex-content-worker-production.up.railway.app'
 PUBLIC_PAGES = {'/': 'offer.html', '/offer.html': 'offer.html'}
-for _page in ('privacy', 'home-services', 'industries', 'partners'):
+for _page in ('privacy', 'home-services', 'industries', 'partners', 'response-gap-audit'):
     PUBLIC_PAGES['/' + _page] = _page + '.html'
     PUBLIC_PAGES['/' + _page + '.html'] = _page + '.html'
 
