@@ -24,13 +24,13 @@ class ScreenTests(unittest.TestCase):
         self.assertIsNone(r["underwriting"]["scenario_max_offer"])
 
     def test_90_day_trigger_is_research_only(self):
-        d = {**BASE, "listings": [{**BASE["listings"][0], "first_listed_on": "2026-08-01"}]}
+        d = {**BASE, "listings": [{**BASE["listings"][0], "first_listed_on": "2026-08-01", "first_listed_verified": True, "first_listed_source_url": URL}]}
         r = reo.screen(d)["listings"][0]
         self.assertTrue(r["research_trigger_met"])
         self.assertFalse(r["external_action_allowed"])
 
     def test_two_real_price_cuts(self):
-        h = [{"dated_on": d, "source_url": URL, "price": p} for d, p in [
+        h = [{"dated_on": d, "source_url": URL, "price": p, "verified": True} for d, p in [
             ("2026-09-01", 130000), ("2026-10-01", 115000), ("2026-11-10", 100000)]]
         r = reo.screen({**BASE, "listings": [{**BASE["listings"][0], "price_history": h}]})["listings"][0]
         self.assertEqual(r["verified_price_cuts"], 2)
@@ -45,7 +45,7 @@ class ScreenTests(unittest.TestCase):
     def test_investor_prohibition_always_excludes(self):
         r = reo.screen({**BASE, "listings": [{
             **BASE["listings"][0], "investor_purchase_permitted": False,
-            "first_listed_on": "2026-01-01"}]})["listings"][0]
+            "first_listed_on": "2026-01-01", "first_listed_verified": True, "first_listed_source_url": URL}]})["listings"][0]
         self.assertEqual(r["screen_status"], "excluded")
 
     def test_sourced_arv_cost_scenario_is_not_offer(self):
@@ -77,6 +77,11 @@ class ScreenTests(unittest.TestCase):
     def test_duplicate_is_rejected(self):
         r = reo.screen({**BASE, "listings": BASE["listings"] + BASE["listings"]})["listings"][1]
         self.assertIn("duplicate_listing", r["blocking_reasons"])
+
+    def test_unverified_listing_date_has_no_dom(self):
+        result = reo.screen({**BASE, "listings": [{
+            **BASE["listings"][0], "first_listed_on": "2026-01-01"}]})
+        self.assertIsNone(result["listings"][0]["days_on_market_verified"])
 
     def test_missing_authoritative_check(self):
         r = reo.screen({**BASE, "listings": [{
