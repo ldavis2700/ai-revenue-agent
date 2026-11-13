@@ -232,6 +232,12 @@
     payload.privacy_acknowledged = form.elements.privacy_acknowledged.checked;
     payload.consent_version = 'contact-v1';
     if (campaign) payload.campaign = campaign;
+    payload.pain_point = String(payload.pain_point || '').trim();
+    if (payload.pain_point.length < 12 || payload.pain_point.length > 1000) {
+      status.textContent = 'Describe the customer-response problem in 12–1,000 characters without private customer information.';
+      submit.disabled = false;
+      return;
+    }
     try {
       const response = await fetch(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
       if (!response.ok) throw new Error('request_failed');
