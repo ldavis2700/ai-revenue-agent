@@ -49,7 +49,7 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(r["screen_status"], "excluded")
 
     def test_sourced_arv_cost_scenario_is_not_offer(self):
-        x = {"closed_comps": [{"source_url": URL, "closed_on": "2026-06-01", "sold_price": 200000} for _ in range(3)],
+        x = {"closed_comps": [{"source_url": URL + str(i), "closed_on": "2026-06-01", "sold_price": 200000} for i in range(3)],
             "arv": 200000, "arv_source_url": URL,
             "repairs_low": 10000, "repairs_high": 25000, "repair_quote_source_url": URL,
             "repair_quote_checked_on": "2026-11-12", "acquisition_cost": 5000,
@@ -58,6 +58,16 @@ class ScreenTests(unittest.TestCase):
         self.assertTrue(r["underwriting"]["ready"])
         self.assertEqual(r["underwriting"]["scenario_max_offer"], "90000.00")
         self.assertFalse(r["external_action_allowed"])
+
+    def test_duplicate_closed_comps_fail(self):
+        x = {"closed_comps": [{"source_url": URL, "closed_on": "2026-06-01", "sold_price": 200000} for _ in range(3)],
+            "arv": 200000, "arv_source_url": URL,
+            "repairs_low": 10000, "repairs_high": 25000, "repair_quote_source_url": URL,
+            "repair_quote_checked_on": "2026-11-12", "acquisition_cost": 5000,
+            "selling_cost": 10000, "holding_cost": 5000, "uncertainty_reserve": 5000}
+        result = reo.screen({**BASE, "listings": [{**BASE["listings"][0], "underwriting": x}]})
+        self.assertFalse(result["listings"][0]["underwriting"]["ready"])
+        self.assertIn("duplicate_closed_comp_source", result["listings"][0]["underwriting"]["reasons"])
 
     def test_false_and_negative_financials_fail(self):
         x = {"arv": False, "arv_source_url": URL, "repairs_low": -1}
