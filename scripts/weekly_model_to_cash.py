@@ -120,7 +120,8 @@ def evaluate(candidate, now=None):
         reasons.append("named_authorized_payment_rail_required")
     # Stripe is allowed for APEX-only *preparation*, not public checkout or sending.
     # All evidence booleans are operator supplied, never payment or delivery proof.
-    if "stripe" in str(candidate["payment_rail_name"]).casefold():
+    rail_label = str(candidate["payment_rail_name"]).casefold().replace("non-stripe", "").replace("non stripe", "")
+    if "stripe" in rail_label:
         if str(candidate.get("property_id", "")).strip() != "003":
             reasons.append("apex_stripe_property_scope_required")
         if candidate.get("apex_stripe_provider_verified") is not True:
