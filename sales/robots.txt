@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /artifacts/
+Disallow: /health
+Sitemap: https://apex-content-worker-production.up.railway.app/sitemap.xml

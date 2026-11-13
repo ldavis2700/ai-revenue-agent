@@ -125,6 +125,30 @@ class ContentHTTPTests(unittest.TestCase):
             urlopen(self.url+'/sales/response-gap-audit.html')
         self.assertEqual(exc.exception.code,404)
 
+    def test_free_search_discovery_routes_are_exact_and_bounded(self):
+        with urlopen(self.url+'/robots.txt') as response:
+            robots=response.read().decode()
+            self.assertEqual(response.headers['Content-Type'],'text/plain; charset=utf-8')
+            self.assertIn('Sitemap: '+c.PUBLIC_ORIGIN+'/sitemap.xml',robots)
+            self.assertIn('Disallow: /artifacts/',robots)
+            self.assertNotIn('buy.stripe.com',robots)
+        with urlopen(self.url+'/sitemap.xml') as response:
+            sitemap=response.read().decode()
+            self.assertEqual(response.headers['Content-Type'],'application/xml; charset=utf-8')
+            self.assertIn('<loc>'+c.PUBLIC_ORIGIN+'/home-services</loc>',sitemap)
+            self.assertIn('<loc>'+c.PUBLIC_ORIGIN+'/response-gap-audit</loc>',sitemap)
+            self.assertNotIn('<lastmod>',sitemap)
+        with patch.object(c,'MAX_EGRESS_DAY',1):
+            for route in ('/robots.txt','/sitemap.xml'):
+                with urlopen(Request(self.url+route,method='HEAD')) as response:
+                    self.assertEqual(response.status,200)
+                    self.assertEqual(response.read(),b'')
+            with self.assertRaises(HTTPError) as exc:urlopen(self.url+'/sitemap.xml')
+            self.assertEqual(exc.exception.code,429)
+        for path in ('/sales/robots.txt','/sales/sitemap.xml','/sitemap.xml/../queue.db'):
+            with self.assertRaises(HTTPError) as exc:urlopen(self.url+path)
+            self.assertEqual(exc.exception.code,404)
+
     def test_all_public_pages_and_legacy_privacy_alias_are_served(self):
         for path in c.PUBLIC_PAGES:
             with urlopen(self.url+path+'?utm_source=test') as response:
