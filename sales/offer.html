@@ -167,7 +167,7 @@
       <label for="first-name">First name</label><input id="first-name" name="first_name" autocomplete="given-name" />
       <label for="company">Business name</label><input id="company" name="company_name" autocomplete="organization" required />
       <label for="email">Business email</label><input id="email" name="contact_email" type="email" autocomplete="email" required />
-      <label for="pain">What customer-response problem should I solve?</label><textarea id="pain" name="pain_point" rows="3"></textarea>
+      <label for="pain">What customer-response problem should I solve?</label><p id="pain-help" class="muted">Describe the kind of question or follow-up problem you receive (at least 12 characters). Do not include customer names, addresses, door codes, payment details, or other private customer information.</p><textarea id="pain" name="pain_point" rows="3" minlength="12" maxlength="1000" aria-describedby="pain-help" required></textarea>
       <div class="hp" aria-hidden="true"><label for="website-confirm">Leave blank</label><input id="website-confirm" name="website_confirm" tabindex="-1" autocomplete="off" /></div>
       <label class="consent"><input name="contact_consent" type="checkbox" required /><span>I agree that RMC Family Enterprises LLC may contact me about this request. I can opt out at any time.</span></label>
       <label class="consent"><input name="privacy_acknowledged" type="checkbox" required /><span>I acknowledge the <a href="/privacy" target="_blank" rel="noopener">privacy notice</a>.</span></label>
