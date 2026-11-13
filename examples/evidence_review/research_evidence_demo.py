@@ -5,8 +5,10 @@ sandbox. A human must separately approve each proposed value before export.
 """
 import argparse
 import hashlib
+import ipaddress
 import json
 import sqlite3
+from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,7 @@ CREATE TABLE IF NOT EXISTS proposals (
     field_name TEXT NOT NULL,
     proposed_value TEXT NOT NULL,
     source_label TEXT NOT NULL,
+    source_url TEXT NOT NULL DEFAULT '',
     excerpt TEXT NOT NULL,
     evidence_sha256 TEXT NOT NULL,
     review_status TEXT NOT NULL DEFAULT 'pending' CHECK (review_status IN ('pending','approved','corrected','rejected')),
@@ -40,11 +43,44 @@ def connect(path: Path) -> sqlite3.Connection:
     db = sqlite3.connect(str(path))
     db.row_factory = sqlite3.Row
     db.executescript(SCHEMA)
+    # Preserve the operator's older disposable demo database without dropping reviews.
+    if 'source_url' not in {row[1] for row in db.execute('PRAGMA table_info(proposals)')}:
+        with db:
+            db.execute("ALTER TABLE proposals ADD COLUMN source_url TEXT NOT NULL DEFAULT ''")
     return db
 
 
-def evidence_hash(source_label: str, excerpt: str) -> str:
-    packed = json.dumps({'source': source_label, 'excerpt': excerpt}, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+def validated_source_url(raw: Any) -> str:
+    """Optional HTTPS evidence pointer. This does NOT fetch or verify the source."""
+    if raw is None or raw == '':
+        return ''
+    if not isinstance(raw, str) or len(raw) > 500 or any(c.isspace() for c in raw):
+        raise ValueError('source_url must be an HTTPS URL of at most 500 characters')
+    try:
+        url = urlsplit(raw)
+        host = url.hostname
+        port = url.port
+    except ValueError as exc:
+        raise ValueError('source_url is malformed') from exc
+    if url.scheme != 'https' or not host or url.username is not None or url.password is not None or url.fragment or port not in (None, 443):
+        raise ValueError('source_url must be a public HTTPS URL without credentials, fragments or custom ports')
+    if '.' not in host or host == 'localhost' or host.endswith(('.localhost', '.local', '.internal')):
+        raise ValueError('source_url must reference a public host')
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        if not ip.is_global:
+            raise ValueError('source_url must not reference a nonpublic IP address')
+    return raw
+
+
+def evidence_hash(source_label: str, excerpt: str, source_url: str = '') -> str:
+    evidence = {'source': source_label, 'excerpt': excerpt}
+    if source_url:
+        evidence['url'] = source_url
+    packed = json.dumps(evidence, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
     return hashlib.sha256(packed.encode('utf-8')).hexdigest()
 
 
@@ -64,17 +100,18 @@ def ingest(db: sqlite3.Connection, records: list[dict[str, Any]]) -> int:
         field = _validated_text(row.get('field_name'), 'field_name', 100)
         proposed = _validated_text(row.get('proposed_value'), 'proposed_value', 1000)
         source = _validated_text(row.get('source_label'), 'source_label', 200)
+        url = validated_source_url(row.get('source_url'))
         excerpt = _validated_text(row.get('excerpt'), 'excerpt', 2000)
-        validated.append((rec_id, field, proposed, source, excerpt, evidence_hash(source, excerpt)))
+        validated.append((rec_id, field, proposed, source, url, excerpt, evidence_hash(source, excerpt, url)))
 
     with db:
-        for rec_id, field, proposed, source, excerpt, sha in validated:
-            prev = db.execute('SELECT field_name, proposed_value, source_label, excerpt, evidence_sha256 FROM proposals WHERE record_id=?', (rec_id,)).fetchone()
+        for rec_id, field, proposed, source, url, excerpt, sha in validated:
+            prev = db.execute('SELECT field_name, proposed_value, source_label, source_url, excerpt, evidence_sha256 FROM proposals WHERE record_id=?', (rec_id,)).fetchone()
             if prev:
-                if tuple(prev) != (field, proposed, source, excerpt, sha):
+                if tuple(prev) != (field, proposed, source, url, excerpt, sha):
                     raise ValueError(f'Existing record {rec_id} differs: manual reconciliation required')
             else:
-                db.execute('INSERT INTO proposals (record_id,field_name,proposed_value,source_label,excerpt,evidence_sha256) VALUES (?,?,?,?,?,?)', (rec_id, field, proposed, source, excerpt, sha))
+                db.execute('INSERT INTO proposals (record_id,field_name,proposed_value,source_label,source_url,excerpt,evidence_sha256) VALUES (?,?,?,?,?,?,?)', (rec_id, field, proposed, source, url, excerpt, sha))
     return len(validated)
 
 
@@ -104,12 +141,12 @@ def review(db: sqlite3.Connection, record_id: str, decision: str, reviewer: str,
 
 
 def pending(db: sqlite3.Connection) -> list[dict]:
-    return [dict(x) for x in db.execute('SELECT record_id, field_name, proposed_value, source_label, excerpt, evidence_sha256 FROM proposals WHERE review_status=? ORDER BY record_id', ('pending',))]
+    return [dict(x) for x in db.execute('SELECT record_id, field_name, proposed_value, source_label, source_url, excerpt, evidence_sha256 FROM proposals WHERE review_status=? ORDER BY record_id', ('pending',))]
 
 
 def approved_export(db: sqlite3.Connection) -> list[dict]:
     """Approved-only records; explicitly not a live Supabase export or payment."""
-    return [dict(x) for x in db.execute("""SELECT record_id, field_name, accepted_value, source_label,
+    return [dict(x) for x in db.execute("""SELECT record_id, field_name, accepted_value, source_label, source_url,
         evidence_sha256, review_status, reviewer FROM proposals
         WHERE review_status IN ('approved','corrected') ORDER BY record_id""")]
 
