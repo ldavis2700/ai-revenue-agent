@@ -66,6 +66,16 @@
 
 A prospective **$100 one-time** setup consists of **14 responses tailored to buyer-confirmed facts**, a response-use guide, blank inquiry tracker and one consolidated revision after separate scope and payment agreement. The **optional $99/month** support is separate and only with affirmative enrollment. This public example is free and does not establish that any buyer accepted or paid for such a pack. The current public form is inquiry-only; checkout remains paused.
 
+## Choose one problem for your free preview
+
+The [existing consent-based inquiry form](https://apex-content-worker-production.up.railway.app/?utm_source=github&utm_medium=fictional_demo&utm_campaign=apex_pilot_20261112#lead-form) asks for your business name, business email, and the customer-response problem you want help with. A useful, privacy-safe request can be as short as one sentence:
+
+- “I receive quote questions but need a consistent way to ask for the cleaning scope before a person confirms pricing.”
+- “I miss calls and need one owner-reviewed reply that asks for a preferred callback time.”
+- “I want to track existing inquiries without sending automatic follow-ups.”
+
+Describe the *type* of problem, not an actual customer's private message. Do not include a customer's name, address, phone number, door code, payment details, or access credentials. You must affirmatively consent to being contacted and acknowledge the privacy notice before submitting. A free preview is not a booking, paid order, completed delivery, or recurring enrollment. If you later request the full pack, service details, service area, quote policy, human escalation contact, scope, and payment are confirmed separately.
+
 [Request a free, consent-based preview of the existing service](https://apex-content-worker-production.up.railway.app/?utm_source=github&utm_medium=fictional_demo&utm_campaign=apex_pilot_20261112#lead-form). A form request is not an order or recurring subscription.
 
 **Rights and QA:** These original examples were written for this demonstration without copying a competitor's scripts, customer messages or proprietary materials. They require buyer-specific verification before commercial use; no improved conversion rate, turnaround time or business income is claimed.
