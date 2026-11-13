@@ -50,6 +50,32 @@ Separately, an **August 13, 2026** Rosebud study sent inquiries to **273 U.S. se
 
 Neither vendor study measures APEX customer results, willingness to pay, or improved sales. Treat the examples as owner-reviewed drafting aids, not an automated sending service or a guaranteed conversion method.
 
+## Free seven-day response gap self-audit
+
+If you already receive customer inquiries, a basic aggregate tally can show **which unanswered questions deserve a human-reviewed draft** before buying software or services. This is a free self-use worksheet, not an APEX customer result or a promise of faster bookings. The time spent recording and reviewing inquiries is a real operating cost.
+
+1. Over seven consecutive days, count genuine **new** customer-service inquiries on channels you are authorized to inspect. Exclude spam, duplicate messages within one inquiry, and tests. Do not copy customer names, phone numbers, addresses, door codes, messages or payment information into any public file or AI prompt.
+2. For each day's new-inquiry *cohort*, tally how many received an actual human-reviewed response within 24 hours. Revisit the prior day's cohort if needed. A saved draft, automatic-send attempt, or reminder is **not** a delivered response.
+3. Tally recurring **question types**, such as service scope, quotes, availability, missed calls or complaints. Use aggregate counts only. Do not equate an unanswered inquiry with a lost sale.
+4. Across the seven cohorts, total new inquiries (N) and genuine replies within 24 hours (R). If N is greater than zero, your own observed 24-hour reply share is R ÷ N. If N is zero, mark it **not measurable**, not 0%. Never infer causation or revenue from an unrelated vendor benchmark.
+5. Select **one** repeated or hard-to-answer question. Draft a safe human-reviewed reply using the five examples above, but first confirm your actual service area, scope, pricing and escalation rules. Any real send requires a permitted channel and applicable customer contact permission.
+6. A second seven-day tally is optional. Compare only equivalent cohorts and record actual staff time, platform/processing fees, and support costs. Changes in reply rate alone do not establish additional sales or profit.
+
+Copy this blank aggregate tally into your own private spreadsheet (no real buyer or customer data is included):
+
+```csv
+day,new_inquiries,replied_within_24h,common_question_type,staff_review_minutes,notes_without_personal_data
+1,,,,,
+2,,,,,
+3,,,,,
+4,,,,,
+5,,,,,
+6,,,,,
+7,,,,,
+```
+
+**Interpretation:** For the same inquiry cohort, R must not exceed N. A response is a *process observation*, not proof of booking, customer acceptance or payment. If you identify a recurring problem, the consent-based preview below accepts a **description of the problem type**, not individual customers' messages. You do not need to upload this tally.
+
 ## Want a preview tailored to your business?
 
 [Request a free, consent-based preview of the APEX customer-response pilot](https://apex-content-worker-production.up.railway.app/?utm_source=github&utm_medium=free_guide&utm_campaign=cleaning_reply_starters_20261111#lead-form).
