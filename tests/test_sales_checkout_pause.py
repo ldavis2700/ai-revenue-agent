@@ -49,6 +49,14 @@ class PausedCheckoutOfferTests(unittest.TestCase):
         self.assertIn("not a real client result", self.html)
         self.assertIn("not an automated sending service", self.html)
 
+    def test_instant_examples_are_not_misrepresented_as_problem_specific(self):
+        self.assertIn("General starter reply examples", self.html)
+        self.assertIn("not responses tailored to the problem", self.html)
+        self.assertIn("A custom preview requires human review", self.html)
+        self.assertIn("These drafts are not yet tailored to that problem", self.html)
+        self.assertIn("your specific problem awaits review", self.html)
+        self.assertNotIn("Starter responses for ${company}, based on your request about", self.html)
+
     def test_visible_copy_does_not_promise_live_checkout(self):
         self.assertIn("Online checkout is paused", self.html)
         self.assertIn("does not currently accept payments or subscriptions", self.html)

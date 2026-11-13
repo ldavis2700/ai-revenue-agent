@@ -174,14 +174,14 @@
       <button id="lead-submit" class="cta disabled" type="submit" disabled>Request my preview</button>
       <p id="lead-status" class="muted">Lead intake is being connected. The form will activate only after its secure endpoint is verified.</p>
       <section id="instant-preview" class="preview instant-preview" aria-live="polite" hidden>
-        <h2>Your instant starter preview</h2>
+        <h2>General starter reply examples</h2>
         <p id="instant-summary" class="muted"></p>
         <div class="preview-grid">
           <article class="message"><h3>New inquiry</h3><p id="instant-inquiry"></p></article>
           <article class="message"><h3>Missed call</h3><p id="instant-missed-call"></p></article>
           <article class="message"><h3>Follow-up</h3><p id="instant-follow-up"></p></article>
         </div>
-        <p>This starter preview is generated from the business details you submitted. It does not send messages to your customers or enroll you in a paid service.</p>
+        <p>These are generic examples using your business name, not responses tailored to the problem you described. A custom preview requires human review. Nothing is sent to your customers and no paid enrollment is created.</p>
         <p class="muted">The complete paid setup is a separate, manually scoped engagement and cannot be purchased here while online checkout is paused.</p>
       </section>
     </form>
@@ -211,8 +211,8 @@
     const company = String(payload.company_name || 'your business').trim().slice(0, 80);
     const problem = String(payload.pain_point || '').trim().replace(/\s+/g, ' ').slice(0, 160);
     document.getElementById('instant-summary').textContent = problem
-      ? `Starter responses for ${company}, based on your request about: ${problem}`
-      : `Starter customer-response messages for ${company}.`;
+      ? `General starter examples for ${company}. You asked about: ${problem}. These drafts are not yet tailored to that problem.`
+      : `General starter customer-response examples for ${company}, not tailored to your business needs.`;
     document.getElementById('instant-inquiry').textContent =
       `Thanks for reaching out to ${company}. I’d be happy to help. What do you need, and when would you like to get started?`;
     document.getElementById('instant-missed-call').textContent =
@@ -243,7 +243,7 @@
       if (!response.ok) throw new Error('request_failed');
       showInstantPreview(payload);
       form.reset();
-      status.textContent = 'Thank you. Your request was received and your starter preview is ready below.';
+      status.textContent = 'Thank you. Your request was received. Generic starter reply examples appear below while your specific problem awaits review.';
     } catch (_) {
       status.textContent = 'Your request was not sent. Please try again later.';
       submit.disabled = false;
