@@ -9,7 +9,10 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
-from scripts.business_financing_readiness import assess
+try:
+    from scripts.business_financing_readiness import assess
+except ModuleNotFoundError:
+    from business_financing_readiness import assess
 
 def cycle(db_path, profile_path=None, current=None):
     today = (current or datetime.now(timezone.utc)).date().isoformat()
