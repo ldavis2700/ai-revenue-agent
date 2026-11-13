@@ -20,6 +20,13 @@ Want to measure your own response gap before requesting a preview? [Download the
 
 For a full **illustrative deliverable format**, see the [14-message fictional cleaning-business response pack](docs/FICTIONAL_14_RESPONSE_PACK_DEMONSTRATION.md). It contains seven inquiry situations with two draft options each and explicit review/permission safeguards. The business and scenarios are invented placeholders, not a real buyer, accepted delivery, customer result or paid order.
 
+
+## Offline research-workflow example (fictional, no customer data)
+
+For a second, fixed-scope automation capability, inspect the [original evidence-to-approval demonstration](examples/evidence_review/README.md) and its [reproducible Python implementation](examples/evidence_review/research_evidence_demo.py). It ingests invented structured records, keeps proposed values pending human review, and exports only explicitly approved corrections with a SHA-256 evidence reference. It uses Python's standard library and local SQLite; no paid API, account signup, or hosted model is required to run the example. The reviewer must independently verify the underlying evidence: a hash is **not** proof that a source's claim is true.
+
+This is a limited offline **technical sample**, not an AI document extractor, live CRM/Supabase integration, completed client project, accepted deliverable, or verified income. Any real customer work would need separately agreed scope, authorized inputs and access, quality/security tests, an agreed payment route, and an approved delivery process. The current $100 customer-response pack above is a **different** offer; neither this demo nor a free preview creates a paid order.
+
 ## Free customer inquiry tracker (CSV)
 
 Download the [blank, privacy-conscious inquiry tracker CSV](docs/FREE_CUSTOMER_INQUIRY_TRACKER.csv) and read its [five-minute setup and safe-use guide](docs/FREE_CUSTOMER_INQUIRY_TRACKER_GUIDE.md). It records non-identifying inquiry IDs, owner-reviewed drafts, genuine replies, follow-up permission and next permitted actions. This is a **free self-use resource**, not an automated CRM or a customer sale. Keep actual customer details private and never treat missing consent as permission to contact.
