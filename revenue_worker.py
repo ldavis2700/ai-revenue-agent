@@ -14,11 +14,14 @@ import time
 from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parent
+# Prioritize existing buyer requests and authorized revenue work before research.
+# A later slow or failing research stage must not delay consented inbound handling.
+# This does not bypass dispatch consent, payment, spending, or owner stop controls.
 STAGES = (
+    ('execute_authorized_inbound', 'autonomous_cycle.py'),
+    ('plan', 'scripts/mission_control.py'),
     ('research', 'scripts/public_market_research.py'),
     ('learn', 'scripts/experiment_learning.py'),
-    ('plan', 'scripts/mission_control.py'),
-    ('execute_authorized_inbound', 'autonomous_cycle.py'),
     ('self_review', 'scripts/self_improvement_cycle.py'),
 )
 
