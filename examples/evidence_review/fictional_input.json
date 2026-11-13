@@ -4,6 +4,7 @@
     "field_name": "supplier_delivery_time",
     "proposed_value": "3 business days",
     "source_label": "FICTIONAL supplier message / no real buyer",
+    "source_url": "https://example.org/fictional-research-example",
     "excerpt": "Illustrative test record only: delivery is usually within three business days."
   },
   {
