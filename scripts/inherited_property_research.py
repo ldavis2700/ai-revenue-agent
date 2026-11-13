@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,14 +38,14 @@ def assess(record: dict, clearance: dict) -> dict:
     comps = record.get("closed_comps") or []
     if not isinstance(comps, list) or len(comps) < 2 or any(
         not isinstance(c, dict) or not c.get("closed_date") or not c.get("source_url")
-        or not isinstance(c.get("sold_price"), (int, float)) or c["sold_price"] <= 0
+        or not isinstance(c.get("sold_price"), (int, float)) or isinstance(c.get("sold_price"), bool) or not math.isfinite(c["sold_price"]) or c["sold_price"] <= 0
         for c in comps
     ):
         reasons.append("insufficient_verified_closed_comps")
     financial_keys = ("supported_buyer_price", "purchase_price", "closing_costs",
                       "repairs", "holding_costs", "buyer_margin", "uncertainty_reserve")
     if any(not isinstance(record.get(k), (int, float)) or isinstance(record.get(k), bool)
-           or record[k] < 0 for k in financial_keys):
+           or not math.isfinite(record[k]) or record[k] < 0 for k in financial_keys):
         reasons.append("invalid_financial_inputs")
     if not reasons:
         potential = (record["supported_buyer_price"] - record["purchase_price"]
