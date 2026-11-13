@@ -52,6 +52,8 @@ def underwrite(item: dict, cutoff: date) -> dict:
             if not isinstance(c, dict) or not source_url(c.get("source_url")) or not dated(c.get("closed_on"), cutoff) or amount(c.get("sold_price")) is None:
                 reasons.append("invalid_closed_comp_evidence")
                 break
+        if len({c.get("source_url") for c in comps if isinstance(c, dict)}) != len(comps):
+            reasons.append("duplicate_closed_comp_source")
     arv = amount(x.get("arv"))
     if arv is None or not source_url(x.get("arv_source_url")):
         reasons.append("verified_arv_missing")
