@@ -14,6 +14,8 @@ AI Revenue Agent is an automation-first revenue pipeline for ingesting business 
 
 For a practical example before requesting a preview, read the [free cleaning inquiry reply starters](docs/FREE_CLEANING_INQUIRY_REPLY_STARTERS.md). They contain five original, human-reviewed drafting examples, usage safeguards and an optional consent-based inquiry path. They are educational samples, not customer results or the completed 14-response paid pack.
 
+Want to measure your own response gap before requesting a preview? [Download the original seven-day response-gap audit](docs/cleaning-response-gap-audit.html), then open the HTML file locally. Enter only aggregate daily counts of inquiries, genuine replies sent within 24 hours, and staff review minutes. The offline worksheet sends no information, stores no customer records, and makes no revenue or booking claims. It does not place an order; the separate opt-in inquiry path is above.
+
 For a full **illustrative deliverable format**, see the [14-message fictional cleaning-business response pack](docs/FICTIONAL_14_RESPONSE_PACK_DEMONSTRATION.md). It contains seven inquiry situations with two draft options each and explicit review/permission safeguards. The business and scenarios are invented placeholders, not a real buyer, accepted delivery, customer result or paid order.
 
 ## Free customer inquiry tracker (CSV)
