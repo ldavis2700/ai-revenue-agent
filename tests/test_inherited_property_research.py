@@ -66,6 +66,12 @@ class InheritedResearchTests(unittest.TestCase):
         self.assertEqual(result["qualified"], 1)
         self.assertEqual(result["results"][1]["reasons"], ["duplicate_parcel"])
 
+    def test_nonfinite_and_boolean_prices_rejected(self):
+        record = valid(); record["supported_buyer_price"] = float("nan")
+        self.assertEqual(evaluate(payload(record))["qualified"], 0)
+        record = valid(); record["closed_comps"][0]["sold_price"] = True
+        self.assertEqual(evaluate(payload(record))["qualified"], 0)
+
     def test_idempotent_day_in_existing_database(self):
         with tempfile.TemporaryDirectory() as folder:
             db = str(Path(folder) / "apex.db")
