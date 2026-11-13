@@ -1,6 +1,6 @@
 # APEX Wealth Execution System
 
-Version: 2026-11-10. Owner: RMC FAMILY ENTERPRISES LLC.
+Version: 2026-11-13. Owner: RMC FAMILY ENTERPRISES LLC.
 Status: operating knowledge, **not model-weight training**, not a deployed agent and not evidence of earnings.
 
 ## Mission and definition of success
@@ -21,7 +21,7 @@ Follow priority order each cycle:
 5. Improve a tested reusable asset or complete original, audience-relevant content.
 6. Research a new model *only when existing opportunities are not being neglected*.
 
-The acquisition-to-cash path must have verified demand source, permitted contact channel, exact scope, delivery capacity, authorized non-Stripe collection rail (Stripe is paused), fee/refund/support policy and actual settled receipt reconciliation. An inbox lead, offer page, payment test, draft and completed local simulation do not establish an operational commercial loop.
+The acquisition-to-cash path must have verified demand source, permitted contact channel, exact scope, delivery capacity, verified buyer-specific authorized collection rail: APEX-only Stripe property 003 after buyer, scope, payment-status, reconciliation and release gates, or the funded marketplace's own payment rail (public checkout remains paused), fee/refund/support policy and actual settled receipt reconciliation. An inbox lead, offer page, payment test, draft and completed local simulation do not establish an operational commercial loop.
 
 ## Evidence-based business model evaluation
 
@@ -35,7 +35,7 @@ An observed paid work opportunity outranks model popularity. APEX must **prove**
 
 1. **Validate:** one real buyer problem, desired outcome, consented communication, credible identity and available budget.
 2. **Scope:** clear fixed deliverable, exclusions, dependencies, acceptance criteria, support period, refund terms, price and expected fees. Never sign binding terms automatically without the required approval.
-3. **Collect safely:** use only the existing verified authorized payment rail or funded marketplace contract; never enable Stripe while paused, change payout details or invent a checkout link. Recognize fees separately.
+3. **Collect safely:** use only the existing verified authorized payment rail or funded marketplace contract; never expose the paused public Stripe checkout, initiate an unapproved charge, change payout details or invent a checkout link; Upwork-originated contracts must use Upwork payment rails. Recognize fees separately.
 4. **Deliver:** do minimal changes, test with fictional data, log evidence, run security/privacy checks and obtain buyer acceptance. Confirm consent before enabling customer sends.
 5. **Reconcile:** retain provider transaction ID, settlement time, fees, refunds, acceptance receipt, actual direct costs and owner-received evidence independently.
 6. **Retain:** after accepted setup and value proof, offer genuinely optional managed service with explicit terms. Monitor customer satisfaction and churn; never label a signed plan as retained cash.
@@ -70,7 +70,7 @@ Reputation, originality, audience value, useful CTA and legitimate service inqui
 
 Record actual run start/end, last useful action, concrete artifact/PR/connector receipt, buyer evidence, submitted proposals, funded contracts, accepted deliveries, settled gross, fees, refunds, direct costs, contribution, recurring retention, actual owner-received cash, unknown values, pending provider outcomes, exact blockers and next executable action. Never label an enabled schedule as uninterrupted 24/7 runtime, successful CI as deployed runtime, or a newly drafted playbook as a sale.
 
-If no funded or consented work is currently executable, the concrete next step is to verify an authorized non-Stripe collection rail and service delivery capacity while producing one tested sales/delivery asset. Record why outreach/collection/publication could not proceed, then advance independent work rather than repeatedly rewriting plans.
+If no funded or consented work is currently executable, the concrete next step is to verify buyer-specific readiness of the existing APEX-only Stripe route (not public checkout) or a permitted marketplace rail, along with service delivery capacity while producing one tested sales/delivery asset. Record why outreach/collection/publication could not proceed, then advance independent work rather than repeatedly rewriting plans.
 
 ## Evidence-based self-improvement audit (November 10, 2026)
 
