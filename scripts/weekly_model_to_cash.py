@@ -118,8 +118,17 @@ def evaluate(candidate, now=None):
         reasons.append("permitted_demand_channel_required")
     if not isinstance(candidate["payment_rail_name"],str) or not candidate["payment_rail_name"].strip():
         reasons.append("named_authorized_payment_rail_required")
-    if str(candidate["payment_rail_name"]).lower().strip()=="stripe":
-        reasons.append("stripe_paused")
+    # Stripe is allowed for APEX-only *preparation*, not public checkout or sending.
+    # All evidence booleans are operator supplied, never payment or delivery proof.
+    if "stripe" in str(candidate["payment_rail_name"]).casefold():
+        if str(candidate.get("property_id", "")).strip() != "003":
+            reasons.append("apex_stripe_property_scope_required")
+        if candidate.get("apex_stripe_provider_verified") is not True:
+            reasons.append("apex_stripe_provider_verification_required")
+        if candidate.get("stripe_buyer_reconciliation_verified") is not True:
+            reasons.append("stripe_buyer_reconciliation_required")
+        if candidate.get("public_checkout_paused") is not True:
+            reasons.append("public_checkout_must_remain_paused")
     for key in ("estimated_revenue_cents","estimated_direct_cost_cents",
                 "estimated_support_cost_cents","estimated_platform_fee_cents"):
         if type(candidate[key]) is not int or candidate[key]<0:
