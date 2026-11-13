@@ -47,6 +47,8 @@ jobs:
           python-version: '3.12'
       - name: Compile Python
         run: python -m py_compile revenue_worker.py autonomous_cycle.py delivery_adapter.py dispatch_recovery.py free_delivery_policy.py scripts/*.py
+      - name: Test offline evidence-to-review demonstration
+        run: python -m unittest discover -s examples/evidence_review -p 'test_research_evidence_demo.py' -v
       - name: Build and smoke test continuous worker container
         run: |
           docker build -f Dockerfile.worker -t apex-worker-ci .
