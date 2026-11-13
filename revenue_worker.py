@@ -21,6 +21,7 @@ STAGES = (
     ('execute_authorized_inbound', 'autonomous_cycle.py'),
     ('plan', 'scripts/mission_control.py'),
     ('research', 'scripts/public_market_research.py'),
+    ('financing_readiness', 'scripts/business_financing_cycle.py'),
     ('learn', 'scripts/experiment_learning.py'),
     ('self_review', 'scripts/self_improvement_cycle.py'),
 )
