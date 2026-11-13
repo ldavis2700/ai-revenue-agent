@@ -36,6 +36,10 @@ class WeeklyModelTests(unittest.TestCase):
   self.assertEqual(x["estimated_contribution_cents"],6750)
   self.assertFalse(x["external_action_executed"])
   self.assertFalse(x["receipt_verified"])
+ def test_non_stripe_marketplace_not_mistaken_for_stripe(self):
+  self.good["payment_rail_name"]="verified non-Stripe marketplace"
+  self.assertEqual(w.evaluate(self.good,self.now)["state"],"prepare_only")
+
  def test_stripe_requires_apex_specific_current_evidence(self):
   self.good["payment_rail_name"]="Stripe"
   x=w.evaluate(self.good,self.now)
