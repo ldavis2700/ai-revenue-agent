@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from research_evidence_demo import connect, ingest, pending, review, approved_export
+from research_evidence_demo import connect, ingest, pending, review, approved_export, evidence_hash
 
 
 def sample(record_id='sample-1'):
@@ -33,6 +33,33 @@ class EvidenceReviewTest(unittest.TestCase):
         self.assertEqual(out[0]['accepted_value'],'3')
         self.assertEqual(len(out[0]['evidence_sha256']),64)
         self.assertEqual(out[0]['source_label'],'fictional supplier email A')
+
+    def test_https_evidence_link_is_preserved_and_digest_bound(self):
+        row=sample();row['source_url']='https://example.org/synthetic/evidence-001'
+        ingest(self.db,[row])
+        review(self.db,'sample-1','approve','Human reviewer')
+        exported=approved_export(self.db)[0]
+        self.assertEqual(exported['source_url'],row['source_url'])
+        self.assertEqual(exported['evidence_sha256'],evidence_hash(row['source_label'],row['excerpt'],row['source_url']))
+        changed=dict(row,source_url='https://example.org/synthetic/evidence-002')
+        with self.assertRaises(ValueError):
+            ingest(self.db,[changed])
+
+    def test_invalid_evidence_links_fail_closed(self):
+        for url in ('http://example.org/item','https://user:secret@example.org/item',
+                    'https://example.org/item#secret','https://localhost/item',
+                    'https://127.0.0.1/item','https://example.org:8080/item',
+                    'https://example.org/bad path', 'https://test.internal/item'):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                ingest(self.db,[dict(sample(),source_url=url)])
+        self.assertEqual(len(pending(self.db)),0)
+
+    def test_missing_url_keeps_legacy_hash(self):
+        ingest(self.db,[sample()])
+        review(self.db,'sample-1','approve','Human reviewer')
+        exported=approved_export(self.db)[0]
+        self.assertEqual(exported['source_url'],'')
+        self.assertEqual(exported['evidence_sha256'],evidence_hash(sample()['source_label'],sample()['excerpt']))
 
     def test_correction_requires_human_input(self):
         ingest(self.db,[sample()])
