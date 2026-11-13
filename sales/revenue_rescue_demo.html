@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>APEX Revenue Rescue | Private Demo</title>
+<style>
+:root{font-family:system-ui,-apple-system,sans-serif;color:#14283d;background:#f3f7fb}*{box-sizing:border-box}
+main{max-width:660px;margin:5vh auto;padding:24px}section{background:#fff;padding:clamp(20px,5vw,40px);border-radius:18px;box-shadow:0 6px 28px #20304018}
+h1{font-size:clamp(1.6rem,5vw,2.4rem);line-height:1.14}p{line-height:1.6}
+label{display:block;font-weight:650;margin:20px 0 7px}input,select,textarea,button{font:inherit;width:100%;border-radius:9px;padding:12px;border:1px solid #65778b}
+input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-visible{outline:3px solid #087bc4;outline-offset:2px}
+button{margin-top:22px;background:#164b7c;color:#fff;font-weight:700;cursor:pointer}button:hover{background:#103b62}
+.notice{border-left:4px solid #285c9b;background:#e9f2fa;padding:12px;margin-bottom:20px}.result{margin-top:15px;font-weight:700}
+small{color:#43576b}
+</style>
+</head>
+<body>
+<main><section>
+<div class="notice"><strong>Demonstration only.</strong> No message is sent, stored, or delivered. Use fictional test details only. This is not a live business booking page.</div>
+<h1>Request a service appointment</h1>
+<p>Example mobile-friendly inquiry form for an appointment-based business. A submitted request would require business-approved delivery, privacy and anti-spam configuration before launch.</p>
+<form id="request" novalidate>
+<label for="name">Name (fictional demo name)</label><input id="name" name="name" maxlength="80" autocomplete="off" required>
+<label for="email">Email (fictional demo email)</label><input id="email" name="email" type="email" maxlength="120" autocomplete="off" required>
+<label for="service">Service</label><select id="service" name="service" required><option value="">Choose a service</option><option value="consultation">Consultation</option><option value="estimate">Estimate</option><option value="repair">Repair inquiry</option></select>
+<label for="details">Request details (fictional)</label><textarea id="details" name="details" rows="4" maxlength="500" required></textarea>
+<label><input type="checkbox" id="consent" style="width:auto" required> I understand this is a non-submitting demo and will not enter real personal information.</label>
+<button type="submit">Validate demo request</button>
+<p id="result" class="result" role="status" aria-live="polite"></p>
+</form>
+<small>Before real deployment: add a secure server, authorized lead destination, consent/privacy notice, abuse protection, data retention/deletion and end-to-end delivery tests.</small>
+</section></main>
+<script>
+"use strict";
+const form=document.getElementById("request"), result=document.getElementById("result");
+form.addEventListener("submit",event=>{
+ event.preventDefault();
+ const name=form.elements.name.value.trim(),email=form.elements.email.value.trim(),details=form.elements.details.value.trim();
+ const validName=name.length>=2&&name.length<=80;
+ const validEmail=/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)&&email.length<=120;
+ const validDetails=details.length>=5&&details.length<=500;
+ if(!validName||!validEmail||!validDetails||!form.elements.service.value||!document.getElementById("consent").checked){
+  result.textContent="Please complete the demo fields, including consent, with fictional information.";return;
+ }
+ result.textContent="Demo validation passed. No inquiry was transmitted, stored, or booked.";
+});
+</script>
+</body></html>
