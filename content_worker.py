@@ -28,6 +28,10 @@ PUBLIC_PAGES = {'/': 'offer.html', '/offer.html': 'offer.html'}
 for _page in ('privacy', 'home-services', 'industries', 'partners', 'response-gap-audit'):
     PUBLIC_PAGES['/' + _page] = _page + '.html'
     PUBLIC_PAGES['/' + _page + '.html'] = _page + '.html'
+PUBLIC_CRAWL_FILES = {
+    '/robots.txt': ('robots.txt', 'text/plain; charset=utf-8'),
+    '/sitemap.xml': ('sitemap.xml', 'application/xml; charset=utf-8'),
+}
 
 def reserve_egress(size):
     """Keep public pages and existing media within the same daily transfer cap."""
@@ -235,12 +239,14 @@ class Handler(BaseHTTPRequestHandler):
     def _serve(self, include_body):
         # Exact allowlist: never map arbitrary URLs onto the repository or /data.
         try:
-            public_page = PUBLIC_PAGES.get(urlsplit(self.path).path)
+            public_path = urlsplit(self.path).path
+            public_page = PUBLIC_PAGES.get(public_path)
+            crawl_file = PUBLIC_CRAWL_FILES.get(public_path)
         except ValueError:
             self.send_error(400);return
-        if public_page:
+        if public_page or crawl_file:
             try:
-                with (ROOT/'sales'/public_page).open('rb') as source:
+                with (ROOT/'sales'/(public_page or crawl_file[0])).open('rb') as source:
                     body = source.read(100_001)
             except OSError:
                 self.send_error(503);return
@@ -251,7 +257,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(429);return
             self.connection.settimeout(10)
             self.send_response(200)
-            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Type', crawl_file[1] if crawl_file else 'text/html; charset=utf-8')
             self.send_header('Content-Length', str(len(body)))
             self.send_header('Cache-Control', 'public, max-age=300')
             self.send_header('X-Content-Type-Options', 'nosniff')
