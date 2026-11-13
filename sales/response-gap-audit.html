@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Free 7-day cleaning inquiry response audit | APEX</title>
+  <style>
+    :root { color-scheme: light; font: 16px/1.5 system-ui, sans-serif; }
+    body { max-width: 860px; margin: 2rem auto; padding: 0 1rem; color: #202b36; }
+    h1,h2 { line-height: 1.2; }
+    .note { background: #f3f6fa; border-left: 4px solid #456b95; padding: .8rem 1rem; }
+    .scroll { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; margin: 1rem 0; min-width: 500px; }
+    th,td { padding: .65rem; border-bottom: 1px solid #c9d1d9; text-align: left; }
+    input { width: 6rem; max-width: 90%; font: inherit; padding: .4rem; }
+    button { font: inherit; padding: .6rem 1rem; margin: .3rem .5rem .3rem 0; cursor: pointer; }
+    button.primary { background: #193e65; color: white; border: none; }
+    #error { color: #922d28; font-weight: 600; }
+    #results { border-top: 1px solid #b5c0cb; margin-top: 1.2rem; padding-top: .4rem; }
+    output { font-variant-numeric: tabular-nums; font-weight: 700; }
+    a { color: #174e83; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Free seven-day response gap audit</h1>
+    <p>An offline, original APEX worksheet for small cleaning businesses. Enter <strong>aggregate counts only</strong> to measure your own response process, not sales or estimated revenue.</p>
+    <div class="note">
+      <strong>Privacy:</strong> This page contains no analytics, external libraries, cookies, storage, background requests, or automatic submission. Your numbers stay in this open browser tab. Do not enter customer names, addresses, messages, phone numbers, pricing, door codes, or personal information. Download the file first and open it locally to use offline.
+    </div>
+    <h2>Enter seven daily inquiry cohorts</h2>
+    <p>Count genuine new inquiries once on their original day. For each cohort, count only replies actually sent within 24 hours. Drafts and failed attempts do not count. You can revise yesterday's replies after the 24-hour window closes. Record actual staff review time in whole minutes.</p>
+    <form id="audit" novalidate>
+      <div class="scroll">
+        <table>
+          <thead><tr><th>Day</th><th>New inquiries</th><th>Actually replied within 24h</th><th>Staff review minutes</th></tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+      <p><button class="primary" type="submit">Calculate response share</button><button id="reset" type="button">Clear all values</button></p>
+      <p id="error" role="alert"></p>
+    </form>
+    <section id="results" aria-live="polite" hidden>
+      <h2>Your self-audit (not a revenue estimate)</h2>
+      <p>New inquiries: <output id="n"></output></p>
+      <p>Replies actually sent within 24h: <output id="r"></output></p>
+      <p>Unanswered within 24h: <output id="gap"></output></p>
+      <p>Observed 24-hour reply share: <output id="share"></output></p>
+      <p>Recorded staff review time: <output id="mins"></output> minutes</p>
+      <p>This is only a descriptive measure of your recorded sample. It does not determine lost sales, bookings, service quality, causes of delayed replies, or ROI. If you have no inquiries, response share is not measurable.</p>
+    </section>
+    <h2>Useful next step</h2>
+    <p>If you identify a repetitive question, review a draft with your actual service area, hours, pricing policy, and escalation rules. You can <a href="https://apex-content-worker-production.up.railway.app/?utm_source=railway&amp;utm_medium=offline_audit&amp;utm_campaign=cleaning_response_7day#lead-form" rel="noopener noreferrer">request a free, consent-based APEX preview</a> (this link opens an external website only when selected). Do not send your aggregate tally or any customer messages. The optional paid pilot costs $100 for 14 human-reviewed draft replies, a response-use guide, blank tracker, and one consolidated revision after agreeing scope. A separate $99/month support plan requires separate opt-in. No purchase, automation, booking increase, or guaranteed outcome is implied.</p>
+    <p>See the <a href="https://github.com/ldavis2700/ai-revenue-agent/blob/main/docs/FREE_CLEANING_INQUIRY_REPLY_STARTERS.md" rel="noopener noreferrer">original free cleaning reply starter guide</a> for five human-reviewed examples and important limitations.</p>
+  </main>
+  <script>
+    "use strict";
+    const tbody = document.getElementById("rows");
+    for (let day = 1; day <= 7; day += 1) {
+      const tr = document.createElement("tr");
+      const cell = document.createElement("th");
+      cell.scope = "row";
+      cell.textContent = String(day);
+      tr.appendChild(cell);
+      for (const [key, description] of [["n","new inquiries"],["r","replies sent within 24 hours"],["m","review minutes"]]) {
+        const td = document.createElement("td");
+        const input = document.createElement("input");
+        input.type = "number";
+        input.min = "0";
+        input.max = "1000000";
+        input.step = "1";
+        input.inputMode = "numeric";
+        input.id = key + day;
+        input.setAttribute("aria-label", "Day " + day + " " + description);
+        td.appendChild(input);
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    const form = document.getElementById("audit");
+    const error = document.getElementById("error");
+    const results = document.getElementById("results");
+    form.addEventListener("submit", event => {
+      event.preventDefault();
+      error.textContent = "";
+      results.hidden = true;
+      let N = 0, R = 0, M = 0;
+      for (let day = 1; day <= 7; day += 1) {
+        const values = ["n","r","m"].map(k => document.getElementById(k + day).value.trim());
+        if (values.every(v => v === "")) continue;
+        if (values.some(v => v === "" || !/^\d+$/.test(v) || Number(v) > 1000000)) {
+          error.textContent = "Day " + day + ": enter whole nonnegative numbers in all three fields, or leave the entire day blank.";
+          return;
+        }
+        const [n,r,m] = values.map(Number);
+        if (r > n) {
+          error.textContent = "Day " + day + ": replies within 24 hours cannot exceed new inquiries in that day's cohort.";
+          return;
+        }
+        N += n; R += r; M += m;
+      }
+      document.getElementById("n").textContent = N.toLocaleString();
+      document.getElementById("r").textContent = R.toLocaleString();
+      document.getElementById("gap").textContent = (N - R).toLocaleString();
+      document.getElementById("share").textContent = N ? (100 * R / N).toFixed(1) + "%" : "Not measurable (no inquiries)";
+      document.getElementById("mins").textContent = M.toLocaleString();
+      results.hidden = false;
+    });
+    document.getElementById("reset").addEventListener("click", () => {
+      form.reset();
+      error.textContent = "";
+      results.hidden = true;
+    });
+  </script>
+</body>
+</html>
