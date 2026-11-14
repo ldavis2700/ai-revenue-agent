@@ -144,6 +144,30 @@ Each private candidate's `execution_plan` contains:
 | `probability_basis`, `probability_evidence_url` | Rationale and HTTPS provenance; unknown probabilities must stay unknown, not invented to pass |
 | `max_new_spend_cents` | Exactly zero under this preparation policy; existing approved costs still belong in the economics |
 
+### Free-first full-cost evidence (November 13, 2026 Pacific)
+
+The model selector now requires explicit **nonnegative integer cents** for
+`estimated_acquisition_cost_cents`, `estimated_hosting_cost_cents`, and
+`estimated_opportunity_cost_cents`, alongside existing direct, support and platform
+fee estimates. A missing value is **unknown**, never assumed to be $0 or allowed
+to occupy a new experiment slot. These are operator-supplied estimates, not
+provider-verified bills. The selector subtracts all six cost categories from
+estimated contribution and from failure-case expected contribution; nothing is
+reported as collected revenue.
+
+For marketplace proposals, assign the real consumed Connects/credits a disclosed
+opportunity value even if they came from a free allowance. For example,
+**23 Connects × $0.15 = $3.45 of estimated acquisition resource cost** under
+[Upwork's July 23, 2026 official pricing guidance](https://www.upwork.com/resources/is-upwork-free).
+This is **not** an APEX payment or authorization to spend those Connects. The
+exact marketplace account's service fee is separately verified at the job/contract
+gate; Upwork publishes a possible 0–15% standard-contract range, not an APEX
+contract's known fee. Include any existing hosting allocation and time/opportunity
+cost justified by real workflow effort. Prevent double counting where an actual
+cash labor or hosting charge already appears under another heading; documenting
+zero is an affirmative estimation with rationale, not proof that costs do not exist.
+Do not activate blocked marketplace submissions or public checkout to test pricing.
+
 The ranking uses estimated expected contribution per total work hour, then shorter
 time to cash, with model ID as a stable tie-breaker. Expected contribution is
 `estimated revenue × probability − all estimated costs`. Costs are charged even

@@ -83,7 +83,9 @@ REQUIRED = ("model_id", "observed_at", "source_urls", "buyer_evidence",
             "contact_permission_verified", "payment_rail_verified",
             "payment_rail_name", "refund_support_defined",
             "estimated_revenue_cents", "estimated_direct_cost_cents", "estimated_support_cost_cents",
-            "estimated_platform_fee_cents", "external_credentials_verified",
+            "estimated_platform_fee_cents", "estimated_acquisition_cost_cents",
+            "estimated_hosting_cost_cents", "estimated_opportunity_cost_cents",
+            "external_credentials_verified",
             "buyer_evidence_url", "payment_rail_evidence_url")
 
 def evaluate(candidate, now=None):
@@ -131,7 +133,9 @@ def evaluate(candidate, now=None):
         if candidate.get("public_checkout_paused") is not True:
             reasons.append("public_checkout_must_remain_paused")
     for key in ("estimated_revenue_cents","estimated_direct_cost_cents",
-                "estimated_support_cost_cents","estimated_platform_fee_cents"):
+                "estimated_support_cost_cents","estimated_platform_fee_cents",
+                "estimated_acquisition_cost_cents","estimated_hosting_cost_cents",
+                "estimated_opportunity_cost_cents"):
         if type(candidate[key]) is not int or candidate[key]<0:
             reasons.append("nonnegative_integer_"+key+"_required")
     if candidate.get("spend_required",False) is not False:reasons.append("spend_not_authorized")
@@ -142,7 +146,9 @@ def evaluate(candidate, now=None):
         contribution=None
     else:
         contribution=(candidate["estimated_revenue_cents"]-candidate["estimated_direct_cost_cents"]
-                      -candidate["estimated_support_cost_cents"]-candidate["estimated_platform_fee_cents"])
+                      -candidate["estimated_support_cost_cents"]-candidate["estimated_platform_fee_cents"]
+                      -candidate["estimated_acquisition_cost_cents"]-candidate["estimated_hosting_cost_cents"]
+                      -candidate["estimated_opportunity_cost_cents"])
         if contribution<=0:reasons.append("no_positive_estimated_contribution")
     return {"model_id":candidate["model_id"],"state":"prepare_only" if not reasons else "blocked",
             "reasons":reasons,"estimated_contribution_cents":contribution,
@@ -228,7 +234,8 @@ def execution_review(candidate, evaluation, now):
             # multiply the successful-case margin by an optimistic probability.
             costs = sum(candidate[k] for k in (
                 "estimated_direct_cost_cents", "estimated_support_cost_cents",
-                "estimated_platform_fee_cents"))
+                "estimated_platform_fee_cents", "estimated_acquisition_cost_cents",
+                "estimated_hosting_cost_cents", "estimated_opportunity_cost_cents"))
             expected = (candidate["estimated_revenue_cents"] * plan["success_probability_bps"]
                         // 10000 - costs)
             rate = expected * 60 // plan["estimated_total_minutes"]
