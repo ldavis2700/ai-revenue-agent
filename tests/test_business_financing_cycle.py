@@ -40,10 +40,32 @@ class FinancingCycleTests(unittest.TestCase):
             state = cycle(str(root / "relative.sqlite"), "approved.json")
             self.assertEqual(state["state"], "input_unavailable")
 
+    def test_private_file_permissions_and_same_day_correction(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            profile = root / "owner_only.json"
+            profile.write_text(json.dumps({"ssn": "DO_NOT_STORE"}))
+            profile.chmod(0o644)
+            db = str(root / "ledger.sqlite")
+            now = datetime(2026, 11, 14, tzinfo=timezone.utc)
+            first = cycle(db, str(profile), current=now)
+            self.assertEqual(first["state"], "input_unavailable")
+            profile.chmod(0o600)
+            second = cycle(db, str(profile), current=now)
+            self.assertEqual(second["state"], "input_invalid")
+            self.assertEqual(cycle(db, current=now)["state"], "already_checked")
+            with sqlite3.connect(db) as con:
+                self.assertEqual(con.execute(
+                    "SELECT count(*) FROM financing_readiness_cycles").fetchone()[0], 1)
+                self.assertEqual(con.execute(
+                    "SELECT state FROM financing_readiness_cycles").fetchone()[0], "input_invalid")
+            self.assertNotIn(b"DO_NOT_STORE", Path(db).read_bytes())
+
     def test_invalid_sensitive_input_not_saved(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "profile.json"
             path.write_text(json.dumps({"ssn": "DO_NOT_STORE"}))
+            path.chmod(0o600)
             db = str(Path(d) / "worker.sqlite")
             state = cycle(db, str(path))
             self.assertEqual(state["state"], "input_invalid")
