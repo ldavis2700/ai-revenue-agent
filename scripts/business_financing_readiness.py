@@ -90,7 +90,7 @@ def assess(profile: dict) -> dict:
         if not isinstance(item, dict):
             item = {}
         status = item.get("status", "missing")
-        if status not in ALLOWED_STATUS:
+        if not isinstance(status, str) or status not in ALLOWED_STATUS:
             raise ValueError("Invalid evidence status for " + field)
         source = item.get("source", "")
         # A documented numeric zero is a real reported value, not missing
@@ -103,17 +103,24 @@ def assess(profile: dict) -> dict:
         else:
             facts[field] = {"value": val, "evidence_status": status,
                             "source_reference": source if status == "documented" else ""}
-    amount = profile.get("requested_amount")
-    if amount is not None:
-        if (isinstance(amount, bool) or not isinstance(amount, (int, float))
-                or not isfinite(amount) or amount <= 0):
-            raise ValueError("requested_amount must be a finite positive number")
-    for field in ("annual_revenue", "annual_net_income", "existing_annual_debt_service"):
-        v = profile.get(field)
-        if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float))
-                              or not isfinite(v)
-                              or (field != "annual_net_income" and v < 0)):
-            raise ValueError(field + " must be finite; revenue and debt service cannot be negative")
+    # Reject malformed numeric evidence even when no optional repayment scenario
+    # is requested. Otherwise a profile with nonfinite/fictional cash flow could
+    # be classified as ready for owner review. Large Python ints can overflow
+    # inside math.isfinite(), so fail closed rather than crashing the daily cycle.
+    numeric_fields = ("requested_amount", "annual_revenue", "annual_net_income",
+                      "existing_annual_debt_service", "annual_cash_available_for_debt_service")
+    for field in numeric_fields:
+        value = profile.get(field)
+        if value is None:
+            continue
+        try:
+            valid = (not isinstance(value, bool)
+                     and isinstance(value, (int, float)) and isfinite(value))
+        except (OverflowError, ValueError):
+            valid = False
+        if not valid or (field == "requested_amount" and value <= 0) or (
+                field in ("annual_revenue", "existing_annual_debt_service") and value < 0):
+            raise ValueError(field + " must be a finite, appropriately signed numeric value")
     # No synthetic bankability or approval score: lender underwriting is specific.
     readiness = "ready_for_owner_review" if not gaps else "evidence_incomplete"
     return {
