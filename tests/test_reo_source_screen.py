@@ -174,6 +174,57 @@ class ScreenTests(unittest.TestCase):
         self.assertIn("scenario_arithmetic_out_of_range", r["underwriting"]["reasons"])
         self.assertIsNone(r["underwriting"]["scenario_max_offer"])
 
+    def test_inflated_arv_without_support_from_closed_comps_is_withheld(self):
+        x = {"closed_comps": [
+                {"property_address": f"Fictional Sold Home {i}",
+                 "source_url": URL + str(i), "closed_on": "2026-06-01",
+                 "sold_price": p} for i, p in enumerate((180000, 200000, 220000))],
+             "arv": 350000, "arv_source_url": URL,
+             "repairs_low": 10000, "repairs_high": 25000,
+             "repair_quote_source_url": URL,
+             "repair_quote_checked_on": "2026-11-12",
+             "acquisition_cost": 5000, "selling_cost": 10000,
+             "holding_cost": 5000, "uncertainty_reserve": 5000}
+        r = reo.screen({**BASE, "listings": [{**QUALIFIED, "underwriting": x}]})["listings"][0]
+        self.assertFalse(r["underwriting"]["ready"])
+        self.assertIsNone(r["underwriting"]["scenario_max_offer"])
+        self.assertIn("arv_not_derived_from_adjusted_closed_comps",
+                      r["underwriting"]["reasons"])
+
+    def test_nonzero_adjustment_without_source_is_withheld(self):
+        x = {"closed_comps": [
+                {"property_address": f"Fictional Sold Home {i}",
+                 "source_url": URL + str(i), "closed_on": "2026-06-01",
+                 "sold_price": 200000, "arv_adjustment": 5000} for i in range(3)],
+             "arv": 205000, "arv_source_url": URL,
+             "repairs_low": 10000, "repairs_high": 25000,
+             "repair_quote_source_url": URL,
+             "repair_quote_checked_on": "2026-11-12",
+             "acquisition_cost": 5000, "selling_cost": 10000,
+             "holding_cost": 5000, "uncertainty_reserve": 5000}
+        r = reo.screen({**BASE, "listings": [{**QUALIFIED, "underwriting": x}]})["listings"][0]
+        self.assertFalse(r["underwriting"]["ready"])
+        self.assertIn("comp_adjustment_evidence_missing", r["underwriting"]["reasons"])
+
+    def test_documented_adjusted_comp_median_screens_as_scenario_only(self):
+        x = {"closed_comps": [
+                {"property_address": f"Fictional Sold Home {i}",
+                 "source_url": URL + str(i), "closed_on": "2026-06-01",
+                 "sold_price": p, "arv_adjustment": 5000,
+                 "adjustment_source_url": URL + "adjust" + str(i),
+                 "adjustment_reason": "Fictional condition difference"}
+                for i, p in enumerate((180000, 200000, 220000))],
+             "arv": 205000, "arv_source_url": URL,
+             "repairs_low": 10000, "repairs_high": 25000,
+             "repair_quote_source_url": URL,
+             "repair_quote_checked_on": "2026-11-12",
+             "acquisition_cost": 5000, "selling_cost": 10000,
+             "holding_cost": 5000, "uncertainty_reserve": 5000}
+        r = reo.screen({**BASE, "listings": [{**QUALIFIED, "underwriting": x}]})["listings"][0]
+        self.assertTrue(r["underwriting"]["ready"])
+        self.assertEqual(r["underwriting"]["scenario_max_offer"], "93500.00")
+        self.assertFalse(r["external_action_allowed"])
+
     def test_stale_repair_quote_does_not_release_numeric_scenario(self):
         x = {"closed_comps": [
                 {"property_address": f"Fictional Sold Home {i}",
