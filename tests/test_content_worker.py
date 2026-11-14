@@ -68,6 +68,15 @@ class ContentWorkerTests(unittest.TestCase):
         (self.jobs/'bad.json').write_text('[]')
         self.assertEqual(len(c.ingest(self.jobs)),1)
 
+class ContentImagePackagingTests(unittest.TestCase):
+    def test_crawl_assets_are_included_in_container_build(self):
+        root = Path(__file__).resolve().parents[1]
+        dockerfile = (root / 'Dockerfile.content').read_text(encoding='utf-8')
+        self.assertIn('COPY sales/robots.txt sales/sitemap.xml ./sales/', dockerfile)
+        for filename in ('robots.txt', 'sitemap.xml'):
+            self.assertTrue((root / 'sales' / filename).is_file())
+
+
 class ContentHTTPTests(unittest.TestCase):
     save=ContentWorkerTests.save
     def setUp(self):

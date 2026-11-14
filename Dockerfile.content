@@ -7,6 +7,7 @@ COPY scripts/ ./scripts/
 COPY config/ ./config/
 COPY content/jobs/ ./content/jobs/
 COPY sales/*.html ./sales/
+COPY sales/robots.txt sales/sitemap.xml ./sales/
 COPY content-entrypoint.sh ./
 RUN chmod 755 /app/content-entrypoint.sh
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 CONTENT_STATE_DIR=/data/content PORT=8080
