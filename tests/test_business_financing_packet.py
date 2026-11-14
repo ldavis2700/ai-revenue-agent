@@ -2,7 +2,7 @@ import unittest
 import os
 import tempfile
 from pathlib import Path
-from scripts.business_financing_packet import render
+from scripts.business_financing_packet import render, repayment_lines
 from scripts.business_financing_readiness import write_private_output
 
 class BusinessFinancingPacketTests(unittest.TestCase):
@@ -63,6 +63,46 @@ class BusinessFinancingPacketTests(unittest.TestCase):
         }}
         with self.assertRaises(ValueError):
             render(profile)
+
+    @staticmethod
+    def _documented_repayment_profile(**overrides):
+        figures = {
+            "requested_amount": 12000,
+            "annual_interest_rate_pct": 12,
+            "term_months": 12,
+            "upfront_fees": 300,
+            "annual_cash_available_for_debt_service": 25000,
+            "existing_annual_debt_service": 0,
+        }
+        figures.update(overrides)
+        return {**figures, "evidence": {
+            k: {"status": "documented", "source": "test-only:fictional"}
+            for k in figures
+        }}
+
+    def test_packet_shows_repayment_assumption_provenance(self):
+        packet = render(self._documented_repayment_profile())
+        self.assertIn("Annual cash available for debt service: 25000 [documented", packet)
+        self.assertIn("Annual interest rate pct: 12 [documented", packet)
+        self.assertIn("Term months: 12 [documented", packet)
+        self.assertIn("Upfront fees: 300 [documented", packet)
+
+    def test_extreme_finite_amounts_fail_closed_without_infinity(self):
+        cases = (
+            {"requested_amount": 1e308, "annual_interest_rate_pct": 100, "term_months": 360},
+            {"requested_amount": 1e308, "annual_interest_rate_pct": 0, "term_months": 1, "existing_annual_debt_service": 1e308},
+            {"requested_amount": 1e308, "annual_interest_rate_pct": 0, "term_months": 1, "upfront_fees": 1e308},
+            {"requested_amount": 10**1000},
+        )
+        for override in cases:
+            with self.subTest(fields=tuple(override)), self.assertRaises(ValueError):
+                repayment_lines(self._documented_repayment_profile(**override))
+
+    def test_tiny_positive_rate_keeps_stable_payment(self):
+        lines = repayment_lines(self._documented_repayment_profile(annual_interest_rate_pct=1e-12))
+        self.assertIn("monthly payment: $1,000.00", " ".join(lines))
+        self.assertNotIn("nan", " ".join(lines).lower())
+        self.assertNotIn("infinity", " ".join(lines).lower())
 
     def test_output_is_private_and_never_overwrites(self):
         with tempfile.TemporaryDirectory() as d:
