@@ -159,7 +159,7 @@ class ScreenTests(unittest.TestCase):
         self.assertFalse(r["underwriting"]["ready"])
         self.assertIn("invalid_closed_comp_evidence", r["underwriting"]["reasons"])
 
-    def test_extreme_finite_arv_fails_closed_not_exception(self):
+    def test_extreme_finite_arv_fails_closed_before_arithmetic(self):
         x = {"closed_comps": [
                 {"property_address": f"Fictional Sold Home {i}",
                  "source_url": URL + str(i), "closed_on": "2026-06-01",
@@ -171,7 +171,7 @@ class ScreenTests(unittest.TestCase):
              "holding_cost": 5000, "uncertainty_reserve": 5000}
         r = reo.screen({**BASE, "listings": [{**QUALIFIED, "underwriting": x}]})["listings"][0]
         self.assertFalse(r["underwriting"]["ready"])
-        self.assertIn("scenario_arithmetic_out_of_range", r["underwriting"]["reasons"])
+        self.assertIn("arv_not_derived_from_adjusted_closed_comps", r["underwriting"]["reasons"])
         self.assertIsNone(r["underwriting"]["scenario_max_offer"])
 
     def test_inflated_arv_without_support_from_closed_comps_is_withheld(self):
