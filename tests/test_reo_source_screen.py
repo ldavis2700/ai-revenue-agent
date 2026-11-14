@@ -174,6 +174,39 @@ class ScreenTests(unittest.TestCase):
         self.assertIn("scenario_arithmetic_out_of_range", r["underwriting"]["reasons"])
         self.assertIsNone(r["underwriting"]["scenario_max_offer"])
 
+    def test_stale_repair_quote_does_not_release_numeric_scenario(self):
+        x = {"closed_comps": [
+                {"property_address": f"Fictional Sold Home {i}",
+                 "source_url": URL + str(i), "closed_on": "2026-06-01",
+                 "sold_price": 200000} for i in range(3)],
+             "arv": 200000, "arv_source_url": URL,
+             "repairs_low": 10000, "repairs_high": 25000,
+             "repair_quote_source_url": URL,
+             "repair_quote_checked_on": "2026-08-01",
+             "acquisition_cost": 5000, "selling_cost": 10000,
+             "holding_cost": 5000, "uncertainty_reserve": 5000}
+        r = reo.screen({**BASE, "listings": [{**QUALIFIED, "underwriting": x}]})["listings"][0]
+        self.assertFalse(r["underwriting"]["ready"])
+        self.assertIsNone(r["underwriting"]["scenario_max_offer"])
+        self.assertIn("local_repair_quote_unverified_or_stale", r["underwriting"]["reasons"])
+
+    def test_stale_closed_sale_comp_does_not_release_numeric_scenario(self):
+        x = {"closed_comps": [
+                {"property_address": f"Fictional Sold Home {i}",
+                 "source_url": URL + str(i),
+                 "closed_on": "2024-06-01" if i == 0 else "2026-06-01",
+                 "sold_price": 200000} for i in range(3)],
+             "arv": 200000, "arv_source_url": URL,
+             "repairs_low": 10000, "repairs_high": 25000,
+             "repair_quote_source_url": URL,
+             "repair_quote_checked_on": "2026-11-12",
+             "acquisition_cost": 5000, "selling_cost": 10000,
+             "holding_cost": 5000, "uncertainty_reserve": 5000}
+        r = reo.screen({**BASE, "listings": [{**QUALIFIED, "underwriting": x}]})["listings"][0]
+        self.assertFalse(r["underwriting"]["ready"])
+        self.assertIsNone(r["underwriting"]["scenario_max_offer"])
+        self.assertIn("stale_closed_comp_evidence", r["underwriting"]["reasons"])
+
     def test_false_and_negative_financials_fail(self):
         x = {"arv": False, "arv_source_url": URL, "repairs_low": -1}
         r = reo.screen({**BASE, "listings": [{**BASE["listings"][0], "underwriting": x}]})["listings"][0]
