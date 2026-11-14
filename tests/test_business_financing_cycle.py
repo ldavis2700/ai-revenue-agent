@@ -25,6 +25,21 @@ class FinancingCycleTests(unittest.TestCase):
             with sqlite3.connect(db) as con:
                 self.assertEqual(con.execute("SELECT count(*) FROM financing_readiness_cycles").fetchone()[0], 1)
 
+    def test_symlink_and_relative_paths_are_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            original = root / "approved.json"
+            original.write_text(json.dumps({"legal_business_name": "Fixture only"}))
+            linked = root / "symlink.json"
+            try:
+                linked.symlink_to(original)
+            except (OSError, NotImplementedError):
+                self.skipTest("Symlinks unavailable")
+            state = cycle(str(root / "symlink.sqlite"), str(linked))
+            self.assertEqual(state["state"], "input_unavailable")
+            state = cycle(str(root / "relative.sqlite"), "approved.json")
+            self.assertEqual(state["state"], "input_unavailable")
+
     def test_invalid_sensitive_input_not_saved(self):
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / "profile.json"
