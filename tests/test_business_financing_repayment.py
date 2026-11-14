@@ -59,6 +59,26 @@ class RepaymentScenarioTests(unittest.TestCase):
             with self.subTest(term=term, rate=rate), self.assertRaises(ValueError):
                 assess(v)
 
+    def test_reject_extreme_finite_principal_without_infinite_totals(self):
+        v = self._case()
+        v["requested_amount"] = 1e308
+        v["repayment_scenario"]["assumed_nominal_annual_rate_pct"] = 100
+        v["repayment_scenario"]["assumed_term_months"] = 360
+        with self.assertRaisesRegex(ValueError, "finite values"):
+            assess(v)
+
+    def test_reject_extreme_existing_debt_without_infinite_coverage(self):
+        v = self._case(cash=18000, debt=1e308)
+        v["requested_amount"] = 1e308
+        v["repayment_scenario"]["assumed_term_months"] = 1
+        with self.assertRaisesRegex(ValueError, "finite values"):
+            assess(v)
+
+    def test_reject_unrepresentably_large_integer_principal(self):
+        from scripts.business_financing_repayment import _number
+        with self.assertRaises(ValueError):
+            _number(10 ** 1000, "principal", minimum=0.01)
+
     def test_positive_interest_has_positive_interest_cost(self):
         v = self._case(cash=18000)
         v["repayment_scenario"]["assumed_nominal_annual_rate_pct"] = 12
