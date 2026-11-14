@@ -186,8 +186,8 @@ proof of the world's most profitable business. Probability sensitivity must be
 reviewed against contradictory evidence before committing resources.
 
 No fixed number of new models is shortlisted; capacity evidence determines the reversible preparation plan. Reconcile the existing active
-experiment ledger before starting anything: the two-model limit applies across
-runs, not two additional experiments every hour. Duplicate model IDs and batches
+experiment ledger before starting anything: the cap is now dynamic and operator-reconciled
+across runs, never an automatic fresh allocation every hour. Duplicate model IDs and batches
 larger than 30 are rejected. Reported queues omit private hypotheses, URLs and
 buyer details; use the protected original evidence record to execute the step.
 
