@@ -127,6 +127,23 @@ def underwrite(item: dict, cutoff: date) -> dict:
     if (not source_url(x.get("repair_quote_source_url"))
             or not recent_check(x.get("repair_quote_checked_on"), cutoff, max_age_days=30)):
         reasons.append("local_repair_quote_unverified_or_stale")
+    # Transaction, exit and holding reserves must be traceable estimates, not
+    # free-floating values that could make a property appear artificially viable.
+    # Operator-supplied URLs/notes are disclosure only; they are not authenticated.
+    cost_evidence = x.get("cost_evidence")
+    if not isinstance(cost_evidence, dict):
+        reasons.append("itemized_cost_basis_missing_or_stale")
+    else:
+        for field in ("acquisition_cost", "selling_cost", "holding_cost", "uncertainty_reserve"):
+            evidence = cost_evidence.get(field)
+            if (not isinstance(evidence, dict)
+                    or not isinstance(evidence.get("assumption"), str)
+                    or not evidence["assumption"].strip()
+                    or not source_url(evidence.get("source_url"))
+                    or not recent_check(evidence.get("checked_on"), cutoff, max_age_days=30)
+                    or amount(evidence.get("estimated_amount")) != numbers[field]):
+                reasons.append("itemized_cost_basis_missing_or_stale")
+                break
     if reasons:
         return {"ready": False, "reasons": reasons, "scenario_max_offer": None}
     try:
