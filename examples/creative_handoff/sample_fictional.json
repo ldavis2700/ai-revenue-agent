@@ -1,0 +1,28 @@
+{
+  "client_id": "FICTIONAL-MERIDIAN",
+  "approved_client_context": {
+    "client_id": "FICTIONAL-MERIDIAN",
+    "version": "fiction-v1",
+    "approved": true,
+    "approved_by": "Fictional client sponsor",
+    "source_urls": ["https://example.org/fictional-client-brief"]
+  },
+  "work_items": [
+    {
+      "id": "fiction-ad-01", "track": "ad", "client_id": "FICTIONAL-MERIDIAN", "context_version": "fiction-v1",
+      "strategy_owner": "Fictional strategist", "production_owner": "Fictional video editor", "review_owner": "Fictional client approver",
+      "brief": "A 15-second original demo of a generic task tracker; no real customer claim, endorsement, or ad publishing.",
+      "source_urls": ["https://example.org/fictional-original-outline"],
+      "strategy_reviewed": true, "creative_reviewed": false,
+      "tool_costs": [{"name": "Fictional existing local tools", "usd": "0.00", "pricing_source_url": "https://example.org/fictional-cost-note"}]
+    },
+    {
+      "id": "fiction-funnel-01", "track": "funnel", "client_id": "FICTIONAL-MERIDIAN", "context_version": "fiction-v1",
+      "strategy_owner": "Fictional funnel strategist", "production_owner": "Fictional web editor", "review_owner": "Fictional client approver",
+      "brief": "Draft a one-screen opt-in explanation using the same client context, with separate funnel review.",
+      "source_urls": ["https://example.org/fictional-original-outline"],
+      "strategy_reviewed": true, "creative_reviewed": true,
+      "tool_costs": [{"name": "Fictional existing local tools", "usd": "0.00", "pricing_source_url": "https://example.org/fictional-cost-note"}]
+    }
+  ]
+}
