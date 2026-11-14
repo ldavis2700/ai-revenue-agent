@@ -69,7 +69,7 @@ class RepaymentScenarioTests(unittest.TestCase):
 
     def test_reject_extreme_existing_debt_without_infinite_coverage(self):
         v = self._case(cash=18000, debt=1e308)
-        v["requested_amount"] = 1e308
+        v["requested_amount"] = 1e307
         v["repayment_scenario"]["assumed_term_months"] = 1
         with self.assertRaisesRegex(ValueError, "finite values"):
             assess(v)
