@@ -290,6 +290,8 @@ def capacity_review(eligible, capacity, now):
         if capacity.get(key) is not True:
             reasons.append(key + "_required")
     active_ids = capacity.get("active_model_ids", [])
+    if "active_model_ids" not in capacity:
+        reasons.append("active_model_ids_required")
     if not isinstance(active_ids, list) or not all(isinstance(v, str) and v.strip() for v in active_ids) or len(set(active_ids)) != len(active_ids):
         reasons.append("unique_active_model_ids_required")
         active_ids = []
