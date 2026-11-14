@@ -60,11 +60,31 @@ class ScreenTests(unittest.TestCase):
         self.assertFalse(r["research_trigger_met"])
 
     def test_two_real_price_cuts(self):
-        h = [{"dated_on": d, "source_url": URL, "price": p, "verified": True} for d, p in [
+        h = [{"dated_on": d, "source_url": URL, "price": p, "verified": True,
+              "source_kind": "official_mls_history", "source_checked_on": "2026-11-13"} for d, p in [
             ("2026-09-01", 130000), ("2026-10-01", 115000), ("2026-11-10", 100000)]]
         r = reo.screen({**BASE, "listings": [{**BASE["listings"][0], "price_history": h}]})["listings"][0]
         self.assertEqual(r["verified_price_cuts"], 2)
         self.assertTrue(r["research_trigger_met"])
+
+    def test_third_party_mls_attributed_history_cannot_verify_two_cuts(self):
+        h = [{"dated_on": d, "source_url": URL, "price": p, "verified": True,
+              "source_kind": "third_party_mls_attributed", "source_checked_on": "2026-11-13"}
+             for d, p in [("2026-09-01", 130000), ("2026-10-01", 115000),
+                          ("2026-11-10", 100000)]]
+        r = reo.screen({**BASE, "listings": [{**BASE["listings"][0], "price_history": h}]})["listings"][0]
+        self.assertEqual(r["verified_price_cuts"], 0)
+        self.assertFalse(r["research_trigger_met"])
+        self.assertIn("price_history_not_verified", r["blocking_reasons"])
+
+    def test_stale_authoritative_history_review_cannot_verify_two_cuts(self):
+        h = [{"dated_on": d, "source_url": URL, "price": p, "verified": True,
+              "source_kind": "official_mls_history", "source_checked_on": "2026-10-01"}
+             for d, p in [("2026-09-01", 130000), ("2026-10-01", 115000),
+                          ("2026-11-10", 100000)]]
+        r = reo.screen({**BASE, "listings": [{**BASE["listings"][0], "price_history": h}]})["listings"][0]
+        self.assertEqual(r["verified_price_cuts"], 0)
+        self.assertIn("price_history_not_verified", r["blocking_reasons"])
 
     def test_uncertain_or_future_history_not_two_cuts(self):
         h = [{"dated_on": d, "source_url": URL, "price": p} for d, p in [
