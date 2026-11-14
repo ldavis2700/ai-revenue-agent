@@ -60,11 +60,15 @@ def underwrite(item: dict, cutoff: date) -> dict:
                 reasons.append("invalid_closed_comp_evidence")
                 break
             address = c.get("property_address")
+            closed_on = dated(c.get("closed_on"), cutoff)
             if (not source_url(c.get("source_url"))
-                    or not dated(c.get("closed_on"), cutoff)
+                    or closed_on is None
                     or amount(c.get("sold_price")) is None
                     or not isinstance(address, str) or not address.strip()):
                 reasons.append("invalid_closed_comp_evidence")
+                break
+            if (cutoff - closed_on).days > 365:
+                reasons.append("stale_closed_comp_evidence")
                 break
             comp_urls.append(c["source_url"])
             comp_properties.append(" ".join(address.casefold().split()))
@@ -82,8 +86,9 @@ def underwrite(item: dict, cutoff: date) -> dict:
         reasons.append("itemized_costs_missing")
     elif numbers["repairs_high"] < numbers["repairs_low"]:
         reasons.append("repair_range_inverted")
-    if not source_url(x.get("repair_quote_source_url")) or not dated(x.get("repair_quote_checked_on"), cutoff):
-        reasons.append("local_repair_quote_unverified")
+    if (not source_url(x.get("repair_quote_source_url"))
+            or not recent_check(x.get("repair_quote_checked_on"), cutoff, max_age_days=30)):
+        reasons.append("local_repair_quote_unverified_or_stale")
     if reasons:
         return {"ready": False, "reasons": reasons, "scenario_max_offer": None}
     try:
