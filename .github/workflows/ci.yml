@@ -82,6 +82,11 @@ jobs:
           assert report['listings'][0]['screen_status'] == 'needs_evidence'
           assert report['listings'][1]['screen_status'] == 'excluded'
           PY
+      - name: Test offline financing evidence and debt-service safety
+        run: |
+          python -m unittest discover -s tests -p 'test_business_financing_readiness.py' -v
+          python -m unittest discover -s tests -p 'test_business_financing_cycle.py' -v
+          python -m unittest discover -s tests -p 'test_business_financing_packet.py' -v
       - name: Test release source-pin preflight (no provider writes)
         run: python -m unittest discover -s tests -p 'test_source_pin_preflight.py' -v
       - name: Build and render with content container
