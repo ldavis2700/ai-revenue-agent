@@ -9,6 +9,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 import sqlite3
+import stat
 try:
     from scripts.business_financing_readiness import assess
 except ModuleNotFoundError:
@@ -24,7 +25,10 @@ def cycle(db_path, profile_path=None, current=None):
             processed_at TEXT NOT NULL
         )""")
         row = db.execute("SELECT state FROM financing_readiness_cycles WHERE day_utc=?", (today,)).fetchone()
-        if row:
+        # A missing or rejected private profile must not block a newly authorized,
+        # corrected profile until tomorrow. Never rerun an already evaluated valid one.
+        if row and (not profile_path or row[0] not in (
+                "awaiting_authorized_private_facts", "input_unavailable", "input_invalid")):
             return {"state": "already_checked", "day_utc": today}
         state, missing_count = "awaiting_authorized_private_facts", None
         if profile_path:
@@ -35,8 +39,18 @@ def cycle(db_path, profile_path=None, current=None):
             try:
                 resolved = path.resolve(strict=True)
                 repo_root = Path(__file__).resolve().parents[1]
+                metadata = resolved.stat()
+                # Private applicant facts must not be accessible to the group or
+                # world. Refuse insecure input rather than logging its contents.
+                owner_only = (
+                    stat.S_ISREG(metadata.st_mode)
+                    and (metadata.st_mode & (stat.S_IRWXG | stat.S_IRWXO)) == 0
+                    and hasattr(os, "getuid")
+                    and metadata.st_uid == os.getuid()
+                )
                 allowed = (
-                    path.is_absolute()
+                    owner_only
+                    and path.is_absolute()
                     and path.absolute() == resolved
                     and resolved.is_file()
                     and repo_root != resolved
@@ -54,9 +68,15 @@ def cycle(db_path, profile_path=None, current=None):
                     missing_count = len(report["missing_or_unsubstantiated"])
                 except (ValueError, OSError, UnicodeError):
                     state = "input_invalid"
-        db.execute("""INSERT INTO financing_readiness_cycles
-            (day_utc,state,missing_count,processed_at) VALUES (?,?,?,?)""",
-            (today, state, missing_count, datetime.now(timezone.utc).isoformat()))
+        processed_at = datetime.now(timezone.utc).isoformat()
+        if row:
+            db.execute("""UPDATE financing_readiness_cycles
+                SET state=?, missing_count=?, processed_at=? WHERE day_utc=?""",
+                (state, missing_count, processed_at, today))
+        else:
+            db.execute("""INSERT INTO financing_readiness_cycles
+                (day_utc,state,missing_count,processed_at) VALUES (?,?,?,?)""",
+                (today, state, missing_count, processed_at))
     return {"state": state, "day_utc": today, "missing_count": missing_count}
 
 def main():
