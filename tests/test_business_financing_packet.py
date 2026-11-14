@@ -1,5 +1,9 @@
 import unittest
+import os
+import tempfile
+from pathlib import Path
 from scripts.business_financing_packet import render
+from scripts.business_financing_readiness import write_private_output
 
 class BusinessFinancingPacketTests(unittest.TestCase):
     def test_missing_facts_are_not_invented(self):
@@ -59,6 +63,39 @@ class BusinessFinancingPacketTests(unittest.TestCase):
         }}
         with self.assertRaises(ValueError):
             render(profile)
+
+    def test_output_is_private_and_never_overwrites(self):
+        with tempfile.TemporaryDirectory() as d:
+            target = Path(d) / "owner-only.md"
+            write_private_output(target, "PRIVATE_FIXTURE")
+            self.assertEqual(target.read_text(), "PRIVATE_FIXTURE")
+            if os.name == "posix":
+                self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            with self.assertRaises(FileExistsError):
+                write_private_output(target, "not allowed")
+            self.assertEqual(target.read_text(), "PRIVATE_FIXTURE")
+
+    def test_output_cannot_write_to_checkout_or_via_symlink(self):
+        source_dir = Path(__file__).resolve().parents[1]
+        never_created = source_dir / "tests" / "financing-sensitive-never-write.md"
+        with self.assertRaises(ValueError):
+            write_private_output(never_created, "PRIVATE_FIXTURE")
+        self.assertFalse(never_created.exists())
+        with tempfile.TemporaryDirectory() as d:
+            private = Path(d) / "private"
+            private.mkdir()
+            linked = Path(d) / "link"
+            try:
+                linked.symlink_to(private, target_is_directory=True)
+            except (OSError, NotImplementedError):
+                return
+            with self.assertRaises(ValueError):
+                write_private_output(linked / "report.md", "PRIVATE_FIXTURE")
+            self.assertFalse((private / "report.md").exists())
+
+    def test_output_requires_absolute_destination(self):
+        with self.assertRaises(ValueError):
+            write_private_output(Path("report.md"), "PRIVATE_FIXTURE")
 
     def test_sensitive_top_level_identifier_rejected(self):
         with self.assertRaises(ValueError):
