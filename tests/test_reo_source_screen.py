@@ -53,6 +53,20 @@ def fictional_underwriting():
 
 
 class ScreenTests(unittest.TestCase):
+    def test_malformed_source_url_is_rejected_without_aborting_batch(self):
+        for bad_url in ("https://[broken", "https://example.org:invalid/item",
+                        "https://exa mple.org/item"):
+            with self.subTest(bad_url=bad_url):
+                self.assertFalse(reo.source_url(bad_url))
+                first = {**BASE["listings"][0], "address": "Malformed Fictional Listing",
+                         "official_listing_url": bad_url}
+                second = {**BASE["listings"][0], "address": "Separate Fictional Listing"}
+                out = reo.screen({**BASE, "listings": [first, second]})
+                self.assertEqual(out["screened"], 2)
+                self.assertIn("official_source_not_verified", out["listings"][0]["blocking_reasons"])
+                self.assertNotIn("official_source_not_verified", out["listings"][1]["blocking_reasons"])
+                self.assertFalse(out["external_action_allowed"])
+
     def test_missing_dom_and_cuts_fails_closed(self):
         r = reo.screen(BASE)["listings"][0]
         self.assertEqual(r["screen_status"], "needs_evidence")
