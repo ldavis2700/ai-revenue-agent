@@ -91,7 +91,7 @@ class BusinessFinancingPacketTests(unittest.TestCase):
         cases = (
             {"requested_amount": 1e308, "annual_interest_rate_pct": 100, "term_months": 360},
             {"requested_amount": 1e308, "annual_interest_rate_pct": 0, "term_months": 1, "existing_annual_debt_service": 1e308},
-            {"requested_amount": 1e308, "annual_interest_rate_pct": 0, "term_months": 1, "upfront_fees": 1e308},
+            {"requested_amount": 1e308, "annual_interest_rate_pct": 0, "term_months": 12, "upfront_fees": 1e308},
             {"requested_amount": 10**1000},
         )
         for override in cases:
