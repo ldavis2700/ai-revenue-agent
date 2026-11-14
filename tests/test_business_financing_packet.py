@@ -67,6 +67,18 @@ class BusinessFinancingPacketTests(unittest.TestCase):
         self.assertIn("not a lender quote or approval", packet)
         self.assertIn("existing annual debt service: $0.00", packet)
 
+    def test_optional_lender_terms_reject_malformed_documented_sources(self):
+        # All three optional loan-term fields must meet the same documented
+        # evidence reference standard as mandatory financing facts.
+        for field in ("annual_interest_rate_pct", "term_months", "upfront_fees"):
+            for bad in (["unverified"], {"ref": "fictional"}, "  ", "bad\\nref", "x" * 513):
+                with self.subTest(field=field, source_type=type(bad).__name__):
+                    profile = self._documented_repayment_profile()
+                    profile["evidence"][field]["source"] = bad
+                    with self.assertRaises(ValueError):
+                        render(profile)
+                    self.assertIn("CANNOT ASSESS", " ".join(repayment_lines(profile)))
+
     def test_nonnumeric_terms_not_accepted(self):
         figures = {
             "requested_amount": 12000,
