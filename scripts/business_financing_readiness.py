@@ -93,12 +93,18 @@ def assess(profile: dict) -> dict:
         if not isinstance(status, str) or status not in ALLOWED_STATUS:
             raise ValueError("Invalid evidence status for " + field)
         source = item.get("source", "")
+        # A documented source must be a short plain-text pointer. A nonempty
+        # list/dict previously bypassed the missing-evidence check and could be
+        # promoted to an authoritative reference in financing reports.
+        if (not isinstance(source, str) or len(source) > 512
+                or any(ord(char) < 32 or ord(char) == 127 for char in source)):
+            raise ValueError("Evidence source must be a short plain-text reference for " + field)
         # A documented numeric zero is a real reported value, not missing
         # (e.g. a business with no existing loan payments or no sales).
         empty = val is None or val is False or val == "" or (
             isinstance(val, (list, dict)) and not val
         )
-        if empty or status == "missing" or (status == "documented" and not source):
+        if empty or status == "missing" or (status == "documented" and not source.strip()):
             gaps.append(field)
         else:
             facts[field] = {"value": val, "evidence_status": status,
