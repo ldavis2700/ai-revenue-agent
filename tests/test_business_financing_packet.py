@@ -25,7 +25,7 @@ class BusinessFinancingPacketTests(unittest.TestCase):
 
     def test_untrusted_markdown_html_and_directional_controls_are_inert(self):
         packet = render({
-            "legal_business_name": "Acme ![pixel](https://example.invalid/tracking)\\n## Approved <img src='x'> \\u202e",
+            "legal_business_name": "Acme ![pixel](https://example.invalid/tracking)\n## Approved <img src='x'> \u202e",
             "evidence": {
                 "legal_business_name": {
                     "status": "documented",
@@ -33,14 +33,14 @@ class BusinessFinancingPacketTests(unittest.TestCase):
                 },
             },
         })
-        self.assertIn(r"!\\[pixel\\]\\(https://example\\.invalid/tracking\\)", packet)
+        self.assertIn(r"\!\[pixel\]\(https://example\.invalid/tracking\)", packet)
         self.assertIn("&lt;img src=&#x27;x&#x27;&gt;", packet)
-        self.assertIn(r"private:\\[ledger\\]\\(https://example\\.invalid/report\\)", packet)
+        self.assertIn(r"private:\[ledger\]\(https://example\.invalid/report\)", packet)
         self.assertNotIn("![pixel](", packet)
         self.assertNotIn("[ledger](", packet)
         self.assertNotIn("<img", packet)
-        self.assertNotIn("\\u202e", packet)
-        self.assertNotIn("\\n## Approved", packet)
+        self.assertNotIn("\u202e", packet)
+        self.assertNotIn("\n## Approved", packet)
 
     def test_no_estimate_without_actual_lender_terms_and_cashflow(self):
         packet = render({"requested_amount": 12000,
