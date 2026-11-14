@@ -72,6 +72,32 @@ class FinancingReadinessTests(unittest.TestCase):
             with self.subTest(profile=profile), self.assertRaises(ValueError):
                 assess(profile)
 
+
+    def test_cash_flow_is_validated_without_optional_repayment_scenario(self):
+        for bad in ("not a number", float("nan"), float("inf"), 10**1000, True):
+            with self.subTest(type=type(bad).__name__), self.assertRaises(ValueError):
+                assess({"annual_cash_available_for_debt_service": bad,
+                        "evidence": {"annual_cash_available_for_debt_service":
+                                     {"status": "documented", "source": "fictional:test"}}})
+
+    def test_oversized_integers_fail_closed_instead_of_crashing_cycle(self):
+        for name in ("requested_amount", "annual_revenue", "annual_net_income",
+                     "existing_annual_debt_service"):
+            with self.subTest(field=name), self.assertRaises(ValueError):
+                assess({name: 10**1000})
+
+    def test_non_scalar_evidence_status_is_rejected(self):
+        for value in ([], {}, ["documented"]):
+            with self.subTest(type=type(value).__name__), self.assertRaises(ValueError):
+                assess({"industry": "software", "evidence": {"industry": {"status": value}}})
+
+    def test_valid_negative_cashflow_remains_a_documented_fact(self):
+        report = assess({"annual_cash_available_for_debt_service": -1200,
+                         "evidence": {"annual_cash_available_for_debt_service":
+                                      {"status": "documented", "source": "fictional:test"}}})
+        self.assertEqual(report["verified_or_attested_facts"][
+            "annual_cash_available_for_debt_service"]["value"], -1200)
+
     def test_no_auto_submission(self):
         report = assess({})
         self.assertIn("specific informed owner approval",
