@@ -31,6 +31,32 @@ class FinancingReadinessTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             assess({"requested_amount": True})
 
+    def test_documented_zero_income_and_debt_remain_facts(self):
+        profile = {
+            "annual_revenue": 0,
+            "annual_net_income": -100,
+            "existing_annual_debt_service": 0,
+            "evidence": {
+                key: {"status": "documented", "source": "PRIVATE_FIXTURE"}
+                for key in ("annual_revenue", "annual_net_income", "existing_annual_debt_service")
+            },
+        }
+        report = assess(profile)
+        for key in ("annual_revenue", "annual_net_income", "existing_annual_debt_service"):
+            self.assertIn(key, report["verified_or_attested_facts"])
+            self.assertNotIn(key, report["missing_or_unsubstantiated"])
+        self.assertEqual(report["readiness"], "evidence_incomplete")
+
+    def test_nonfinite_or_negative_cashflow_rejected(self):
+        for profile in (
+            {"annual_revenue": -1},
+            {"existing_annual_debt_service": -1},
+            {"requested_amount": float("nan")},
+            {"annual_revenue": float("inf")},
+        ):
+            with self.subTest(profile=profile), self.assertRaises(ValueError):
+                assess(profile)
+
     def test_no_auto_submission(self):
         report = assess({})
         self.assertIn("specific informed owner approval",
