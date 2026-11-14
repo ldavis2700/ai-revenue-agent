@@ -4,6 +4,7 @@
 Local-only. No lender contact, inquiry, debt action or undisclosed data collection.
 """
 import argparse
+import html
 import json
 from math import expm1, isfinite, log1p
 from pathlib import Path
@@ -30,6 +31,27 @@ REPAYMENT_INPUTS = (
     "annual_cash_available_for_debt_service",
     "existing_annual_debt_service",
 )
+
+
+def markdown_literal(value: object) -> str:
+    """Render supplied business facts and private source pointers as inert text.
+
+    A private owner-review packet must not turn untrusted input into images,
+    links, headings or raw HTML when opened in a Markdown preview.
+    """
+    raw = " ".join(str(value).splitlines())
+    raw = "".join(
+        " " if (ord(char) < 32 or 0x7f <= ord(char) <= 0x9f
+                or char in "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
+        else char for char in raw
+    )
+    # Escape Markdown first so generated HTML entities (e.g. &#x27;) remain intact.
+    markdown_special = set("\\`*_{}[]()#+-.!|")
+    escaped_markdown = "".join(
+        "\\" + char if char in markdown_special else char for char in raw
+    )
+    return html.escape(escaped_markdown, quote=True)
+
 
 def repayment_lines(profile: dict) -> list[str]:
     """Conservative scenario only when all six inputs have actual evidence.
@@ -119,10 +141,11 @@ def render(profile: dict) -> str:
                             "source_reference": item.get("source", "")}
             if fact:
                 val = fact["value"]
-                # Avoid injection into markdown as markup. Sensitive data must not be included as input.
-                safe = str(val).replace("\r", " ").replace("\n", " ")
+                # Sensitive identifiers remain prohibited upstream; escape even nonsensitive
+                # supplied facts so Markdown previews cannot load external images/links.
+                safe = markdown_literal(val)
                 status = fact["evidence_status"]
-                citation = ("; private reference: " + str(fact["source_reference"]).replace("\n"," ")) if status == "documented" else ""
+                citation = ("; private reference: " + markdown_literal(fact["source_reference"])) if status == "documented" else ""
                 lines.append(f"- {key.replace('_', ' ').capitalize()}: {safe} [{status}{citation}]")
             else:
                 lines.append(f"- {key.replace('_', ' ').capitalize()}: **MISSING / UNVERIFIED**")
