@@ -30,8 +30,16 @@ def recent_check(value: object, cutoff: date, max_age_days: int = 7) -> bool:
 def source_url(value: object) -> bool:
     if not isinstance(value, str):
         return False
-    p = urlparse(value)
-    return p.scheme == "https" and bool(p.hostname) and '.' in p.hostname and not p.username
+    # urllib can raise for malformed bracketed IPv6/ports; bad evidence must
+    # fail closed for this listing rather than abort the entire daily batch.
+    try:
+        p = urlparse(value)
+        host = p.hostname
+        _ = p.port
+    except ValueError:
+        return False
+    return (p.scheme == "https" and bool(host) and '.' in host
+            and not p.username and not any(ch.isspace() for ch in value))
 
 
 def amount(value: object) -> Decimal | None:
