@@ -17,9 +17,9 @@ def https_url(value):
         return False
     try:
         p = urlparse(value)
+        return p.scheme == "https" and bool(p.hostname) and "." in p.hostname and not p.username and not p.password and not p.fragment and p.port in (None, 443)
     except ValueError:
         return False
-    return p.scheme == "https" and bool(p.hostname) and "." in p.hostname and not p.username and not p.password and not p.fragment and p.port in (None, 443)
 
 
 def money(value):
@@ -27,7 +27,7 @@ def money(value):
         return None
     try:
         n = Decimal(value)
-        if not n.is_finite() or n < 0 or n.as_tuple().exponent < -2:
+        if not n.is_finite() or n < 0 or n > Decimal("1000000000") or n.as_tuple().exponent < -2:
             return None
         return n
     except (InvalidOperation, ValueError):
@@ -59,7 +59,7 @@ def review(data):
             issues.append("missing_or_duplicate_work_id")
         if isinstance(item_id, str):
             seen.add(item_id)
-        if track not in TRACKS:
+        if not isinstance(track, str) or track not in TRACKS:
             issues.append("unsupported_track")
         if item.get("client_id") != client or item.get("context_version") != context.get("version") or not context_ok:
             issues.append("approved_client_context_not_verified")
@@ -71,7 +71,7 @@ def review(data):
             issues.append("source_provenance_missing_or_unsafe")
         costs = item.get("tool_costs")
         total = Decimal("0")
-        if not isinstance(costs, list) or not costs:
+        if not isinstance(costs, list) or not costs or len(costs) > 100:
             issues.append("itemized_costs_missing")
         else:
             for cost in costs:
