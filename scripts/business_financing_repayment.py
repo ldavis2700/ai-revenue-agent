@@ -11,9 +11,20 @@ from math import expm1, isfinite, log1p
 def _number(value: object, label: str, *, minimum: float = 0.0) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(label + " must be a finite numeric assumption")
-    if not isfinite(value) or value < minimum:
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        raise ValueError(label + " must be a finite numeric assumption") from None
+    if not isfinite(number) or number < minimum:
         raise ValueError(label + " must be finite and at least " + str(minimum))
-    return float(value)
+    return number
+
+
+def _finite_result(value: float, label: str) -> float:
+    """Never emit infinity or NaN as an illustrative financing result."""
+    if not isfinite(value):
+        raise ValueError(label + " cannot be calculated with finite values")
+    return value
 
 
 def analyze_repayment(profile: dict, facts: dict) -> dict:
@@ -43,8 +54,9 @@ def analyze_repayment(profile: dict, facts: dict) -> dict:
         # Numerically stable for small positive rates and long terms.
         monthly_payment = principal * monthly_rate / (-expm1(
             -months * log1p(monthly_rate)))
-    total_installments = monthly_payment * months
-    annual_new_service = monthly_payment * 12
+    monthly_payment = _finite_result(monthly_payment, "Monthly payment")
+    total_installments = _finite_result(monthly_payment * months, "Total installments")
+    annual_new_service = _finite_result(monthly_payment * 12, "Annual debt service")
     result = {
         "status": "illustrative_only",
         "owner_supplied_assumptions": {
@@ -70,9 +82,11 @@ def analyze_repayment(profile: dict, facts: dict) -> dict:
         cash = _number(cash_fact["value"], "annual_cash_available_for_debt_service",
                        minimum=-1e15)
         old_debt = _number(old_debt_fact["value"], "existing_annual_debt_service")
-        total_annual_service = old_debt + annual_new_service
+        total_annual_service = _finite_result(
+            old_debt + annual_new_service, "Total annual debt service")
         # A 20% downside should never make negative cash flow appear better.
-        stressed_cash = cash - abs(cash) * 0.2
+        stressed_cash = _finite_result(
+            cash - abs(cash) * 0.2, "Downside cash flow")
         result["coverage"] = {
             "status": "illustrative_cash_flow_proxy_not_lender_dscr",
             "annual_cash_available_for_debt_service": cash,
