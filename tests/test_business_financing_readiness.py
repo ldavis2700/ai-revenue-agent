@@ -40,6 +40,21 @@ class FinancingReadinessTests(unittest.TestCase):
         self.assertEqual(report["verified_or_attested_facts"]["legal_business_name"]["evidence_status"],
                          "owner_attested")
 
+    def test_evidence_reference_cannot_be_nontext_or_multiline(self):
+        for bad in ([{"ref": "private:fixture"}], {"ref": "private:fixture"}, 12,
+                    True, "line\\nsecond", "x" * 513):
+            with self.subTest(type=type(bad).__name__), self.assertRaises(ValueError):
+                assess({"annual_revenue": 100,
+                        "evidence": {"annual_revenue": {"status": "documented",
+                                                        "source": bad}}})
+
+    def test_blank_documented_reference_remains_unsubstantiated(self):
+        report = assess({"annual_revenue": 100,
+                         "evidence": {"annual_revenue": {"status": "documented",
+                                                         "source": "   "}}})
+        self.assertIn("annual_revenue", report["missing_or_unsubstantiated"])
+        self.assertNotIn("annual_revenue", report["verified_or_attested_facts"])
+
     def test_amount_validation(self):
         with self.assertRaises(ValueError):
             assess({"requested_amount": -500})
