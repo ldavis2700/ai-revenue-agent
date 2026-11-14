@@ -12,6 +12,7 @@ from math import isfinite
 from pathlib import Path
 import os
 import re
+from scripts.business_financing_repayment import analyze_repayment
 
 REQUIRED = (
     "legal_business_name", "entity_type", "state", "industry",
@@ -79,7 +80,7 @@ def assess(profile: dict) -> dict:
     if not isinstance(evidence, dict):
         raise ValueError("evidence must be an object")
     gaps, facts = [], {}
-    for field in REQUIRED:
+    for field in REQUIRED + ("annual_cash_available_for_debt_service",):
         val = profile.get(field)
         item = evidence.get(field, {})
         if not isinstance(item, dict):
@@ -113,6 +114,7 @@ def assess(profile: dict) -> dict:
     readiness = "ready_for_owner_review" if not gaps else "evidence_incomplete"
     return {
         "generated_on": date.today().isoformat(),
+        "repayment_analysis": analyze_repayment(profile, facts),
         "readiness": readiness,
         "company_name": facts.get("legal_business_name", {}).get("value", "Unverified"),
         "verified_or_attested_facts": facts,
