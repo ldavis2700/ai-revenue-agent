@@ -21,6 +21,12 @@ def dated(value: str, cutoff: date) -> date | None:
         return None
 
 
+def recent_check(value: object, cutoff: date, max_age_days: int = 7) -> bool:
+    """A historic snapshot is not evidence of currently active/eligible inventory."""
+    checked = dated(value, cutoff)
+    return checked is not None and (cutoff - checked).days <= max_age_days
+
+
 def source_url(value: object) -> bool:
     if not isinstance(value, str):
         return False
@@ -97,19 +103,27 @@ def screen(payload: dict) -> dict:
         if not isinstance(item, dict):
             raise ValueError("listing must be an object")
         link = item.get("official_listing_url")
-        key = (str(item.get("address", "")).lower().strip(), link)
+        address = item.get("address")
+        key = " ".join(address.casefold().split()) if isinstance(address, str) else ""
         issues = []
+        if not key:
+            issues.append("address_missing")
         if key in seen:
             issues.append("duplicate_listing")
         seen.add(key)
         if not source_url(link) or item.get("source_verified") is not True or not dated(item.get("checked_on"), cutoff):
             issues.append("official_source_not_verified")
+        elif not recent_check(item.get("checked_on"), cutoff):
+            issues.append("official_source_stale")
         if str(item.get("status", "")).lower() != "active":
             issues.append("not_confirmed_active")
         if item.get("investor_purchase_permitted") is False:
             issues.append("investor_purchase_prohibited")
         if item.get("investor_purchase_permitted") is not True:
             issues.append("investor_eligibility_not_confirmed")
+        elif (not source_url(item.get("investor_eligibility_source_url"))
+              or not recent_check(item.get("investor_eligibility_checked_on"), cutoff)):
+            issues.append("investor_eligibility_evidence_missing_or_stale")
         current_price = amount(item.get("asking_price"))
         if current_price is None or current_price == 0:
             issues.append("current_ask_missing")
@@ -120,7 +134,7 @@ def screen(payload: dict) -> dict:
         elapsed_days = (cutoff - listed_on).days if listed_on else None
         continuous_dom = (item.get("continuous_listing_verified") is True
                           and source_url(item.get("continuous_listing_source_url"))
-                          and dated(item.get("continuous_listing_checked_on"), cutoff))
+                          and recent_check(item.get("continuous_listing_checked_on"), cutoff))
         days = elapsed_days if continuous_dom else None
         history = item.get("price_history") or []
         cuts = 0
@@ -140,8 +154,12 @@ def screen(payload: dict) -> dict:
             issues.append("price_history_not_verified")
         if not ((days is not None and days >= 90) or cuts >= 2):
             issues.append("no_verified_90_day_or_two_cut_trigger")
-        underwriting = (underwrite(item, cutoff) if item.get("investor_purchase_permitted") is True
-                        else {"ready": False, "reasons": ["investor_eligibility_not_confirmed_or_prohibited"], "scenario_max_offer": None})
+        # A 70%-of-ARV scenario is withheld unless the current listing, investor
+        # status and qualifying research trigger all have valid evidence.
+        # Underwrite's sourced comps alone cannot make a stale listing actionable.
+        underwriting = (underwrite(item, cutoff) if not issues
+                        else {"ready": False, "reasons": ["listing_research_preconditions_not_met"],
+                              "scenario_max_offer": None})
         # No deal is ever auto-qualified; transaction/title/inspection and buyer gates are separate.
         rows.append({"address": item.get("address"), "official_listing_url": link, "asking_price": str(current_price) if current_price is not None else None,
             "calendar_days_since_first_listing": elapsed_days,
