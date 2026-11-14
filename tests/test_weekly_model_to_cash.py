@@ -178,12 +178,62 @@ class WeeklyModelTests(unittest.TestCase):
   self.assertIn("delivery_qa_receipt_required",result["missing"])
   self.good["rights_verified"]=False
   self.assertIn("rights_review_required",w.recreation_gate(self.good)["missing"])
- def test_two_experiment_limit(self):
+ def test_dynamic_preparation_backlog_no_two_experiment_cap(self):
   self.good["learning_evidence"]=self.learning_evidence()
   self.good["execution_plan"]=self.execution_plan()
   items=[dict(self.good,model_id=f"model-{i}",estimated_revenue_cents=10000+i) for i in range(3)]
   x=w.weekly_report(items,self.now)
-  self.assertEqual(len(x["ranked_preparation_candidates"]),2)
+  self.assertEqual(len(x["ranked_preparation_candidates"]),3)
+  self.assertEqual(x["experiment_policy"],"capacity_based_no_fixed_limit")
+  self.assertEqual(x["capacity_admission"]["state"],"capacity_evidence_required")
+  self.assertEqual(x["capacity_admission"]["proposed_preparation_reservations"],[])
+
+ def operator_capacity(self, **changes):
+  info={"total_available_minutes":500,"funded_obligations_minutes":80,
+        "existing_active_experiments_minutes":60,"qa_support_security_reserve_minutes":120,
+        "capacity_evidence_url":"https://example.org/private-capacity-receipt",
+        "checked_at":self.now.isoformat(),"funded_work_protected":True,
+        "qa_support_protected":True,"zero_new_spend_verified":True,
+        "channels_and_permissions_verified":True,"active_model_ids":[]}
+  info.update(changes)
+  return info
+
+ def test_capacity_is_not_a_fixed_count_and_preserves_reserves(self):
+  items=[dict(self.ready_candidate(),model_id=f"model-{i}",estimated_revenue_cents=10000+i)
+         for i in range(3)]
+  report=w.weekly_report(items,self.now,capacity=self.operator_capacity())
+  plan=report["capacity_admission"]
+  self.assertEqual(plan["state"],"operator_reported_capacity_plan_only")
+  self.assertEqual(len(plan["proposed_preparation_reservations"]),2)
+  self.assertEqual(plan["remaining_minutes"],0)
+  self.assertEqual(len(plan["not_reserved_model_ids"]),1)
+  wide=w.weekly_report(items,self.now,capacity=self.operator_capacity(total_available_minutes=620))
+  self.assertEqual(len(wide["capacity_admission"]["proposed_preparation_reservations"]),3)
+  self.assertFalse(wide["capacity_admission"]["external_actions_authorized"])
+  self.assertFalse(wide["capacity_admission"]["source_contents_verified"])
+  self.assertFalse(wide["capacity_admission"]["active_experiments_started"])
+
+ def test_capacity_fails_closed_for_stale_invalid_or_overcommitted_evidence(self):
+  items=[self.ready_candidate()]
+  cases=[self.operator_capacity(checked_at=(self.now-timedelta(days=2)).isoformat()),
+         self.operator_capacity(total_available_minutes=True),
+         self.operator_capacity(total_available_minutes=100),
+         self.operator_capacity(capacity_evidence_url="not-a-url"),
+         self.operator_capacity(qa_support_protected=False),
+         self.operator_capacity(active_model_ids=["duplicate","duplicate"])]
+  for case in cases:
+   with self.subTest(case=case):
+    result=w.weekly_report(items,self.now,capacity=case)["capacity_admission"]
+    self.assertEqual(result["state"],"capacity_evidence_required")
+    self.assertEqual(result["proposed_preparation_reservations"],[])
+
+ def test_already_active_ids_are_not_reproposed(self):
+  items=[dict(self.ready_candidate(),model_id=f"model-{i}",estimated_revenue_cents=10000+i)
+         for i in range(2)]
+  report=w.weekly_report(items,self.now,capacity=self.operator_capacity(active_model_ids=["model-1"]))
+  ids=[r["model_id"] for r in report["capacity_admission"]["proposed_preparation_reservations"]]
+  self.assertEqual(ids,["model-0"])
+  self.assertIn("model-1",report["capacity_admission"]["not_reserved_model_ids"])
 
  def execution_plan(self):
   return {"hypothesis":"A scoped response workflow can meet the buyer's acceptance criteria",
