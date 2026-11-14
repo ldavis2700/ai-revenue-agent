@@ -28,9 +28,23 @@ def cycle(db_path, profile_path=None, current=None):
             return {"state": "already_checked", "day_utc": today}
         state, missing_count = "awaiting_authorized_private_facts", None
         if profile_path:
-            path = Path(profile_path).resolve()
-            # Do not allow reading arbitrary shared project tree files as private owner data.
-            if not path.is_file() or path.is_symlink():
+            # Accept only an explicit, regular file outside the repository.
+            # Validate the original path before following it: resolving first
+            # would hide a symlink (including one in a parent directory).
+            path = Path(profile_path)
+            try:
+                resolved = path.resolve(strict=True)
+                repo_root = Path(__file__).resolve().parents[1]
+                allowed = (
+                    path.is_absolute()
+                    and path.absolute() == resolved
+                    and resolved.is_file()
+                    and repo_root != resolved
+                    and repo_root not in resolved.parents
+                )
+            except (OSError, ValueError, RuntimeError):
+                allowed = False
+            if not allowed:
                 state = "input_unavailable"
             else:
                 try:
