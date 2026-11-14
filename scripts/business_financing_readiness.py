@@ -124,14 +124,13 @@ def assess(profile: dict) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("profile_json", type=Path, help="Local, approved, non-sensitive input")
-    parser.add_argument("--output", type=Path, help="Optional local output path")
+    parser.add_argument("--output", type=Path, required=True,
+                        help="Required absolute path to new owner-only file outside repository")
     args = parser.parse_args()
     report = assess(json.loads(args.profile_json.read_text(encoding="utf-8")))
     payload = json.dumps(report, indent=2, sort_keys=True)
-    if args.output:
-        write_private_output(args.output, payload + "\n")
-    else:
-        print(payload)
+    # Never print applicant financial facts to terminal, cron, CI, or worker logs.
+    write_private_output(args.output, payload + "\n")
 
 if __name__ == "__main__":
     main()
