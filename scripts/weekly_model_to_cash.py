@@ -250,17 +250,84 @@ def execution_review(candidate, evaluation, now):
             "reasons": reasons, "estimated_expected_contribution_cents": expected,
             "estimated_expected_cents_per_hour": rate,
             "estimated_days_to_cash": cash_days,
+            "estimated_total_minutes": plan.get("estimated_total_minutes") if isinstance(plan, dict) else None,
             "estimate_is_collected_cash": False, "source_contents_verified": False,
             "external_actions_authorized": False, "expertise_demonstrated": False}
 
 
-def weekly_report(candidates,now=None):
+
+def capacity_review(eligible, capacity, now):
+    """Rank reversible preparations using explicitly supplied, bounded capacity.
+
+    An operator-supplied capacity record is NOT verified by this program and
+    NEVER activates experiments, paid work, contacts or other external actions.
+    Missing/stale/overcommitted capacity fails closed; it is not a zero cap.
+    """
+    base = {"state": "capacity_evidence_required", "reasons": [],
+            "proposed_preparation_reservations": [], "not_reserved_model_ids": [],
+            "remaining_minutes": None, "source_contents_verified": False,
+            "external_actions_authorized": False, "active_experiments_started": False}
+    if not isinstance(capacity, dict):
+        base["reasons"].append("current_capacity_record_required")
+        return base
+    reasons = []
+    required_minutes = ("total_available_minutes", "funded_obligations_minutes",
+                        "existing_active_experiments_minutes", "qa_support_security_reserve_minutes")
+    for key in required_minutes:
+        value = capacity.get(key)
+        if type(value) is not int or not 0 <= value <= 10000000:
+            reasons.append(key + "_must_be_nonnegative_integer")
+    if not _source_url(capacity.get("capacity_evidence_url")):
+        reasons.append("capacity_evidence_url_required")
+    try:
+        checked = datetime.fromisoformat(capacity["checked_at"].replace("Z", "+00:00"))
+        if checked.tzinfo is None or checked.utcoffset() is None or not timedelta(0) <= now - checked < timedelta(days=1):
+            reasons.append("capacity_check_must_be_current")
+    except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
+        reasons.append("invalid_capacity_check_time")
+    for key in ("funded_work_protected", "qa_support_protected", "zero_new_spend_verified",
+                "channels_and_permissions_verified"):
+        if capacity.get(key) is not True:
+            reasons.append(key + "_required")
+    active_ids = capacity.get("active_model_ids", [])
+    if not isinstance(active_ids, list) or not all(isinstance(v, str) and v.strip() for v in active_ids) or len(set(active_ids)) != len(active_ids):
+        reasons.append("unique_active_model_ids_required")
+        active_ids = []
+    if not reasons:
+        remaining = (capacity["total_available_minutes"]
+                     - capacity["funded_obligations_minutes"]
+                     - capacity["existing_active_experiments_minutes"]
+                     - capacity["qa_support_security_reserve_minutes"])
+        if remaining < 0:
+            reasons.append("available_capacity_overcommitted")
+    if reasons:
+        base["reasons"] = reasons
+        return base
+    reservations = []
+    deferred = []
+    active_set = set(active_ids)
+    for result in eligible:
+        model_id = result["model_id"]
+        minutes = result["execution"].get("estimated_total_minutes")
+        if model_id in active_set:
+            deferred.append(model_id)
+        elif type(minutes) is int and 0 < minutes <= remaining:
+            reservations.append({"model_id": model_id, "reserved_minutes": minutes})
+            remaining -= minutes
+        else:
+            deferred.append(model_id)
+    base.update({"state": "operator_reported_capacity_plan_only",
+                 "reasons": [], "proposed_preparation_reservations": reservations,
+                 "not_reserved_model_ids": deferred, "remaining_minutes": remaining})
+    return base
+
+def weekly_report(candidates,now=None,capacity=None):
     if not isinstance(candidates,list):raise ValueError("candidates must be a list")
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("now must be timezone aware")
-    # Do not silently drop the 31st candidate or let duplicate models occupy
-    # both experiment slots. Reject the batch so operators can correct it.
+    # Keep bounded research batches and distinct identities; this is NOT a
+    # cap on concurrent experiments. Correct duplicates before planning.
     if len(candidates) > 30:
         raise ValueError("review at most 30 candidates per batch")
     seen = set()
@@ -279,8 +346,9 @@ def weekly_report(candidates,now=None):
     eligible.sort(key=lambda x:(-x["execution"]["estimated_expected_cents_per_hour"],
                                 x["execution"]["estimated_days_to_cash"], x["model_id"]))
     return {"research_type":"weekly_ai_models","evidence_state":"operator_supplied_unverified_sources",
-            "ranked_preparation_candidates":eligible[:2],
-            "all_evaluations":results,"selected_experiments_limit":2,
+            "ranked_preparation_candidates":eligible,
+            "capacity_admission":capacity_review(eligible,capacity,now),
+            "all_evaluations":results,"experiment_policy":"capacity_based_no_fixed_limit",
             "learning_refresh_queue":[{"model_id":r["model_id"],
                                        "topics":r["learning"]["next_learning_topics"]}
                                       for r in results if r["learning"]["next_learning_topics"]],
@@ -297,8 +365,10 @@ def weekly_report(candidates,now=None):
 def main():
     p=argparse.ArgumentParser()
     p.add_argument("--evidence",required=True)
+    p.add_argument("--capacity",help="optional independent operator capacity record (preparation only)")
     a=p.parse_args()
-    print(json.dumps(weekly_report(json.loads(Path(a.evidence).read_text())),indent=2))
+    capacity=json.loads(Path(a.capacity).read_text()) if a.capacity else None
+    print(json.dumps(weekly_report(json.loads(Path(a.evidence).read_text()),capacity=capacity),indent=2))
 
 if __name__=="__main__":
     main()
