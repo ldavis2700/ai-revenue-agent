@@ -69,6 +69,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_content_worker.py' -v
       - name: Test guarded paid preparation consumer
         run: python -m unittest discover -s tests -p 'test_paid_preparation_consumer.py' -v
+      - name: Test evidence-gated app-venture MVP assessment
+        run: python -m unittest discover -s tests -p 'test_app_venture_validation.py' -v
       - name: Test offline, research-only REO listing gates
         run: |
           python -m unittest discover -s tests -p 'test_reo_source_screen.py' -v
