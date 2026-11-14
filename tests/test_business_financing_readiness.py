@@ -42,7 +42,7 @@ class FinancingReadinessTests(unittest.TestCase):
 
     def test_evidence_reference_cannot_be_nontext_or_multiline(self):
         for bad in ([{"ref": "private:fixture"}], {"ref": "private:fixture"}, 12,
-                    True, "line\\nsecond", "x" * 513):
+                    True, "line\nsecond", "x" * 513):
             with self.subTest(type=type(bad).__name__), self.assertRaises(ValueError):
                 assess({"annual_revenue": 100,
                         "evidence": {"annual_revenue": {"status": "documented",
