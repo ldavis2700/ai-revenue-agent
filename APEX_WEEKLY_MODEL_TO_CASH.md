@@ -1,5 +1,12 @@
 # Weekly AI business-model to verified cash execution
 
+## November 14, 2026 — owner-approved dynamic experiment capacity (supersedes older two-model language)
+
+The owner removed the rigid two-experiment cap. The selector now ranks ALL eligible candidates in a bounded research batch (at most 30 for input hygiene, **not** an active experiment limit). `ranked_preparation_candidates` are research/preparation metadata only, **not** launched experiments. The optional `--capacity <private-capacity.json>` supplies a current (less than 24-hour old), dated, explicitly attested available-capacity record with an evidence URL, client-work allocation, existing-active allocation and QA/support/security reserve. `capacity_admission` proposes reversible preparation reservations only if available minutes remain. Invalid, stale, or overcommitted records fail closed with zero proposed reservations; even a complete operator record is **not independently authenticated by this script** and confers no external execution permission. Preserve active-experiment IDs to avoid duplicates and reconcile allocations across runs in the canonical private ledger. Revalidate capacity before any new work; never infer funds, buyers, revenue, continuous operation or provider permissions from this output.
+
+The CLI usage is `python scripts/weekly_model_to_cash.py --evidence <private-observations.json> [--capacity <private-capacity.json>]`. `capacity` is optional for research-only ranking, never a shortcut to launching. Existing customer obligations, HAEVEN's higher priority, checkout/delivery restrictions, and zero-unauthorized-spend limits remain controlling. Legacy references below to selecting two candidates are historical and superseded.
+
+
 **Owner directive: November 10, 2026.** Every week APEX should identify successful legitimate AI-executable business models, adapt their public business mechanisms into original offers, and pursue real customer cash flow. This is an execution protocol, not a claim that any model has been copied, sold, fulfilled, or paid.
 
 Use the existing Monday 9 AM Pacific APEX SMB brief and existing hourly APEX Wealth Engine; do not create duplicate recurrent workflows. The existing Business Model Intelligence GitHub Action performs weekly deterministic ranking and tests. It does **not** browse current markets or execute buyers' work. The Monday connected workflow must gather dated live buyer evidence and pass genuine facts to `scripts/weekly_model_to_cash.py --evidence <private-observations.json>` (keep private buyer details out of GitHub artifacts). Store concise evidence and the next feasible conversion step in the existing durable APEX revenue checkpoint.
@@ -24,7 +31,7 @@ Never assert an absolute global champion without complete data. Compare currentl
 
 1. Inspect all current funded jobs, real buyer messages, revisions, refunds and available settlement evidence FIRST. Fulfill accepted paid work before researching novel models.
 2. Compare up to ten candidates from `config/business_models*.json` and current real opportunity evidence, including customer-response automation, CRM integration, narrow software repair/QA, and tested AI workflows. Read the existing portfolio ranking as priors only.
-3. Select at most two unvalidated opportunities. Record exact buyer pain, provenance, deliverable, effort, fees, allowable channel, permissions, realistic cost and optional recurring support. Do not invent access, margins, buyer enthusiasm or provider receipts.
+3. Rank all eligible opportunities; propose new reversible preparation work only within independently reconciled capacity, protecting paid obligations and existing active commitments. Record exact buyer pain, provenance, deliverable, effort, fees, allowable channel, permissions, realistic cost and optional recurring support. Do not invent access, margins, buyer enthusiasm or provider receipts.
 4. Prepare a distinct lawful offer/pilot, original QA-tested delivery asset, consent-based intake and truthful tailored proposal. **Recreate a business mechanism, not brand identity, websites, copyrighted assets, proprietary code, private data or unlicensed content.**
 5. Before any revenue action validate the path `qualified demand → consented communication → accepted scope/funding → original QA and buyer acceptance → verified authorized collection → fees/refunds/costs and provider settlement → net contribution`. The application checkout remains paused; do not silently publish or activate purchase controls. No unapproved Connects, API usage, ads, recurring memberships, paid models, binding contracts, cold spam, account charges or bank/payout changes.
 6. Execute independently authorized reversible free actions. For provider-required exact approvals, preserve specific draft and blocked operation; never mark it submitted/accepted without a receipt.
@@ -178,7 +185,7 @@ planning estimates, not verified income, a statistical confidence interval or
 proof of the world's most profitable business. Probability sensitivity must be
 reviewed against contradictory evidence before committing resources.
 
-At most two new models are shortlisted per report. Reconcile the existing active
+No fixed number of new models is shortlisted; capacity evidence determines the reversible preparation plan. Reconcile the existing active
 experiment ledger before starting anything: the two-model limit applies across
 runs, not two additional experiments every hour. Duplicate model IDs and batches
 larger than 30 are rejected. Reported queues omit private hypotheses, URLs and
