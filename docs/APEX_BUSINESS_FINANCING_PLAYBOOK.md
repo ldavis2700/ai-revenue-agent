@@ -28,6 +28,23 @@ Do not pass SSNs, EINs, DOBs, account numbers or tax documents into this tool. I
 
 Microloans cannot be used to buy real estate or refinance debt; SBA Lender Match is not a loan application or loan guarantee. Real-estate flips are not eligible uses for SBA-approved loan proceeds via Lender Match. APEX must keep speculative REO/wholesaling separate from business operating-capital financing.
 
+## Official lender-program desk research — checked November 14, 2026 UTC
+
+**No applicant data supplied, no lender approached, no financing outcome verified.** These are public program facts, not eligibility findings. The proposed borrower, jurisdiction, actual operating history, documented cash flow, authorized capital use, exact fees, guarantees and offers remain unresolved.
+
+| Research option | Current published parameters | Limits, costs and owner-review gate | Official evidence |
+| --- | --- | --- | --- |
+| SBA 7(a) via approved lender | Up to $5 million; eligible business needs and credit, use of funds and location are evaluated by the lender | Rates negotiated subject to program maximums; borrower may bear an upfront guarantee fee, plus permitted lender/agent fees; check **FY2027** fee notice and obtain itemized term sheet before any affordability claim | https://www.sba.gov/loans/7a-loans/ |
+| SBA Microloan intermediaries | Up to $50,000; small-business working capital, supplies and equipment; current borrower page says maximum 7-year term | Generally 8%–13% interest as an indicative range, **not a quote**; no real estate purchase or existing-debt refinancing; credit, collateral, guarantees and fees depend on the actual intermediary | https://www.sba.gov/loans/microloans/ |
+| SBA Lender Match | Can connect business to interested SBA lenders; it is **not a loan application nor guarantee** | Completing the questionnaire discloses personal information to prospective lenders; owner-specific approval is required **before** submitting even a match request | https://www.sba.gov/loans/lender-match/ |
+| Community-development lenders | OFN offers a **free** directory of member CDFIs; geographic coverage and products vary | Directory membership does not prove certification, product availability or qualification; verify the named lender's own official rates, fees, licenses, geography and credit-inquiry requirements | https://www.ofn.org/cdfi-locator/ |
+
+**Repayment assessment:** Do not calculate an eligibility score. For any documented principal and written APR/fees/term, separately show the full amortization, total dollars repaid, lender and third-party fees, debt-service coverage using **actual cash available for debt service** (not gross sales), existing obligations, and a downside case with at least a 20% decline in available operating cash flow. If any input is missing, label the result *cannot assess*, rather than filling in estimates or assuming zero. Show personal-guarantee and collateral exposures as separate unresolved risks.
+
+**Source-date nuance:** A FY2026 small-manufacturer fee waiver expired September 30, 2026; never carry that discount forward into FY2027 without a new official notice. A 2026 SBA rule reportedly permits eligible combined 7(a)/504 borrowing up to $10 million, which is **not** a $10 million single 7(a) loan or an eligibility determination. Source: https://www.sba.gov/sba-newsroom/2026/05/18/sba-doubles-cumulative-7a-504-loan-limit-10-million/
+
+**Current next action:** Validate private owner-authorized records before constructing entity-specific packets. Keep any private records and generated reports off GitHub; preserve only status/gaps in the existing APEX database. Do not submit lender inquiries, take credit checks or borrow without separate explicit authorization.
+
 ## Acceptance before automation expansion
 Pass unit tests; document an authorized representative's approval mechanism; prove no outbound calls or hard credit checks; maintain evidence and access controls for sensitive materials; review full lender terms with owner; validate the actual deployed worker version. Merging this change does not by itself activate an hourly research process.
 
