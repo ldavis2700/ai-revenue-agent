@@ -12,7 +12,11 @@ from math import isfinite
 from pathlib import Path
 import os
 import re
-from scripts.business_financing_repayment import analyze_repayment
+# Support both package import in unit tests and direct script execution by the worker.
+if __package__:
+    from .business_financing_repayment import analyze_repayment
+else:
+    from business_financing_repayment import analyze_repayment
 
 REQUIRED = (
     "legal_business_name", "entity_type", "state", "industry",
