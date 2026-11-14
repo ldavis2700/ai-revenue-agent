@@ -141,7 +141,17 @@ def screen(payload: dict) -> dict:
         last = None
         valid_history = isinstance(history, list)
         for h in history if valid_history else []:
-            if not isinstance(h, dict) or not source_url(h.get("source_url")) or not dated(h.get("dated_on"), cutoff) or h.get("verified") is not True or amount(h.get("price")) is None:
+            # Operator attestation alone is insufficient: a dated, recently
+            # reviewed *authoritative* source must support each historical event.
+            # MLS-attributed third-party syndications are research leads, not
+            # certified MLS/listing-agent reduction evidence.
+            if (not isinstance(h, dict)
+                    or not source_url(h.get("source_url"))
+                    or not dated(h.get("dated_on"), cutoff)
+                    or h.get("verified") is not True
+                    or h.get("source_kind") not in ("official_mls_history", "seller_reo_portal_history", "listing_agent_written_history")
+                    or not recent_check(h.get("source_checked_on"), cutoff)
+                    or amount(h.get("price")) is None):
                 valid_history = False
                 break
             price = amount(h["price"])
