@@ -1,5 +1,8 @@
 # APEX Professional App Engineering Playbook
-Version: 2026-11-14 | Status: engineering guidance, not a deployed autonomous builder
+Version: 2026-11-14 | Status: ON-DEMAND REFERENCE ONLY; not a deployed autonomous builder
+
+## Invocation policy — owner request required
+This is an **on-demand skill library**, not an autonomous goal, standing business model, continuous workflow, periodic research assignment, or background app-building job. APEX may consult or execute this playbook **only in response to an explicit owner request for app design, development, testing, or maintenance**. Do not autonomously seek app-development clients, generate app concepts, propose new app projects, design screens, edit app code, schedule app-design tasks, or route leads into app-building work by virtue of this guide. Do not add it to revenue_worker, Mission Control, hourly/daily automations, task queues, or self-directed work selection. Existing owner-directed project schedules and tasks are not changed by this document; this guide does not authorize new activity. Any future integration must enforce this invocation gate in actual code, not merely in prompts.
 
 ## Mission and definition of done
 Build original, accessible, secure, maintainable, commercially useful apps with verifiable requirements, tests, deployments, and measurable user outcomes. Never confuse a generated prototype with production readiness, an approved PR with a deployed app, an app-store upload with approval, or a paid invoice with settled revenue.
@@ -60,10 +63,10 @@ If any critical gate fails, status is **blocked** and the failed gate plus repro
 4. Track activation, conversion, retention, churn, crashes, support burden, accessibility issues, infrastructure spend, contribution margin, and refunds. Avoid vanity metrics as proof of success.
 5. After release, triage actual user reports, close the loop, and prioritize safe improvements based on severity and measured impact.
 
-## 8. APEX service offers: scope-first, evidence-first
-Possible legitimate offerings include a paid MVP prototype, bug-fix sprint, responsive business site, internal workflow app, mobile app maintenance, testing/accessibility audit, and post-launch support. These are **candidate** offerings, not live services or proof of market demand.
+## 8. Owner-requested app services only: scope-first, evidence-first
+Only when the owner explicitly requests evaluation of app-development services, possible offerings include a paid MVP prototype, bug-fix sprint, responsive business site, internal workflow app, mobile app maintenance, testing/accessibility audit, and post-launch support. These are **candidate** offerings, not live services or proof of market demand.
 
-For each qualified lead:
+For each owner-authorized app-development engagement (do not automatically source or pursue app-development leads):
 - Verify user authorization, specific outcome, technical feasibility, budget, timing, hosting, platform requirements, and access restrictions.
 - Record deliverables, explicitly excluded work, acceptance tests, milestone prices, revision limit, privacy/security obligations, ownership/handoff, third-party costs and maintenance terms.
 - Start with a paid discovery or bounded pilot where uncertainty is high. Never promise guaranteed store approval, specific income, unlimited revisions, or zero operating cost.
@@ -71,16 +74,16 @@ For each qualified lead:
 - Keep all invoices, actual payment settlements, deliverable hashes, QA logs, acceptance evidence and revenue claims linked to the existing APEX ledger; do not create a second unverified sales ledger.
 - Never ship client IP into public demos or publish client data. Use synthetic data for portfolios.
 
-## 9. Agent execution loop (for future integration)
+## 9. On-demand execution loop (only after explicit owner request)
 ```
-observe -> classify requirements and risks -> propose smallest valuable change
+owner request -> classify requirements and risks -> propose smallest valuable change
 -> locate existing tests and policy gates -> branch -> implement -> run tests
 -> evaluate security/accessibility -> PR for review -> approved release
 -> verify actual deployment -> monitor outcomes -> record evidence -> repeat
 ```
-This document does **not** activate those capabilities. Each step must be backed by connected tools, authorized credentials, allowed execution settings, and recorded evidence. Failed calls, uncertainty, or insufficient permissions must remain visible. Respect all owner pause/stop controls and existing hourly automation schedules; this playbook never modifies them.
+This document does **not** activate those capabilities or permit continuous/background app-development work. Each step must be backed by connected tools, authorized credentials, allowed execution settings, and recorded evidence. Failed calls, uncertainty, or insufficient permissions must remain visible. Respect all owner pause/stop controls and existing hourly automation schedules; this playbook never modifies them.
 
-## 10. Project-specific application
+## 10. Project-specific application when owner requests the skill
 - **HAEVEN**: prioritize restored-user data integrity, auth, media upload/retrieve/delete and cleanup acceptance, moderation/account deletion, subscription lifecycle, production routing, iOS replacement validation, then Android release. Keep original/live and HAEVEN 4 tracks distinct until independently verified.
 - **APEX**: make its own app/admin interface secure, useful, observable, persistently accessible to the owner, and capable of showing grounded status, receipts, errors and intervention requests. Separate agent reasoning from actual tool execution and authorization.
 - **RMC CLASSICS**: test multiplayer synchronization, state consistency, reconnection, rematch, share actions, iOS review account, privacy disclosures and device screenshots before resubmission.
