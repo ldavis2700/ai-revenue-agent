@@ -45,10 +45,12 @@ def markdown_literal(value: object) -> str:
                 or char in "\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069")
         else char for char in raw
     )
-    escaped_html = html.escape(raw, quote=True)
-    markdown_special = set("\\`*_{}[]()#+-.!|>")
-    return "".join("\\" + char if char in markdown_special else char
-                   for char in escaped_html)
+    # Escape Markdown first so generated HTML entities (e.g. &#x27;) remain intact.
+    markdown_special = set("\\`*_{}[]()#+-.!|")
+    escaped_markdown = "".join(
+        "\\" + char if char in markdown_special else char for char in raw
+    )
+    return html.escape(escaped_markdown, quote=True)
 
 
 def repayment_lines(profile: dict) -> list[str]:
