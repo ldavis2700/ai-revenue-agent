@@ -19,6 +19,21 @@ class FinancingReadinessTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             assess({"routing_number": "do-not-store"})
 
+
+    def test_sensitive_identifier_nested_in_source_documents_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Sensitive financing profile"):
+            assess({"source_documents": [{"notes": {"routing-number": "never-log"}}]})
+
+    def test_sensitive_identifier_nested_in_evidence_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Sensitive financing profile"):
+            assess({"evidence": {"industry": {"status": "documented",
+                                             "source": {"BANK ACCOUNT": "never-log"}}}})
+
+    def test_safe_document_references_remain_usable(self):
+        result = assess({"source_documents": [{"kind": "registration", "ref": "private:sample"}],
+                         "evidence": {"source_documents": {"status": "owner_attested"}}})
+        self.assertIn("source_documents", result["verified_or_attested_facts"])
+
     def test_owner_attested_not_misrepresented(self):
         report = assess({"legal_business_name": "Example LLC",
                          "evidence": {"legal_business_name": {"status": "owner_attested"}}})

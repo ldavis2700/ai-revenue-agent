@@ -11,6 +11,7 @@ from datetime import date
 from math import isfinite
 from pathlib import Path
 import os
+import re
 
 REQUIRED = (
     "legal_business_name", "entity_type", "state", "industry",
@@ -27,6 +28,26 @@ OFFICIAL_SOURCES = {
     "SBA Lender Match": "https://www.sba.gov/loans/lender-match/",
 }
 ALLOWED_STATUS = {"documented", "owner_attested", "missing"}
+
+def reject_sensitive_fields(profile: object) -> None:
+    """Reject sensitive identifier keys even when nested in evidence or documents.
+
+    Never include sensitive values or field paths in the exception: the worker
+    and callers must not leak private inputs to diagnostics. This is only a
+    defense-in-depth check; profiles must still be reviewed for sensitive values.
+    """
+    pending = [profile]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, dict):
+            for key, value in current.items():
+                normalized = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
+                if normalized in SENSITIVE:
+                    raise ValueError("Sensitive financing profile field is not permitted")
+                pending.append(value)
+        elif isinstance(current, list):
+            pending.extend(current)
+
 
 def write_private_output(destination: Path, payload: str) -> None:
     """Create a private new file outside the checkout, never overwrite or follow links.
@@ -53,9 +74,7 @@ def write_private_output(destination: Path, payload: str) -> None:
 def assess(profile: dict) -> dict:
     if not isinstance(profile, dict):
         raise ValueError("Input profile must be a JSON object")
-    prohibited = sorted(set(k.lower() for k in profile) & SENSITIVE)
-    if prohibited:
-        raise ValueError("Sensitive fields must not be provided: " + ", ".join(prohibited))
+    reject_sensitive_fields(profile)
     evidence = profile.get("evidence", {})
     if not isinstance(evidence, dict):
         raise ValueError("evidence must be an object")
