@@ -5,7 +5,7 @@ Local-only. No lender contact, inquiry, debt action or undisclosed data collecti
 """
 import argparse
 import json
-from math import isfinite
+from math import expm1, isfinite, log1p
 from pathlib import Path
 try:
     from scripts.business_financing_readiness import assess, write_private_output
@@ -16,7 +16,9 @@ SECTIONS = (
     ("Business identity", ("legal_business_name", "entity_type", "state", "operating_since")),
     ("Business and market", ("industry", "business_description")),
     ("Requested capital", ("requested_amount", "use_of_funds")),
-    ("Repayment inputs", ("annual_revenue", "annual_net_income", "existing_annual_debt_service")),
+    ("Repayment inputs", ("annual_revenue", "annual_net_income", "annual_cash_available_for_debt_service",
+                          "existing_annual_debt_service", "annual_interest_rate_pct",
+                          "term_months", "upfront_fees")),
     ("Evidence index", ("source_documents",)),
 )
 
@@ -32,8 +34,9 @@ REPAYMENT_INPUTS = (
 def repayment_lines(profile: dict) -> list[str]:
     """Conservative scenario only when all six inputs have actual evidence.
 
-    A quoted nominal rate is not the same as disclosed APR. Never create a
-    fictitious rate, term, fee, zero debt balance or cash-flow forecast.
+    A quoted nominal rate is not the same as a disclosed APR. Never invent
+    a fee, debt balance, cash-flow projection, or safe borrowing estimate.
+    Refuse unrepresentable figures rather than print Infinity or NaN.
     """
     evidence = profile.get("evidence", {})
     missing = [
@@ -46,22 +49,36 @@ def repayment_lines(profile: dict) -> list[str]:
         return ["**CANNOT ASSESS:** Missing documented repayment inputs: "
                 + ", ".join(missing) + ".", "No debt-service or affordability estimate generated."]
     values = [profile[k] for k in REPAYMENT_INPUTS]
-    if any(isinstance(v, bool) or not isinstance(v, (int, float))
-           or not isfinite(v) for v in values):
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in values):
         raise ValueError("Repayment figures must all be finite numbers")
-    principal, annual_rate_pct, months, fees, cash, existing = values
+    try:
+        principal, annual_rate_pct, months, fees, cash, existing = (float(v) for v in values)
+    except (OverflowError, ValueError):
+        raise ValueError("Repayment figures must all be finite numbers") from None
+    if not all(isfinite(v) for v in (principal, annual_rate_pct, months, fees, cash, existing)):
+        raise ValueError("Repayment figures must all be finite numbers")
     if (principal <= 0 or not 0 <= annual_rate_pct <= 100
-            or not isinstance(months, int) or not 1 <= months <= 360
+            or not isinstance(values[2], int) or not 1 <= months <= 360
             or fees < 0 or existing < 0):
         raise ValueError("Invalid principal, rate, term, fees or existing debt service")
+
+    def finite(value: float) -> float:
+        if not isfinite(value):
+            raise ValueError("Repayment scenario cannot be calculated with finite values")
+        return value
+
     monthly_rate = annual_rate_pct / 1200
-    payment = (principal / months if monthly_rate == 0 else
-               principal * monthly_rate / (1 - (1 + monthly_rate) ** (-months)))
-    combined_service = payment * 12 + existing
-    total_paid = payment * months + fees
-    stress_cash = cash - 0.20 * abs(cash)
-    base_dscr = cash / combined_service
-    stress_dscr = stress_cash / combined_service
+    if monthly_rate == 0:
+        payment = principal / months
+    else:
+        # Stable for tiny rates, unlike subtracting a number close to 1.
+        payment = principal * monthly_rate / (-expm1(-months * log1p(monthly_rate)))
+    payment = finite(payment)
+    combined_service = finite(finite(payment * 12) + existing)
+    total_paid = finite(finite(payment * months) + fees)
+    stress_cash = finite(cash - 0.20 * abs(cash))
+    base_dscr = finite(cash / combined_service)
+    stress_dscr = finite(stress_cash / combined_service)
     return [
         "**Illustrative only: documented borrower inputs, not a lender quote or approval.**",
         f"New-loan scheduled monthly payment: ${payment:,.2f}; existing annual debt service: ${existing:,.2f}.",
