@@ -18,6 +18,15 @@ BASE = {"as_of": "2026-11-13", "listings": [{
     "investor_eligibility_checked_on": "2026-11-13",
 }]}
 
+# Fictional but internally complete listing-level evidence to exercise the
+# underwriting validator independently of the new outer listing gates.
+QUALIFIED = {**BASE["listings"][0],
+             "first_listed_on": "2026-08-01",
+             "first_listed_verified": True, "first_listed_source_url": URL,
+             "continuous_listing_verified": True,
+             "continuous_listing_source_url": URL,
+             "continuous_listing_checked_on": "2026-11-13"}
+
 
 class ScreenTests(unittest.TestCase):
     def test_missing_dom_and_cuts_fails_closed(self):
@@ -92,7 +101,7 @@ class ScreenTests(unittest.TestCase):
             "repairs_low": 10000, "repairs_high": 25000, "repair_quote_source_url": URL,
             "repair_quote_checked_on": "2026-11-12", "acquisition_cost": 5000,
             "selling_cost": 10000, "holding_cost": 5000, "uncertainty_reserve": 5000}
-        result = reo.screen({**BASE, "listings": [{**BASE["listings"][0], "underwriting": x}]})
+        result = reo.screen({**BASE, "listings": [{**QUALIFIED, "underwriting": x}]})
         self.assertFalse(result["listings"][0]["underwriting"]["ready"])
         self.assertIn("duplicate_closed_comp_source", result["listings"][0]["underwriting"]["reasons"])
 
@@ -109,7 +118,7 @@ class ScreenTests(unittest.TestCase):
              "repair_quote_source_url": URL, "repair_quote_checked_on": "2026-11-12",
              "acquisition_cost": 5000, "selling_cost": 10000,
              "holding_cost": 5000, "uncertainty_reserve": 5000}
-        r = reo.screen({**BASE, "listings": [{**BASE["listings"][0], "underwriting": x}]})["listings"][0]
+        r = reo.screen({**BASE, "listings": [{**QUALIFIED, "underwriting": x}]})["listings"][0]
         self.assertFalse(r["underwriting"]["ready"])
         self.assertIn("duplicate_closed_comp_property", r["underwriting"]["reasons"])
         self.assertIsNone(r["underwriting"]["scenario_max_offer"])
@@ -126,7 +135,7 @@ class ScreenTests(unittest.TestCase):
              "repair_quote_source_url": URL, "repair_quote_checked_on": "2026-11-12",
              "acquisition_cost": 5000, "selling_cost": 10000,
              "holding_cost": 5000, "uncertainty_reserve": 5000}
-        r = reo.screen({**BASE, "listings": [{**BASE["listings"][0], "underwriting": x}]})["listings"][0]
+        r = reo.screen({**BASE, "listings": [{**QUALIFIED, "underwriting": x}]})["listings"][0]
         self.assertFalse(r["underwriting"]["ready"])
         self.assertIn("invalid_closed_comp_evidence", r["underwriting"]["reasons"])
 
@@ -140,7 +149,7 @@ class ScreenTests(unittest.TestCase):
              "repair_quote_source_url": URL, "repair_quote_checked_on": "2026-11-12",
              "acquisition_cost": 5000, "selling_cost": 10000,
              "holding_cost": 5000, "uncertainty_reserve": 5000}
-        r = reo.screen({**BASE, "listings": [{**BASE["listings"][0], "underwriting": x}]})["listings"][0]
+        r = reo.screen({**BASE, "listings": [{**QUALIFIED, "underwriting": x}]})["listings"][0]
         self.assertFalse(r["underwriting"]["ready"])
         self.assertIn("scenario_arithmetic_out_of_range", r["underwriting"]["reasons"])
         self.assertIsNone(r["underwriting"]["scenario_max_offer"])
