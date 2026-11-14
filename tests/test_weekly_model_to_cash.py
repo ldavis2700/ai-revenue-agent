@@ -220,7 +220,8 @@ class WeeklyModelTests(unittest.TestCase):
          self.operator_capacity(total_available_minutes=100),
          self.operator_capacity(capacity_evidence_url="not-a-url"),
          self.operator_capacity(qa_support_protected=False),
-         self.operator_capacity(active_model_ids=["duplicate","duplicate"])]
+         self.operator_capacity(active_model_ids=["duplicate","duplicate"]),
+         {k:v for k,v in self.operator_capacity().items() if k!="active_model_ids"}]
   for case in cases:
    with self.subTest(case=case):
     result=w.weekly_report(items,self.now,capacity=case)["capacity_admission"]
