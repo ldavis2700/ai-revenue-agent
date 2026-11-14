@@ -47,6 +47,19 @@ Microloans cannot be used to buy real estate or refinance debt; SBA Lender Match
 
 **Current next action:** Validate private owner-authorized records before constructing entity-specific packets. Keep any private records and generated reports off GitHub; preserve only status/gaps in the existing APEX database. Do not submit lender inquiries, take credit checks or borrow without separate explicit authorization.
 
+## Named CDFI / community-lender desk review — November 14, 2026
+
+**Research only.** These are published **lender advertisements, not quotes or borrower eligibility determinations**. California entity registration, service-county presence, operating financials, owner guarantee consent, credit history and the specific legal use of funds must all be independently documented. Do not send any personal or business financial records, request prequalification, trigger an inquiry, submit an application, or pay a fee without transaction-specific owner authorization. Verify every item again on the official lender site before making a decision.
+
+| Candidate, official source | Published geography and product | Advertised rate and charges | Unresolved borrower-specific gate |
+| --- | --- | --- | --- |
+| [Pacific Community Ventures — Small Business Community Loan](https://www.pacificcommunityventures.org/get-a-loan/) | California businesses; **$10,000–$500,000**, one-to-seven-year loan; one month interest-only | **8.75% fixed**, **3.5% closing fee**, no prepayment penalty; personal guarantee required from **each owner with more than 20% ownership** | Actual location, eligible business, loan purpose, owners/guarantees, verified repayment capacity and written offer unknown |
+| [Accessity — Start-up and Expansion Loans](https://accessity.org/loans/) | Southern California business/owner geography; **$300–$25,000** or **$25,001–$250,000**; published terms **12–48 months** and **12–84 months** respectively | **8.99%–14.99% advertised fixed simple-interest range**; no application fee or prepayment penalty; closing costs normally **financed in the loan**, approx. **6.5% above $5,000** (see conditions) | Service county, legal entity, personal financial obligations, ability to repay, exact APR, financed fees and lender quote unknown |
+
+**Accessity source discrepancy:** Its [FAQ](https://accessity.org/faqs/) still describes general loan terms as 12–72 months while the [product page](https://accessity.org/loans/) describes up to 84 months for the larger product. Ask the lender for a dated, product-specific written maximum before including a term in amortization. **Financed closing charges can increase principal and total interest**, so do not estimate total cost by simply adding a one-time fee to the advertised rate. The quoted lender fees and interest are not a disclosed borrower-specific APR; compare written APR, payment schedule, origination/third-party costs, collateral, personal guarantees, early payoff, and downside cash flow. Pacific Community Ventures' guarantee condition is material owner risk; do not assume the owner's consent.
+
+**Status:** Two new named lender options researched; **0 borrower-specific screens completed, 0 applications, 0 credit inquiries, 0 lender contacts, 0 lender approvals, 0 funds received**. If there are no owner-authorized repayment facts, the readiness result must remain **CANNOT ASSESS**. Loan proceeds must never be booked as collected sales revenue.
+
 ## Acceptance before automation expansion
 Pass unit tests; document an authorized representative's approval mechanism; prove no outbound calls or hard credit checks; maintain evidence and access controls for sensitive materials; review full lender terms with owner; validate the actual deployed worker version. Merging this change does not by itself activate an hourly research process.
 
