@@ -28,6 +28,30 @@ QUALIFIED = {**BASE["listings"][0],
              "continuous_listing_checked_on": "2026-11-13"}
 
 
+def fictional_cost_evidence(checked_on="2026-11-12"):
+    # Fictional, operator-provided assumptions: not contractor or closing quotes.
+    costs = {"acquisition_cost": 5000, "selling_cost": 10000,
+             "holding_cost": 5000, "uncertainty_reserve": 5000}
+    return {key: {"assumption": f"Illustrative basis for {key}; verify locally",
+                  "source_url": URL + "/costs/" + key,
+                  "checked_on": checked_on,
+                  "estimated_amount": value} for key, value in costs.items()}
+
+
+def fictional_underwriting():
+    return {"closed_comps": [
+                {"property_address": f"Fictional Sold Home {i}",
+                 "source_url": URL + str(i), "closed_on": "2026-06-01",
+                 "sold_price": 200000} for i in range(3)],
+            "arv": 200000, "arv_source_url": URL,
+            "repairs_low": 10000, "repairs_high": 25000,
+            "repair_quote_source_url": URL, "repair_quote_checked_on": "2026-11-12",
+            "acquisition_cost": 5000, "selling_cost": 10000,
+            "holding_cost": 5000, "uncertainty_reserve": 5000,
+            "cost_evidence": fictional_cost_evidence()}
+
+
+
 class ScreenTests(unittest.TestCase):
     def test_missing_dom_and_cuts_fails_closed(self):
         r = reo.screen(BASE)["listings"][0]
@@ -104,6 +128,7 @@ class ScreenTests(unittest.TestCase):
             "repairs_low": 10000, "repairs_high": 25000, "repair_quote_source_url": URL,
             "repair_quote_checked_on": "2026-11-12", "acquisition_cost": 5000,
             "selling_cost": 10000, "holding_cost": 5000, "uncertainty_reserve": 5000}
+        x["cost_evidence"] = fictional_cost_evidence()
         eligible = {**BASE["listings"][0], "underwriting": x,
                     "first_listed_on": "2026-08-01",
                     "first_listed_verified": True, "first_listed_source_url": URL,
@@ -220,6 +245,7 @@ class ScreenTests(unittest.TestCase):
              "repair_quote_checked_on": "2026-11-12",
              "acquisition_cost": 5000, "selling_cost": 10000,
              "holding_cost": 5000, "uncertainty_reserve": 5000}
+        x["cost_evidence"] = fictional_cost_evidence()
         r = reo.screen({**BASE, "listings": [{**QUALIFIED, "underwriting": x}]})["listings"][0]
         self.assertTrue(r["underwriting"]["ready"])
         self.assertEqual(r["underwriting"]["scenario_max_offer"], "93500.00")
@@ -257,6 +283,35 @@ class ScreenTests(unittest.TestCase):
         self.assertFalse(r["underwriting"]["ready"])
         self.assertIsNone(r["underwriting"]["scenario_max_offer"])
         self.assertIn("stale_closed_comp_evidence", r["underwriting"]["reasons"])
+
+
+    def test_missing_transaction_holding_basis_withholds_numeric_scenario(self):
+        x = fictional_underwriting()
+        del x["cost_evidence"]
+        result = reo.underwrite({"underwriting": x}, reo.date(2026, 11, 13))
+        self.assertFalse(result["ready"])
+        self.assertIsNone(result["scenario_max_offer"])
+        self.assertIn("itemized_cost_basis_missing_or_stale", result["reasons"])
+
+    def test_stale_cost_assumptions_fail_closed(self):
+        x = fictional_underwriting()
+        x["cost_evidence"]["holding_cost"]["checked_on"] = "2026-09-01"
+        result = reo.underwrite({"underwriting": x}, reo.date(2026, 11, 13))
+        self.assertFalse(result["ready"])
+        self.assertIn("itemized_cost_basis_missing_or_stale", result["reasons"])
+
+    def test_mismatched_estimated_cost_fails_closed(self):
+        x = fictional_underwriting()
+        x["cost_evidence"]["selling_cost"]["estimated_amount"] = 1
+        result = reo.underwrite({"underwriting": x}, reo.date(2026, 11, 13))
+        self.assertFalse(result["ready"])
+        self.assertIn("itemized_cost_basis_missing_or_stale", result["reasons"])
+
+    def test_current_itemized_cost_basis_releases_research_only_scenario(self):
+        result = reo.underwrite({"underwriting": fictional_underwriting()},
+                               reo.date(2026, 11, 13))
+        self.assertTrue(result["ready"])
+        self.assertEqual(result["scenario_max_offer"], "90000.00")
 
     def test_false_and_negative_financials_fail(self):
         x = {"arv": False, "arv_source_url": URL, "repairs_low": -1}
