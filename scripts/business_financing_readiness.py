@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import date
+from math import isfinite
 from pathlib import Path
 
 REQUIRED = (
@@ -45,19 +46,27 @@ def assess(profile: dict) -> dict:
         if status not in ALLOWED_STATUS:
             raise ValueError("Invalid evidence status for " + field)
         source = item.get("source", "")
-        if not val or status == "missing" or (status == "documented" and not source):
+        # A documented numeric zero is a real reported value, not missing
+        # (e.g. a business with no existing loan payments or no sales).
+        empty = val is None or val is False or val == "" or (
+            isinstance(val, (list, dict)) and not val
+        )
+        if empty or status == "missing" or (status == "documented" and not source):
             gaps.append(field)
         else:
             facts[field] = {"value": val, "evidence_status": status,
                             "source_reference": source if status == "documented" else ""}
     amount = profile.get("requested_amount")
     if amount is not None:
-        if isinstance(amount, bool) or not isinstance(amount, (int, float)) or amount <= 0:
-            raise ValueError("requested_amount must be a positive number")
+        if (isinstance(amount, bool) or not isinstance(amount, (int, float))
+                or not isfinite(amount) or amount <= 0):
+            raise ValueError("requested_amount must be a finite positive number")
     for field in ("annual_revenue", "annual_net_income", "existing_annual_debt_service"):
         v = profile.get(field)
-        if v is not None and (isinstance(v, bool) or not isinstance(v, (int,float))):
-            raise ValueError(field + " must be numeric")
+        if v is not None and (isinstance(v, bool) or not isinstance(v, (int, float))
+                              or not isfinite(v)
+                              or (field != "annual_net_income" and v < 0)):
+            raise ValueError(field + " must be finite; revenue and debt service cannot be negative")
     # No synthetic bankability or approval score: lender underwriting is specific.
     readiness = "ready_for_owner_review" if not gaps else "evidence_incomplete"
     return {
