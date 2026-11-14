@@ -44,6 +44,17 @@ def amount(value: object) -> Decimal | None:
         return None
 
 
+def signed_amount(value: object) -> Decimal | None:
+    """Signed adjustments are separate from nonnegative sale prices/costs."""
+    if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+        return None
+    try:
+        n = Decimal(str(value))
+        return n if n.is_finite() else None
+    except (InvalidOperation, ValueError):
+        return None
+
+
 def underwrite(item: dict, cutoff: date) -> dict:
     """Compute only a *scenario*, gated by sourced comps, costs and repair quotes."""
     x = item.get("underwriting")
@@ -54,24 +65,38 @@ def underwrite(item: dict, cutoff: date) -> dict:
     if not isinstance(comps, list) or len(comps) < 3:
         reasons.append("at_least_three_sourced_closed_comps_required")
     else:
-        comp_urls, comp_properties = [], []
+        comp_urls, comp_properties, adjusted_sales = [], [], []
         for c in comps:
             if not isinstance(c, dict):
                 reasons.append("invalid_closed_comp_evidence")
                 break
             address = c.get("property_address")
             closed_on = dated(c.get("closed_on"), cutoff)
+            sold = amount(c.get("sold_price"))
+            adjustment = signed_amount(c.get("arv_adjustment", 0))
             if (not source_url(c.get("source_url"))
-                    or closed_on is None
-                    or amount(c.get("sold_price")) is None
+                    or closed_on is None or sold is None or adjustment is None
                     or not isinstance(address, str) or not address.strip()):
                 reasons.append("invalid_closed_comp_evidence")
                 break
             if (cutoff - closed_on).days > 365:
                 reasons.append("stale_closed_comp_evidence")
                 break
+            if adjustment != 0 and (not source_url(c.get("adjustment_source_url"))
+                    or not isinstance(c.get("adjustment_reason"), str)
+                    or not c["adjustment_reason"].strip()):
+                reasons.append("comp_adjustment_evidence_missing")
+                break
+            try:
+                adjusted = sold + adjustment
+                if not adjusted.is_finite() or adjusted <= 0:
+                    raise InvalidOperation("nonpositive adjusted sale")
+            except (InvalidOperation, Overflow, OverflowError):
+                reasons.append("invalid_adjusted_comp_price")
+                break
             comp_urls.append(c["source_url"])
             comp_properties.append(" ".join(address.casefold().split()))
+            adjusted_sales.append(adjusted)
         if len(comp_urls) == len(comps):
             if len(set(comp_urls)) != len(comp_urls):
                 reasons.append("duplicate_closed_comp_source")
@@ -80,6 +105,19 @@ def underwrite(item: dict, cutoff: date) -> dict:
     arv = amount(x.get("arv"))
     if arv is None or not source_url(x.get("arv_source_url")):
         reasons.append("verified_arv_missing")
+    # A supplied ARV must be reproducible from the median of at least three
+    # distinct, recent closed sales after explicitly sourced adjustments.
+    # This conservative scenario is not an appraisal of property comparability.
+    if isinstance(comps, list) and len(comps) >= 3 and len(adjusted_sales) == len(comps):
+        try:
+            ordered = sorted(adjusted_sales)
+            center = len(ordered) // 2
+            derived_arv = (ordered[center] if len(ordered) % 2
+                           else (ordered[center - 1] + ordered[center]) / Decimal("2"))
+            if arv is not None and abs(derived_arv - arv) > Decimal("0.01"):
+                reasons.append("arv_not_derived_from_adjusted_closed_comps")
+        except (InvalidOperation, Overflow, OverflowError):
+            reasons.append("invalid_adjusted_comp_price")
     fields = ("repairs_low", "repairs_high", "acquisition_cost", "selling_cost", "holding_cost", "uncertainty_reserve")
     numbers = {f: amount(x.get(f)) for f in fields}
     if any(v is None for v in numbers.values()):
