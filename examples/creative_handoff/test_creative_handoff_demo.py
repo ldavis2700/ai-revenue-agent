@@ -60,6 +60,15 @@ class CreativeHandoffTests(unittest.TestCase):
         self.assertFalse(https_url('https://example.org/doc#fragment'))
         self.assertFalse(https_url('https://example.org:8443/doc'))
 
+    def test_malformed_url_and_track_fail_closed(self):
+        self.assertFalse(https_url('https://example.org:invalid/doc'))
+        d = copy.deepcopy(EXAMPLE)
+        d['work_items'][1]['track'] = ['ad']
+        self.assertIn('unsupported_track', review(d)['work_items'][1]['blockers'])
+
+    def test_unrepresentable_cost_fails_closed(self):
+        self.assertIsNone(money('1e9999999'))
+
     def test_deterministic_hash(self):
         self.assertEqual(review(EXAMPLE)['work_items'][0]['artifact_sha256'], review(copy.deepcopy(EXAMPLE))['work_items'][0]['artifact_sha256'])
 
