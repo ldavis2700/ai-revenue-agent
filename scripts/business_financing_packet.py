@@ -106,6 +106,17 @@ def render(profile: dict) -> str:
         lines.extend(("## " + title, ""))
         for key in fields:
             fact = facts.get(key)
+            # The readiness assessor tracks core company facts, not optional
+            # scenario terms. Show supplied rate/term/fee provenance directly,
+            # but only when the owner explicitly labels the evidence.
+            if fact is None and key in ("annual_interest_rate_pct", "term_months", "upfront_fees"):
+                item = profile.get("evidence", {}).get(key, {})
+                value = profile.get(key)
+                if (isinstance(item, dict) and value is not None
+                        and item.get("status") in ("documented", "owner_attested")
+                        and (item["status"] == "owner_attested" or item.get("source"))):
+                    fact = {"value": value, "evidence_status": item["status"],
+                            "source_reference": item.get("source", "")}
             if fact:
                 val = fact["value"]
                 # Avoid injection into markdown as markup. Sensitive data must not be included as input.
