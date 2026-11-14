@@ -53,6 +53,13 @@ def markdown_literal(value: object) -> str:
     return html.escape(escaped_markdown, quote=True)
 
 
+def documented_source_valid(source: object) -> bool:
+    """Only plain, nonempty, bounded text may substantiate quoted lending terms."""
+    return (isinstance(source, str) and bool(source.strip())
+            and len(source) <= 512
+            and all(ord(char) >= 32 and ord(char) != 127 for char in source))
+
+
 def repayment_lines(profile: dict) -> list[str]:
     """Conservative scenario only when all six inputs have actual evidence.
 
@@ -65,7 +72,7 @@ def repayment_lines(profile: dict) -> list[str]:
         key for key in REPAYMENT_INPUTS
         if key not in profile or not isinstance(evidence.get(key), dict)
         or evidence[key].get("status") != "documented"
-        or not evidence[key].get("source")
+        or not documented_source_valid(evidence[key].get("source"))
     ]
     if missing:
         return ["**CANNOT ASSESS:** Missing documented repayment inputs: "
@@ -115,6 +122,13 @@ def repayment_lines(profile: dict) -> list[str]:
 
 def render(profile: dict) -> str:
     report = assess(profile)
+    # The readiness assessor validates mandatory evidence. Validate optional
+    # lender rate/term/fee pointers too, before labeling any as documented.
+    for key in ("annual_interest_rate_pct", "term_months", "upfront_fees"):
+        item = profile.get("evidence", {}).get(key, {})
+        if (isinstance(item, dict) and item.get("status") == "documented"
+                and not documented_source_valid(item.get("source"))):
+            raise ValueError("Optional financing evidence source must be plain text for " + key)
     facts = report["verified_or_attested_facts"]
     lines = [
         "# Business financing readiness — OWNER REVIEW ONLY",
