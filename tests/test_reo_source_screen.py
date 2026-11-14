@@ -14,6 +14,8 @@ BASE = {"as_of": "2026-11-13", "listings": [{
     "address": "Test", "official_listing_url": URL, "source_verified": True,
     "checked_on": "2026-11-13", "status": "active", "asking_price": 100000,
     "investor_purchase_permitted": True,
+    "investor_eligibility_source_url": URL,
+    "investor_eligibility_checked_on": "2026-11-13",
 }]}
 
 
@@ -73,7 +75,13 @@ class ScreenTests(unittest.TestCase):
             "repairs_low": 10000, "repairs_high": 25000, "repair_quote_source_url": URL,
             "repair_quote_checked_on": "2026-11-12", "acquisition_cost": 5000,
             "selling_cost": 10000, "holding_cost": 5000, "uncertainty_reserve": 5000}
-        r = reo.screen({**BASE, "listings": [{**BASE["listings"][0], "underwriting": x}]})["listings"][0]
+        eligible = {**BASE["listings"][0], "underwriting": x,
+                    "first_listed_on": "2026-08-01",
+                    "first_listed_verified": True, "first_listed_source_url": URL,
+                    "continuous_listing_verified": True,
+                    "continuous_listing_source_url": URL,
+                    "continuous_listing_checked_on": "2026-11-13"}
+        r = reo.screen({**BASE, "listings": [eligible]})["listings"][0]
         self.assertTrue(r["underwriting"]["ready"])
         self.assertEqual(r["underwriting"]["scenario_max_offer"], "90000.00")
         self.assertFalse(r["external_action_allowed"])
@@ -150,6 +158,47 @@ class ScreenTests(unittest.TestCase):
         result = reo.screen({**BASE, "listings": [{
             **BASE["listings"][0], "first_listed_on": "2026-01-01"}]})
         self.assertIsNone(result["listings"][0]["days_on_market_verified"])
+
+    def test_stale_listing_snapshot_does_not_pass_current_source(self):
+        item = {**BASE["listings"][0], "checked_on": "2026-11-01"}
+        r = reo.screen({**BASE, "listings": [item]})["listings"][0]
+        self.assertIn("official_source_stale", r["blocking_reasons"])
+        self.assertFalse(r["underwriting"]["ready"])
+
+    def test_stale_investor_first_look_evidence_is_blocked(self):
+        item = {**BASE["listings"][0], "investor_eligibility_checked_on": "2026-10-01"}
+        r = reo.screen({**BASE, "listings": [item]})["listings"][0]
+        self.assertIn("investor_eligibility_evidence_missing_or_stale", r["blocking_reasons"])
+
+    def test_stale_continuous_dom_does_not_qualify(self):
+        item = {**BASE["listings"][0], "first_listed_on": "2026-06-01",
+                "first_listed_verified": True, "first_listed_source_url": URL,
+                "continuous_listing_verified": True,
+                "continuous_listing_source_url": URL,
+                "continuous_listing_checked_on": "2026-10-01"}
+        r = reo.screen({**BASE, "listings": [item]})["listings"][0]
+        self.assertIsNone(r["days_on_market_verified"])
+        self.assertFalse(r["research_trigger_met"])
+
+    def test_duplicate_property_under_different_official_urls(self):
+        first = BASE["listings"][0]
+        duplicate = {**first, "official_listing_url": URL + "/alternate",
+                     "address": "  TEST  "}
+        second = reo.screen({**BASE, "listings": [first, duplicate]})["listings"][1]
+        self.assertIn("duplicate_listing", second["blocking_reasons"])
+
+    def test_sourced_math_not_released_for_unqualified_listing(self):
+        x = {"closed_comps": [{"property_address": f"Fictional Sold {i}",
+              "source_url": URL + str(i), "closed_on": "2026-09-01",
+              "sold_price": 200000} for i in range(3)],
+             "arv": 200000, "arv_source_url": URL,
+             "repairs_low": 10000, "repairs_high": 20000,
+             "repair_quote_source_url": URL, "repair_quote_checked_on": "2026-11-13",
+             "acquisition_cost": 3000, "selling_cost": 9000,
+             "holding_cost": 3000, "uncertainty_reserve": 5000}
+        r = reo.screen({**BASE, "listings": [{**BASE["listings"][0], "underwriting": x}]})["listings"][0]
+        self.assertFalse(r["underwriting"]["ready"])
+        self.assertIsNone(r["underwriting"]["scenario_max_offer"])
 
     def test_missing_authoritative_check(self):
         r = reo.screen({**BASE, "listings": [{
