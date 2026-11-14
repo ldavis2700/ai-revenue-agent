@@ -71,7 +71,7 @@ class BusinessFinancingPacketTests(unittest.TestCase):
         # All three optional loan-term fields must meet the same documented
         # evidence reference standard as mandatory financing facts.
         for field in ("annual_interest_rate_pct", "term_months", "upfront_fees"):
-            for bad in (["unverified"], {"ref": "fictional"}, "  ", "bad\\nref", "x" * 513):
+            for bad in (["unverified"], {"ref": "fictional"}, "  ", "bad\nref", "x" * 513):
                 with self.subTest(field=field, source_type=type(bad).__name__):
                     profile = self._documented_repayment_profile()
                     profile["evidence"][field]["source"] = bad
