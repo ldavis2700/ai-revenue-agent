@@ -10,6 +10,7 @@ import json
 from datetime import date
 from math import isfinite
 from pathlib import Path
+import os
 
 REQUIRED = (
     "legal_business_name", "entity_type", "state", "industry",
@@ -26,6 +27,28 @@ OFFICIAL_SOURCES = {
     "SBA Lender Match": "https://www.sba.gov/loans/lender-match/",
 }
 ALLOWED_STATUS = {"documented", "owner_attested", "missing"}
+
+def write_private_output(destination: Path, payload: str) -> None:
+    """Create a private new file outside the checkout, never overwrite or follow links.
+
+    Financing reports may include confidential business facts and private evidence
+    pointers. Even explicit command-line destinations must not write them to Git.
+    """
+    path = Path(destination)
+    repo_root = Path(__file__).resolve().parents[1]
+    if not path.is_absolute():
+        raise ValueError("Financing output must use an absolute private path")
+    parent = path.parent.resolve(strict=True)
+    if (not parent.is_dir() or parent == repo_root or repo_root in parent.parents
+            or path.absolute() != path.resolve(strict=False)):
+        raise ValueError("Financing output must be outside checkout and symlink-free")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as target:
+        target.write(payload)
+
 
 def assess(profile: dict) -> dict:
     if not isinstance(profile, dict):
@@ -106,7 +129,7 @@ def main() -> None:
     report = assess(json.loads(args.profile_json.read_text(encoding="utf-8")))
     payload = json.dumps(report, indent=2, sort_keys=True)
     if args.output:
-        args.output.write_text(payload + "\n", encoding="utf-8")
+        write_private_output(args.output, payload + "\n")
     else:
         print(payload)
 
