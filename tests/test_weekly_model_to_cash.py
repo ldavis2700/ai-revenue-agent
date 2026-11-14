@@ -24,6 +24,9 @@ class WeeklyModelTests(unittest.TestCase):
    "estimated_direct_cost_cents":2500,
    "estimated_support_cost_cents":500,
    "estimated_platform_fee_cents":250,
+   "estimated_acquisition_cost_cents":0,
+   "estimated_hosting_cost_cents":0,
+   "estimated_opportunity_cost_cents":0,
    "external_credentials_verified":True,
    "buyer_evidence_url":"https://example.org/authorized-buyer-archive",
    "payment_rail_evidence_url":"https://example.org/verified-provider-terms"}
@@ -107,6 +110,37 @@ class WeeklyModelTests(unittest.TestCase):
   self.good["estimated_support_cost_cents"]=1000
   self.good["estimated_platform_fee_cents"]=1000
   self.assertEqual(w.evaluate(self.good,self.now)["estimated_contribution_cents"],5500)
+ def test_unpriced_acquisition_hosting_or_opportunity_costs_block_selection(self):
+  for key in ("estimated_acquisition_cost_cents", "estimated_hosting_cost_cents",
+              "estimated_opportunity_cost_cents"):
+   with self.subTest(key=key):
+    item=self.ready_candidate()
+    del item[key]
+    result=w.weekly_report([item],self.now)
+    self.assertEqual(result["ranked_preparation_candidates"],[])
+    self.assertIn("missing:"+key,result["all_evaluations"][0]["reasons"])
+
+ def test_acquisition_hosting_and_opportunity_costs_deducted_in_failure_case(self):
+  # Synthetic illustration only: 23 marketplace credits at $0.15 = $3.45.
+  item=self.ready_candidate(estimated_acquisition_cost_cents=345,
+                            estimated_hosting_cost_cents=200,
+                            estimated_opportunity_cost_cents=600)
+  result=w.weekly_report([item],self.now)["ranked_preparation_candidates"][0]
+  self.assertEqual(result["estimated_contribution_cents"],5605)
+  self.assertEqual(result["execution"]["estimated_expected_contribution_cents"],605)
+  self.assertEqual(result["execution"]["estimated_expected_cents_per_hour"],302)
+  self.assertFalse(result["execution"]["estimate_is_collected_cash"])
+
+ def test_new_cost_fields_reject_boolean_and_negative(self):
+  for key in ("estimated_acquisition_cost_cents", "estimated_hosting_cost_cents",
+              "estimated_opportunity_cost_cents"):
+   for value in (True, -1, "0"):
+    with self.subTest(key=key,value=value):
+     item=self.ready_candidate(**{key:value})
+     result=w.evaluate(item,self.now)
+     self.assertIn("nonnegative_integer_"+key+"_required",result["reasons"])
+     self.assertIsNone(result["estimated_contribution_cents"])
+
  def test_buyer_and_payment_provider_evidence_links(self):
   self.good["buyer_evidence_url"]=""
   self.assertIn("buyer_evidence_url_required",w.evaluate(self.good,self.now)["reasons"])
