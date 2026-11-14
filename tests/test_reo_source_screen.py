@@ -68,7 +68,7 @@ class ScreenTests(unittest.TestCase):
         self.assertEqual(r["screen_status"], "excluded")
 
     def test_sourced_arv_cost_scenario_is_not_offer(self):
-        x = {"closed_comps": [{"source_url": URL + str(i), "closed_on": "2026-06-01", "sold_price": 200000} for i in range(3)],
+        x = {"closed_comps": [{"property_address": f"Fictional Sold Home {i}", "source_url": URL + str(i), "closed_on": "2026-06-01", "sold_price": 200000} for i in range(3)],
             "arv": 200000, "arv_source_url": URL,
             "repairs_low": 10000, "repairs_high": 25000, "repair_quote_source_url": URL,
             "repair_quote_checked_on": "2026-11-12", "acquisition_cost": 5000,
@@ -79,7 +79,7 @@ class ScreenTests(unittest.TestCase):
         self.assertFalse(r["external_action_allowed"])
 
     def test_duplicate_closed_comps_fail(self):
-        x = {"closed_comps": [{"source_url": URL, "closed_on": "2026-06-01", "sold_price": 200000} for _ in range(3)],
+        x = {"closed_comps": [{"property_address": "Fictional Duplicate Home", "source_url": URL, "closed_on": "2026-06-01", "sold_price": 200000} for _ in range(3)],
             "arv": 200000, "arv_source_url": URL,
             "repairs_low": 10000, "repairs_high": 25000, "repair_quote_source_url": URL,
             "repair_quote_checked_on": "2026-11-12", "acquisition_cost": 5000,
@@ -87,6 +87,55 @@ class ScreenTests(unittest.TestCase):
         result = reo.screen({**BASE, "listings": [{**BASE["listings"][0], "underwriting": x}]})
         self.assertFalse(result["listings"][0]["underwriting"]["ready"])
         self.assertIn("duplicate_closed_comp_source", result["listings"][0]["underwriting"]["reasons"])
+
+    def test_distinct_urls_same_property_fail_closed(self):
+        comps = [
+            {"property_address": " 123 Fictional Street ", "source_url": URL + str(i),
+             "closed_on": "2026-06-01", "sold_price": 200000}
+            for i in range(3)
+        ]
+        comps[1]["property_address"] = "123  FICTIONAL street"
+        comps[2]["property_address"] = "Other Fictional Street"
+        x = {"closed_comps": comps, "arv": 200000, "arv_source_url": URL,
+             "repairs_low": 10000, "repairs_high": 25000,
+             "repair_quote_source_url": URL, "repair_quote_checked_on": "2026-11-12",
+             "acquisition_cost": 5000, "selling_cost": 10000,
+             "holding_cost": 5000, "uncertainty_reserve": 5000}
+        r = reo.screen({**BASE, "listings": [{**BASE["listings"][0], "underwriting": x}]})["listings"][0]
+        self.assertFalse(r["underwriting"]["ready"])
+        self.assertIn("duplicate_closed_comp_property", r["underwriting"]["reasons"])
+        self.assertIsNone(r["underwriting"]["scenario_max_offer"])
+
+    def test_malformed_unhashable_comp_source_fails_closed_not_exception(self):
+        comps = [
+            {"property_address": f"Fictional Sold Home {i}", "source_url": URL + str(i),
+             "closed_on": "2026-06-01", "sold_price": 200000}
+            for i in range(3)
+        ]
+        comps[1]["source_url"] = ["not", "a", "url"]
+        x = {"closed_comps": comps, "arv": 200000, "arv_source_url": URL,
+             "repairs_low": 10000, "repairs_high": 25000,
+             "repair_quote_source_url": URL, "repair_quote_checked_on": "2026-11-12",
+             "acquisition_cost": 5000, "selling_cost": 10000,
+             "holding_cost": 5000, "uncertainty_reserve": 5000}
+        r = reo.screen({**BASE, "listings": [{**BASE["listings"][0], "underwriting": x}]})["listings"][0]
+        self.assertFalse(r["underwriting"]["ready"])
+        self.assertIn("invalid_closed_comp_evidence", r["underwriting"]["reasons"])
+
+    def test_extreme_finite_arv_fails_closed_not_exception(self):
+        x = {"closed_comps": [
+                {"property_address": f"Fictional Sold Home {i}",
+                 "source_url": URL + str(i), "closed_on": "2026-06-01",
+                 "sold_price": 200000} for i in range(3)],
+             "arv": "1e200", "arv_source_url": URL,
+             "repairs_low": 10000, "repairs_high": 25000,
+             "repair_quote_source_url": URL, "repair_quote_checked_on": "2026-11-12",
+             "acquisition_cost": 5000, "selling_cost": 10000,
+             "holding_cost": 5000, "uncertainty_reserve": 5000}
+        r = reo.screen({**BASE, "listings": [{**BASE["listings"][0], "underwriting": x}]})["listings"][0]
+        self.assertFalse(r["underwriting"]["ready"])
+        self.assertIn("scenario_arithmetic_out_of_range", r["underwriting"]["reasons"])
+        self.assertIsNone(r["underwriting"]["scenario_max_offer"])
 
     def test_false_and_negative_financials_fail(self):
         x = {"arv": False, "arv_source_url": URL, "repairs_low": -1}

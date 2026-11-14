@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, Overflow
 from urllib.parse import urlparse
 
 
@@ -48,12 +48,25 @@ def underwrite(item: dict, cutoff: date) -> dict:
     if not isinstance(comps, list) or len(comps) < 3:
         reasons.append("at_least_three_sourced_closed_comps_required")
     else:
+        comp_urls, comp_properties = [], []
         for c in comps:
-            if not isinstance(c, dict) or not source_url(c.get("source_url")) or not dated(c.get("closed_on"), cutoff) or amount(c.get("sold_price")) is None:
+            if not isinstance(c, dict):
                 reasons.append("invalid_closed_comp_evidence")
                 break
-        if len({c.get("source_url") for c in comps if isinstance(c, dict)}) != len(comps):
-            reasons.append("duplicate_closed_comp_source")
+            address = c.get("property_address")
+            if (not source_url(c.get("source_url"))
+                    or not dated(c.get("closed_on"), cutoff)
+                    or amount(c.get("sold_price")) is None
+                    or not isinstance(address, str) or not address.strip()):
+                reasons.append("invalid_closed_comp_evidence")
+                break
+            comp_urls.append(c["source_url"])
+            comp_properties.append(" ".join(address.casefold().split()))
+        if len(comp_urls) == len(comps):
+            if len(set(comp_urls)) != len(comp_urls):
+                reasons.append("duplicate_closed_comp_source")
+            if len(set(comp_properties)) != len(comp_properties):
+                reasons.append("duplicate_closed_comp_property")
     arv = amount(x.get("arv"))
     if arv is None or not source_url(x.get("arv_source_url")):
         reasons.append("verified_arv_missing")
@@ -67,8 +80,14 @@ def underwrite(item: dict, cutoff: date) -> dict:
         reasons.append("local_repair_quote_unverified")
     if reasons:
         return {"ready": False, "reasons": reasons, "scenario_max_offer": None}
-    cap = Decimal("0.70") * arv - numbers["repairs_high"] - numbers["acquisition_cost"] - numbers["selling_cost"] - numbers["holding_cost"] - numbers["uncertainty_reserve"]
-    return {"ready": True, "reasons": [], "scenario_max_offer": str(max(Decimal("0"), cap).quantize(Decimal("0.01"))), "label": "illustrative_70_percent_of_arv_screen_not_an_offer"}
+    try:
+        cap = Decimal("0.70") * arv - numbers["repairs_high"] - numbers["acquisition_cost"] - numbers["selling_cost"] - numbers["holding_cost"] - numbers["uncertainty_reserve"]
+        if not cap.is_finite():
+            raise InvalidOperation("nonfinite scenario")
+        scenario = str(max(Decimal("0"), cap).quantize(Decimal("0.01")))
+    except (InvalidOperation, Overflow, OverflowError):
+        return {"ready": False, "reasons": ["scenario_arithmetic_out_of_range"], "scenario_max_offer": None}
+    return {"ready": True, "reasons": [], "scenario_max_offer": scenario, "label": "illustrative_70_percent_of_arv_screen_not_an_offer"}
 
 
 def screen(payload: dict) -> dict:
