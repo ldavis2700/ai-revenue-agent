@@ -97,7 +97,12 @@ def screen(payload: dict) -> dict:
         listed_on = (dated(item.get("first_listed_on"), cutoff)
                      if item.get("first_listed_verified") is True and source_url(item.get("first_listed_source_url"))
                      else None)
-        days = (cutoff - listed_on).days if listed_on else None
+        # Elapsed calendar days do not prove continuous on-market exposure.
+        elapsed_days = (cutoff - listed_on).days if listed_on else None
+        continuous_dom = (item.get("continuous_listing_verified") is True
+                          and source_url(item.get("continuous_listing_source_url"))
+                          and dated(item.get("continuous_listing_checked_on"), cutoff))
+        days = elapsed_days if continuous_dom else None
         history = item.get("price_history") or []
         cuts = 0
         last = None
@@ -110,7 +115,8 @@ def screen(payload: dict) -> dict:
             if last is not None and price < last:
                 cuts += 1
             last = price
-        if not valid_history or (history and (last != current_price or [h["dated_on"] for h in history] != sorted(h["dated_on"] for h in history))):
+        dates = [h["dated_on"] for h in history] if valid_history else []
+        if not valid_history or (history and (last != current_price or dates != sorted(dates) or len(dates) != len(set(dates)))):
             cuts = 0
             issues.append("price_history_not_verified")
         if not ((days is not None and days >= 90) or cuts >= 2):
@@ -119,6 +125,7 @@ def screen(payload: dict) -> dict:
                         else {"ready": False, "reasons": ["investor_eligibility_not_confirmed_or_prohibited"], "scenario_max_offer": None})
         # No deal is ever auto-qualified; transaction/title/inspection and buyer gates are separate.
         rows.append({"address": item.get("address"), "official_listing_url": link, "asking_price": str(current_price) if current_price is not None else None,
+            "calendar_days_since_first_listing": elapsed_days,
             "days_on_market_verified": days, "verified_price_cuts": cuts,
             "research_trigger_met": (days is not None and days >= 90) or cuts >= 2,
             "screen_status": "excluded" if "investor_purchase_prohibited" in issues else ("needs_evidence" if issues else "research_only_candidate"),
