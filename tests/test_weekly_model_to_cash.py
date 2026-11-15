@@ -189,10 +189,11 @@ class WeeklyModelTests(unittest.TestCase):
   self.assertEqual(x["capacity_admission"]["proposed_preparation_reservations"],[])
 
  def operator_capacity(self, **changes):
-  info={"total_available_minutes":500,"funded_obligations_minutes":80,
+  info={"total_available_minutes":540,"haeven_reserved_minutes":40,"funded_obligations_minutes":80,
         "existing_active_experiments_minutes":60,"qa_support_security_reserve_minutes":120,
         "capacity_evidence_url":"https://example.org/private-capacity-receipt",
-        "checked_at":self.now.isoformat(),"funded_work_protected":True,
+        "checked_at":self.now.isoformat(),"haeven_priority_protected":True,
+        "funded_work_protected":True,
         "qa_support_protected":True,"zero_new_spend_verified":True,
         "channels_and_permissions_verified":True,"active_model_ids":[]}
   info.update(changes)
@@ -207,21 +208,28 @@ class WeeklyModelTests(unittest.TestCase):
   self.assertEqual(len(plan["proposed_preparation_reservations"]),2)
   self.assertEqual(plan["remaining_minutes"],0)
   self.assertEqual(len(plan["not_reserved_model_ids"]),1)
-  wide=w.weekly_report(items,self.now,capacity=self.operator_capacity(total_available_minutes=620))
+  wide=w.weekly_report(items,self.now,capacity=self.operator_capacity(total_available_minutes=660))
   self.assertEqual(len(wide["capacity_admission"]["proposed_preparation_reservations"]),3)
   self.assertFalse(wide["capacity_admission"]["external_actions_authorized"])
   self.assertFalse(wide["capacity_admission"]["source_contents_verified"])
   self.assertFalse(wide["capacity_admission"]["active_experiments_started"])
+  heavier_haeven=w.weekly_report(items,self.now,capacity=self.operator_capacity(haeven_reserved_minutes=160))
+  self.assertEqual(len(heavier_haeven["capacity_admission"]["proposed_preparation_reservations"]),1)
+  self.assertEqual(heavier_haeven["capacity_admission"]["remaining_minutes"],0)
 
  def test_capacity_fails_closed_for_stale_invalid_or_overcommitted_evidence(self):
   items=[self.ready_candidate()]
   cases=[self.operator_capacity(checked_at=(self.now-timedelta(days=2)).isoformat()),
          self.operator_capacity(total_available_minutes=True),
+         self.operator_capacity(haeven_reserved_minutes=True),
+         self.operator_capacity(haeven_reserved_minutes=10000),
+         self.operator_capacity(haeven_priority_protected=False),
          self.operator_capacity(total_available_minutes=100),
          self.operator_capacity(capacity_evidence_url="not-a-url"),
          self.operator_capacity(qa_support_protected=False),
          self.operator_capacity(active_model_ids=["duplicate","duplicate"]),
-         {k:v for k,v in self.operator_capacity().items() if k!="active_model_ids"}]
+         {k:v for k,v in self.operator_capacity().items() if k!="active_model_ids"},
+         {k:v for k,v in self.operator_capacity().items() if k!="haeven_reserved_minutes"}]
   for case in cases:
    with self.subTest(case=case):
     result=w.weekly_report(items,self.now,capacity=case)["capacity_admission"]
