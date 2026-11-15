@@ -1,0 +1,42 @@
+{
+  "project_id": "fictional-creative-handoff-001",
+  "client_context_id": "fictional-client-context-001",
+  "client_label": "Fictional Local Home Services",
+  "task_name": "Review a customer FAQ promotional concept",
+  "track": "ad",
+  "client_context_approved": false,
+  "reviewers": {
+    "strategy": "Strategy lead",
+    "production": "Creative editor",
+    "quality_review": "QA reviewer"
+  },
+  "sources": [
+    {
+      "id": "fictional-owner-brief-v1",
+      "client_context_id": "fictional-client-context-001",
+      "captured_on": "2026-11-13",
+      "state": "useful",
+      "summary": "Fictional service FAQ request with no real customer data",
+      "duplicate_of": null,
+      "reuse_rights_verified": true
+    },
+    {
+      "id": "fictional-old-draft",
+      "client_context_id": "fictional-client-context-001",
+      "captured_on": "2026-09-01",
+      "state": "outdated",
+      "summary": "Outdated fictional copy requiring fresh review",
+      "duplicate_of": null,
+      "reuse_rights_verified": false
+    },
+    {
+      "id": "fictional-duplicate",
+      "client_context_id": "fictional-client-context-001",
+      "captured_on": "2026-11-13",
+      "state": "duplicate",
+      "summary": "Duplicate pointer to the original fictional brief",
+      "duplicate_of": "fictional-owner-brief-v1",
+      "reuse_rights_verified": true
+    }
+  ]
+}
