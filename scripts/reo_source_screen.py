@@ -178,6 +178,12 @@ def investor_program_window_issues(item: dict, cutoff: date) -> list[str]:
     program = item.get("reo_program")
     if program not in phases:
         return []
+    # Identifiers are still operator supplied. Requiring an exact match makes
+    # the property-specific source association auditable, not authenticated.
+    asset_id = item.get("official_asset_id")
+    if (not isinstance(asset_id, str) or len(asset_id.strip()) < 4
+            or item.get("investor_phase_asset_id") != asset_id):
+        return ["investor_program_window_unverified"]
     if (item.get("investor_phase") != phases[program]
             or item.get("investor_phase_verified") is not True
             or dated(item.get("investor_eligible_from"), cutoff) is None
