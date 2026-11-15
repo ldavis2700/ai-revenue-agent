@@ -164,6 +164,29 @@ def underwrite(item: dict, cutoff: date) -> dict:
     return {"ready": True, "reasons": [], "scenario_max_offer": scenario, "label": "illustrative_70_percent_of_arv_screen_not_an_offer"}
 
 
+def investor_program_window_issues(item: dict, cutoff: date) -> list[str]:
+    """Require listing-specific proof that a protected buyer period has ended.
+
+    A general program FAQ or an agent's claim that investors are permitted is
+    not itself proof that the CURRENT property has cleared First Look or
+    HUD's exclusive period. Do not infer eligibility from an elapsed 30/15
+    day calendar estimate; only a freshly checked listing-specific phase can
+    clear this extra research gate. This does not submit a bid.
+    """
+    phases = {"fannie_homepath": "first_look_expired",
+              "hud_home_store": "extended_listing"}
+    program = item.get("reo_program")
+    if program not in phases:
+        return []
+    if (item.get("investor_phase") != phases[program]
+            or item.get("investor_phase_verified") is not True
+            or dated(item.get("investor_eligible_from"), cutoff) is None
+            or not source_url(item.get("investor_phase_source_url"))
+            or not recent_check(item.get("investor_phase_checked_on"), cutoff)):
+        return ["investor_program_window_unverified"]
+    return []
+
+
 def screen(payload: dict) -> dict:
     cutoff = date.fromisoformat(payload["as_of"])
     rows, seen = [], set()
@@ -192,6 +215,7 @@ def screen(payload: dict) -> dict:
         elif (not source_url(item.get("investor_eligibility_source_url"))
               or not recent_check(item.get("investor_eligibility_checked_on"), cutoff)):
             issues.append("investor_eligibility_evidence_missing_or_stale")
+        issues.extend(investor_program_window_issues(item, cutoff))
         current_price = amount(item.get("asking_price"))
         if current_price is None or current_price == 0:
             issues.append("current_ask_missing")
