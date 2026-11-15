@@ -9,9 +9,9 @@ import json
 from math import expm1, isfinite, log1p
 from pathlib import Path
 try:
-    from scripts.business_financing_readiness import assess, write_private_output
+    from scripts.business_financing_readiness import assess, write_private_output, read_private_profile
 except ModuleNotFoundError:
-    from business_financing_readiness import assess, write_private_output
+    from business_financing_readiness import assess, write_private_output, read_private_profile
 
 SECTIONS = (
     ("Business identity", ("legal_business_name", "entity_type", "state", "operating_since")),
@@ -201,7 +201,7 @@ def main():
     p.add_argument("profile_json", type=Path)
     p.add_argument("--output", type=Path, required=True)
     a = p.parse_args()
-    profile = json.loads(a.profile_json.read_text(encoding="utf-8"))
+    profile = read_private_profile(a.profile_json)
     packet = render(profile)
     write_private_output(a.output, packet)
     print("Created local review packet; no lender contacted.")
