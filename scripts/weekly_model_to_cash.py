@@ -271,7 +271,7 @@ def capacity_review(eligible, capacity, now):
         base["reasons"].append("current_capacity_record_required")
         return base
     reasons = []
-    required_minutes = ("total_available_minutes", "funded_obligations_minutes",
+    required_minutes = ("total_available_minutes", "haeven_reserved_minutes", "funded_obligations_minutes",
                         "existing_active_experiments_minutes", "qa_support_security_reserve_minutes")
     for key in required_minutes:
         value = capacity.get(key)
@@ -285,7 +285,7 @@ def capacity_review(eligible, capacity, now):
             reasons.append("capacity_check_must_be_current")
     except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
         reasons.append("invalid_capacity_check_time")
-    for key in ("funded_work_protected", "qa_support_protected", "zero_new_spend_verified",
+    for key in ("haeven_priority_protected", "funded_work_protected", "qa_support_protected", "zero_new_spend_verified",
                 "channels_and_permissions_verified"):
         if capacity.get(key) is not True:
             reasons.append(key + "_required")
@@ -297,6 +297,7 @@ def capacity_review(eligible, capacity, now):
         active_ids = []
     if not reasons:
         remaining = (capacity["total_available_minutes"]
+                     - capacity["haeven_reserved_minutes"]
                      - capacity["funded_obligations_minutes"]
                      - capacity["existing_active_experiments_minutes"]
                      - capacity["qa_support_security_reserve_minutes"])
