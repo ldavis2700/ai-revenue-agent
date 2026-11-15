@@ -19,7 +19,7 @@ On November 10, connected account tools returned:
 1. Fulfill existing paid obligations and genuine buyer requests first.
 2. Establish a working content-to-inquiry-to-delivery-to-payment path for the existing AI customer-response service.
 3. Use the existing YouTube channel as the initial original-content base.
-4. Add at most two unvalidated channel/offer experiments concurrently; broaden after evidence.
+4. Apply the November 14 owner-approved **capacity-based admission policy with no fixed numeric experiment cap**. Preserve funded buyer work and HAEVEN priority, then verify independent demand, original deliverability, available no-new-spend resources, QA/support/security/settlement reserves, lawful acquisition and a bounded stop/review plan before activating each additional unvalidated channel or offer. Keep insufficiently evidenced candidates in the ranked preparation backlog; never launch merely to increase model count.
 5. Research every plausible platform, but activate only those with audience fit, permissible operations, manageable cost and a real revenue path.
 6. Preserve the existing Stripe deferral and zero paid-ad budget. No subscriptions, ad spend, Connect purchases or paid generation without applicable authorization.
 7. A blocked account should not stop permitted work on other channels. Never disable the wealth workflow voluntarily.
