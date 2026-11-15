@@ -38,6 +38,8 @@ class FinancingCliPrivacyTests(unittest.TestCase):
                 "legal_business_name": "SYNTHETIC_PRIVATE_BUSINESS",
                 "evidence": {"legal_business_name": {"status": "owner_attested"}},
             }), encoding="utf-8")
+            # The CLI now rejects group/world-readable owner profiles.
+            source.chmod(0o600)
             captured = io.StringIO()
             with patch.object(sys, "argv", ["readiness", str(source), "--output", str(dest)]):
                 with contextlib.redirect_stdout(captured):
