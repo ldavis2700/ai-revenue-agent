@@ -19,7 +19,9 @@ Run only with an authorized local JSON file containing nonsensitive, factual bus
 
 Fields: `legal_business_name`, `entity_type`, `state`, `industry`, `business_description`, `operating_since`, `use_of_funds`, `requested_amount`, `annual_revenue`, `annual_net_income`, `existing_annual_debt_service`, `source_documents`. The `evidence` object maps each field to `{"status":"documented","source":"private_reference"}` or `{"status":"owner_attested"}`. Missing evidence is a gap, not confirmation. Never commit input/output files containing actual business details or personal financial data.
 
-Both financing command-line tools require an **absolute path to an existing regular profile JSON file outside the repository**, owned by the invoking account, with no group/world permissions or symlink path components. Keep the input file owner-only (`0600` on POSIX systems) and the output private. The CLI rejects unsafe paths before reading private contents. This is a local privacy safeguard, not an authorization to submit borrower records.\n\nDo not pass SSNs, EINs, DOBs, account numbers or tax documents into this tool. If a lender later needs such materials, use its trusted secure portal after explicit owner authorization and the lender's instructions.
+Both financing command-line tools require an **absolute path to an existing regular profile JSON file outside the repository**, owned by the invoking account, with no group/world permissions or symlink path components. Keep the input file owner-only (`0600` on POSIX systems) and the output private. The CLI rejects unsafe paths before reading private contents. This is a local privacy safeguard, not an authorization to submit borrower records.
+
+Do not pass SSNs, EINs, DOBs, account numbers or tax documents into this tool. If a lender later needs such materials, use its trusted secure portal after explicit owner authorization and the lender's instructions.
 
 ## Lender source anchors (check current rules at every review)
 - https://www.sba.gov/loans/7a-loans/
