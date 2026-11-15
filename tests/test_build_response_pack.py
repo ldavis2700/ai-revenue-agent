@@ -68,5 +68,10 @@ class ResponsePackTests(unittest.TestCase):
             self.assertEqual(out.stat().st_mode & 0o777, 0o700)
 
 
+# Existing CI runs this file by name. Import the independent audit suite so all
+# integrity and tamper regressions also execute in the established CI job.
+from test_audit_response_pack import AuditResponsePackTests  # noqa: F401
+
+
 if __name__ == '__main__':
     unittest.main()
