@@ -22,6 +22,8 @@ BASE = {
     "investor_purchase_permitted": True,
     "investor_eligibility_source_url": URL,
     "investor_eligibility_checked_on": AS_OF,
+    "official_asset_id": "FICT-123",
+    "investor_phase_asset_id": "FICT-123",
     "first_listed_on": "2026-07-01",
     "first_listed_verified": True,
     "first_listed_source_url": URL,
@@ -86,6 +88,16 @@ class InvestorPhaseTests(unittest.TestCase):
         result = screened(item)
         self.assertEqual(result["screen_status"], "research_only_candidate")
         self.assertFalse(result["external_action_allowed"])
+
+    def test_cross_property_phase_evidence_is_rejected(self):
+        item = {**BASE, "reo_program": "fannie_homepath",
+                "investor_phase": "first_look_expired",
+                "investor_phase_verified": True,
+                "investor_eligible_from": "2026-11-10",
+                "investor_phase_source_url": URL,
+                "investor_phase_checked_on": AS_OF,
+                "investor_phase_asset_id": "DIFFERENT-ASSET"}
+        self.assertIn("investor_program_window_unverified", screened(item)["blocking_reasons"])
 
     def test_unknown_or_other_portal_does_not_infer_a_program_phase(self):
         result = screened(BASE)
