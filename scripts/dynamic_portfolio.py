@@ -9,7 +9,10 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from business_model_intelligence import load_catalog, rank_models, pursuit_plan
+try:
+    from .business_model_intelligence import load_catalog, rank_models, pursuit_plan
+except ImportError:
+    from business_model_intelligence import load_catalog, rank_models, pursuit_plan
 
 def decide(models, capacity=None, active_ids=()):
     """Deterministic portfolio proposal with zero default admission."""
