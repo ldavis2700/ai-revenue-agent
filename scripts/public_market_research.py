@@ -305,7 +305,8 @@ def review_queue(db, candidates, clock=time.time):
                           'Define one bounded experiment, success metric, cost/time cap and stop rule; record results before scaling.',
                       ],
                       'external_actions_allowed':False})
-        if len(queue)==2:break
+        # Study the supplied ranked batch without imposing a global active-experiment
+        # ceiling. These are research briefs only; admission remains a separate gate.
     return queue
 
 
