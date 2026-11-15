@@ -272,7 +272,8 @@ def capacity_review(eligible, capacity, now):
         return base
     reasons = []
     required_minutes = ("total_available_minutes", "haeven_reserved_minutes", "funded_obligations_minutes",
-                        "existing_active_experiments_minutes", "qa_support_security_reserve_minutes")
+                        "existing_active_experiments_minutes", "qa_support_security_reserve_minutes",
+                        "settlement_reconciliation_reserve_minutes")
     for key in required_minutes:
         value = capacity.get(key)
         if type(value) is not int or not 0 <= value <= 10000000:
@@ -285,7 +286,8 @@ def capacity_review(eligible, capacity, now):
             reasons.append("capacity_check_must_be_current")
     except (KeyError, TypeError, ValueError, AttributeError, OverflowError):
         reasons.append("invalid_capacity_check_time")
-    for key in ("haeven_priority_protected", "funded_work_protected", "qa_support_protected", "zero_new_spend_verified",
+    for key in ("haeven_priority_protected", "funded_work_protected", "qa_support_protected", "settlement_reconciliation_protected",
+                "zero_new_spend_verified",
                 "channels_and_permissions_verified"):
         if capacity.get(key) is not True:
             reasons.append(key + "_required")
@@ -300,7 +302,8 @@ def capacity_review(eligible, capacity, now):
                      - capacity["haeven_reserved_minutes"]
                      - capacity["funded_obligations_minutes"]
                      - capacity["existing_active_experiments_minutes"]
-                     - capacity["qa_support_security_reserve_minutes"])
+                     - capacity["qa_support_security_reserve_minutes"]
+                     - capacity["settlement_reconciliation_reserve_minutes"])
         if remaining < 0:
             reasons.append("available_capacity_overcommitted")
     if reasons:
