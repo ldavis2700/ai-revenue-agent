@@ -123,6 +123,8 @@ class ContentHTTPTests(unittest.TestCase):
                 self.assertEqual(response.status,200)
                 self.assertIn('Free seven-day response gap audit',page)
                 self.assertIn('aggregate counts only',page)
+                self.assertIn('docs/cleaning-response-gap-audit.html',page)
+                self.assertIn('Download raw file',page)
                 self.assertIn('utm_source=railway',page)
                 self.assertNotIn('fetch(',page)
                 self.assertNotIn('localStorage',page)
