@@ -1,0 +1,23 @@
+[
+  {
+    "event_id": "fictional_quote_001",
+    "received_at": "2026-11-15T19:00:00Z",
+    "source": "web_form",
+    "category": "quote",
+    "request_summary": "Fictional lawn-care quote request"
+  },
+  {
+    "event_id": "fictional_quote_001",
+    "received_at": "2026-11-15T19:00:00Z",
+    "source": "web_form",
+    "category": "quote",
+    "request_summary": "Fictional duplicate event"
+  },
+  {
+    "event_id": "fictional_schedule_002",
+    "received_at": "2026-11-15T19:01:00Z",
+    "source": "inbox_notification",
+    "category": "scheduling",
+    "request_summary": "Fictional rescheduling question"
+  }
+]
