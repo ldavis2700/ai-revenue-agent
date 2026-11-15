@@ -9,7 +9,7 @@ import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from scripts.business_model_intelligence import load_catalog, rank_models, pursuit_plan
+from business_model_intelligence import load_catalog, rank_models, pursuit_plan
 
 def decide(models, capacity=None, active_ids=()):
     """Deterministic portfolio proposal with zero default admission."""
@@ -18,7 +18,7 @@ def decide(models, capacity=None, active_ids=()):
         "min_automation": 6,
     })
     plan = pursuit_plan(ranked, pursue_limit=min(len(ranked), 100))
-    candidates = plan.get("pursuits", [])
+    candidates = plan.get("pursue", [])
     if not isinstance(candidates, list) or not candidates:
         # Older pursuit_plan versions may use a different key; ranking is safe
         candidates = [m for m in ranked if m["eligible"]]
