@@ -189,12 +189,14 @@ class WeeklyModelTests(unittest.TestCase):
   self.assertEqual(x["capacity_admission"]["proposed_preparation_reservations"],[])
 
  def operator_capacity(self, **changes):
-  info={"total_available_minutes":540,"haeven_reserved_minutes":40,"funded_obligations_minutes":80,
+  info={"total_available_minutes":560,"haeven_reserved_minutes":40,"funded_obligations_minutes":80,
         "existing_active_experiments_minutes":60,"qa_support_security_reserve_minutes":120,
+        "settlement_reconciliation_reserve_minutes":20,
         "capacity_evidence_url":"https://example.org/private-capacity-receipt",
         "checked_at":self.now.isoformat(),"haeven_priority_protected":True,
         "funded_work_protected":True,
-        "qa_support_protected":True,"zero_new_spend_verified":True,
+        "qa_support_protected":True,"settlement_reconciliation_protected":True,
+        "zero_new_spend_verified":True,
         "channels_and_permissions_verified":True,"active_model_ids":[]}
   info.update(changes)
   return info
@@ -208,7 +210,7 @@ class WeeklyModelTests(unittest.TestCase):
   self.assertEqual(len(plan["proposed_preparation_reservations"]),2)
   self.assertEqual(plan["remaining_minutes"],0)
   self.assertEqual(len(plan["not_reserved_model_ids"]),1)
-  wide=w.weekly_report(items,self.now,capacity=self.operator_capacity(total_available_minutes=660))
+  wide=w.weekly_report(items,self.now,capacity=self.operator_capacity(total_available_minutes=680))
   self.assertEqual(len(wide["capacity_admission"]["proposed_preparation_reservations"]),3)
   self.assertFalse(wide["capacity_admission"]["external_actions_authorized"])
   self.assertFalse(wide["capacity_admission"]["source_contents_verified"])
@@ -223,13 +225,17 @@ class WeeklyModelTests(unittest.TestCase):
          self.operator_capacity(total_available_minutes=True),
          self.operator_capacity(haeven_reserved_minutes=True),
          self.operator_capacity(haeven_reserved_minutes=10000),
+         self.operator_capacity(settlement_reconciliation_reserve_minutes=True),
+         self.operator_capacity(settlement_reconciliation_reserve_minutes=10000),
+         self.operator_capacity(settlement_reconciliation_protected=False),
          self.operator_capacity(haeven_priority_protected=False),
          self.operator_capacity(total_available_minutes=100),
          self.operator_capacity(capacity_evidence_url="not-a-url"),
          self.operator_capacity(qa_support_protected=False),
          self.operator_capacity(active_model_ids=["duplicate","duplicate"]),
          {k:v for k,v in self.operator_capacity().items() if k!="active_model_ids"},
-         {k:v for k,v in self.operator_capacity().items() if k!="haeven_reserved_minutes"}]
+         {k:v for k,v in self.operator_capacity().items() if k!="haeven_reserved_minutes"},
+         {k:v for k,v in self.operator_capacity().items() if k!="settlement_reconciliation_reserve_minutes"}]
   for case in cases:
    with self.subTest(case=case):
     result=w.weekly_report(items,self.now,capacity=case)["capacity_admission"]
