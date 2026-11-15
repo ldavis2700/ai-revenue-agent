@@ -76,6 +76,43 @@ def write_private_output(destination: Path, payload: str) -> None:
         target.write(payload)
 
 
+
+def read_private_profile(input_path: Path) -> dict:
+    """Load only an absolute, owner-only regular file outside the checkout.
+
+    CLI invocations must meet the same privacy boundary as the scheduled
+    financing worker. Reject symlink components, group/world-readable inputs
+    and repository files before reading any potentially sensitive contents.
+    """
+    import stat
+    candidate = Path(input_path)
+    repo_root = Path(__file__).resolve().parents[1]
+    try:
+        resolved = candidate.resolve(strict=True)
+        metadata = resolved.stat()
+        secure = (
+            candidate.is_absolute()
+            and candidate.absolute() == resolved
+            and stat.S_ISREG(metadata.st_mode)
+            and (metadata.st_mode & (stat.S_IRWXG | stat.S_IRWXO)) == 0
+            and hasattr(os, "getuid")
+            and metadata.st_uid == os.getuid()
+            and resolved != repo_root
+            and repo_root not in resolved.parents
+        )
+    except (OSError, ValueError, RuntimeError):
+        secure = False
+    if not secure:
+        raise ValueError("Financing input must be an absolute, owner-only regular file outside checkout")
+    try:
+        profile = json.loads(resolved.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        raise ValueError("Private financing input is unreadable or invalid JSON") from None
+    if not isinstance(profile, dict):
+        raise ValueError("Private financing input must contain an object")
+    return profile
+
+
 def assess(profile: dict) -> dict:
     if not isinstance(profile, dict):
         raise ValueError("Input profile must be a JSON object")
@@ -165,7 +202,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True,
                         help="Required absolute path to new owner-only file outside repository")
     args = parser.parse_args()
-    report = assess(json.loads(args.profile_json.read_text(encoding="utf-8")))
+    report = assess(read_private_profile(args.profile_json))
     payload = json.dumps(report, indent=2, sort_keys=True)
     # Never print applicant financial facts to terminal, cron, CI, or worker logs.
     write_private_output(args.output, payload + "\n")
