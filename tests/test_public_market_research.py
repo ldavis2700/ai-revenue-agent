@@ -140,7 +140,7 @@ class PublicResearchTests(unittest.TestCase):
                     {'id':'another','name':'Workflow business research'}]
         with research.connect(self.path) as db:
             queue=research.review_queue(db,candidates,clock=lambda:now+1)
-            self.assertEqual([i['model_id'] for i in queue],['workflow_audit','research_reports'])
+            self.assertEqual([i['model_id'] for i in queue],['workflow_audit','research_reports','another'])
             self.assertIsNone(queue[1]['references'][0]['publisher_date'])
             self.assertEqual(queue[0]['references'][0]['publication_freshness'],'current')
             self.assertEqual(queue[1]['references'][0]['publication_freshness'],'undated_requires_verification')
@@ -177,12 +177,21 @@ class PublicResearchTests(unittest.TestCase):
         candidates.insert(0,{'id':'blocked','name':'Workflow audit','eligible':False})
         with sqlite3.connect(':memory:') as db:
             result=research.review_queue(db,candidates)
-        self.assertEqual([r['model_id'] for r in result],['0','1'])
+        self.assertEqual([r['model_id'] for r in result],[str(i) for i in range(5)])
         self.assertTrue(all(not r['external_actions_allowed'] for r in result))
         self.assertTrue(all(len(r['validation_requirements'])==5 for r in result))
         plan=mission_control.run(self.path)
         self.assertTrue(any(p['action']=='review_public_market_signals' for p in plan['plan']))
         self.assertEqual(plan['business_model_intelligence']['ledger_verified_evidence_models'],0)
+
+    def test_research_briefs_do_not_impose_two_active_experiment_limit(self):
+        candidates = [{'id': str(i), 'name': 'Workflow audit'} for i in range(17)]
+        with sqlite3.connect(':memory:') as db:
+            briefs = research.review_queue(db, candidates)
+        self.assertEqual([item['model_id'] for item in briefs], [str(i) for i in range(17)])
+        self.assertTrue(all(not item['external_actions_allowed'] for item in briefs))
+        self.assertTrue(all(item['status'] == 'requires_demand_capability_and_economics_validation'
+                            for item in briefs))
 
     def test_future_and_invalid_references_are_not_current_evidence(self):
         now=datetime(2026,11,12,tzinfo=timezone.utc).timestamp()
