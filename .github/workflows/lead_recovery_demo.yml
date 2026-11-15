@@ -1,0 +1,38 @@
+name: Lead Recovery Offline Demo
+on:
+  pull_request:
+    paths:
+      - 'scripts/lead_recovery_demo.py'
+      - 'tests/test_lead_recovery_demo.py'
+      - 'examples/lead_recovery/**'
+      - '.github/workflows/lead_recovery_demo.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'scripts/lead_recovery_demo.py'
+      - 'tests/test_lead_recovery_demo.py'
+      - 'examples/lead_recovery/**'
+      - '.github/workflows/lead_recovery_demo.yml'
+jobs:
+  offline-acceptance:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Test fictional no-send lead queue
+        run: python -m unittest discover -s tests -p 'test_lead_recovery_demo.py' -v
+      - name: Smoke test offline fictional data
+        run: |
+          python scripts/lead_recovery_demo.py --input examples/lead_recovery/fictional_events.json > /tmp/apex-fictional-review.json
+          python - <<'PY'
+          import json
+          report=json.load(open('/tmp/apex-fictional-review.json',encoding='utf-8'))
+          assert report['accepted']==2 and report['rejected']==1
+          assert report['outbound_enabled'] is False
+          assert all(not row['customer_message_sent'] for row in report['queue'])
+          assert all(row['review_status']=='owner_review_required' for row in report['queue'])
+          PY
