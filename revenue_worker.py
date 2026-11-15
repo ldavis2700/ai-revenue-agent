@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parent
 STAGES = (
     ('execute_authorized_inbound', 'autonomous_cycle.py'),
     ('plan', 'scripts/mission_control.py'),
+    ('portfolio_review', 'scripts/dynamic_portfolio.py'),
     ('research', 'scripts/public_market_research.py'),
     ('financing_readiness', 'scripts/business_financing_cycle.py'),
     ('learn', 'scripts/experiment_learning.py'),
