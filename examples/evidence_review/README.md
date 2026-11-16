@@ -28,3 +28,26 @@ This is an operator-run prototype, not a robust untrusted-document parser: value
 ### Optional Supabase handoff — separately authorized test project only
 
 The new `supabase_test_handoff.py` prepares deterministic approval-key rows from the reviewed SQLite demo. Running `python supabase_test_handoff.py --db /tmp/apex-fictional-pilot.sqlite` makes **zero network requests**. It rejects changed evidence and excludes pending/rejected records. Remote POST requires a buyer-provided dedicated test project, a fixed table named `apex_evidence_pilot_test` with a unique `approval_key`, a securely supplied `APEX_SUPABASE_TEST_API_KEY`, and both `--execute-test-write` and `--confirm-dedicated-test-project`. No redirects or arbitrary endpoints are allowed. Obtain a funded contract, scope, access authorization, table schema and independent readback proof before treating HTTP acceptance as a stored record or customer delivery. No live Supabase request or buyer data was used for this PR.
+
+
+### Exact test-table readback (source-only; never run on production)
+
+After an explicitly authorized test POST, the adapter now reads each submitted
+\`approval_key\` from the **same named test table**, compares all nine columns
+including reviewer decision and source digest, and reports
+\`verified_persisted_rows\` only after every expected record matches.
+It sends no read/write request when left in default dry-run mode. The test
+batch is capped at 20 approved rows to limit network/resource use; this is a
+test-batch safeguard, **not** an experiment-count limit.
+
+A timeout, non-200 readback, missing row, duplicate row, or mismatched value
+fails closed and states that a write **may already have committed**. Operators
+must inspect the exact approval keys in the dedicated test project before
+trying again; no automatic retry or external delivery is permitted. HTTP
+acceptance alone is not called persistence. A successful test-table readback
+does not prove source truth, buyer acceptance, settlement, a production
+Supabase integration, or permission to contact anyone.
+
+This change has only mocked regression evidence until a real buyer authorizes
+a dedicated test project, provides scoped credentials and sample evidence,
+and accepts a test procedure. No live Supabase test write is claimed.
