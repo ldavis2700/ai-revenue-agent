@@ -40,6 +40,10 @@ OFFICIAL_SOURCES = {
     "SBA Lender Match": "https://www.sba.gov/loans/lender-match/",
 }
 ALLOWED_STATUS = {"documented", "owner_attested", "missing"}
+# Fold separator-free variants too (e.g. bankAccountNumber, SocialSecurityNumber).
+# Business profiles are untrusted input; prohibited field names must be rejected
+# regardless of whether they arrive in camelCase, spaces, hyphens or snake_case.
+SENSITIVE_FOLDED = {re.sub(r"[^a-z0-9]", "", key.lower()) for key in SENSITIVE}
 
 def reject_sensitive_fields(profile: object) -> None:
     """Reject sensitive identifier keys even when nested in evidence or documents.
@@ -54,7 +58,7 @@ def reject_sensitive_fields(profile: object) -> None:
         if isinstance(current, dict):
             for key, value in current.items():
                 normalized = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
-                if normalized in SENSITIVE:
+                if normalized in SENSITIVE or normalized.replace("_", "") in SENSITIVE_FOLDED:
                     raise ValueError("Sensitive financing profile field is not permitted")
                 pending.append(value)
         elif isinstance(current, list):
