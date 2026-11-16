@@ -54,6 +54,16 @@ class FinancingReadinessTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "^Sensitive financing profile field"):
                     assess({"source_documents": [{"note": {identifier: "DO_NOT_LOG"}}]})
 
+    def test_camelcase_sensitive_identifiers_are_blocked_at_all_depths(self):
+        # Synthetic keys only; never persist actual tax, banking or identity data.
+        for identifier in ("socialSecurityNumber", "bankAccountNumber",
+                           "routingNumber", "taxId", "dateOfBirth",
+                           "apiKey", "clientSecret", "privateKey",
+                           "creditCard", "driversLicenseNumber"):
+            with self.subTest(identifier=identifier):
+                with self.assertRaisesRegex(ValueError, "^Sensitive financing profile field"):
+                    assess({"source_documents": [{"evidence": {identifier: "DO_NOT_LOG"}}]})
+
     def test_safe_document_references_remain_usable(self):
         result = assess({"source_documents": [{"kind": "registration", "ref": "private:sample"}],
                          "evidence": {"source_documents": {"status": "owner_attested"}}})
