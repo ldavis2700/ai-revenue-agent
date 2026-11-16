@@ -10,6 +10,12 @@ from pathlib import Path
 MAX_RECORDS = 100
 FIELDS = ('event_id', 'received_at', 'source', 'category', 'request_summary')
 ALLOWED_SOURCES = {'web_form', 'inbox_notification', 'crm_webhook'}
+# Fictional-only demo: block common contact/location link patterns before CSV or JSON export.
+# Not a general PII detector; operators must never submit real customer records.
+UNSAFE_SUMMARY = re.compile(
+    r'@|https?://|www\.|(?<![A-Za-z0-9])\+?\d[\d\s().-]{7,}\d(?![A-Za-z0-9])',
+    re.IGNORECASE,
+)
 
 
 def build_queue(records):
@@ -39,7 +45,8 @@ def build_queue(records):
             rejected.append({'position': position, 'reason': 'invalid_received_at'})
             continue
         summary = record['request_summary'].strip()
-        if not summary or len(summary) > 160 or re.search(r'[@]|\b\d{3}[-. ]\d{3}[-. ]\d{4}\b', summary):
+        if (not summary or len(summary) > 160 or UNSAFE_SUMMARY.search(summary)
+                or any(ord(char) < 32 or ord(char) == 127 for char in summary)):
             rejected.append({'position': position, 'reason': 'unsafe_or_invalid_summary'})
             continue
         seen.add(event_id)
