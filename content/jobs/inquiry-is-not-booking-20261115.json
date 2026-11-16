@@ -1,0 +1,51 @@
+{
+  "id": "inquiry-is-not-booking-20261115",
+  "title": "An Inquiry Is Not a Booking: A Safer Customer Reply",
+  "format": "vertical",
+  "audience": "adults",
+  "original": true,
+  "rights": "Original RMC AI Workshop educational script and original text-only graphics. Intended local CMU Flite synthetic narration. No third-party images, music, logos, recordings, or customer details.",
+  "description": "A small-business customer-response lesson: separate inquiries from confirmed appointments, request only necessary details, avoid unverified availability promises, track status and test replies using fictional examples. No actual customers were contacted. Educational example only, not legal advice or a guarantee of increased sales. Synthetic narration. For manual-response help, use the APEX service inquiry form at https://apex-content-worker-production.up.railway.app/home-services ; public checkout is not active.",
+  "scenes": [
+    {
+      "heading": "An inquiry is NOT a booking",
+      "text": "A requested time is not a confirmed appointment.",
+      "narration": "A customer asks, can you come Saturday at ten? If your automated reply says booked, you may have just promised a time nobody checked. Here is a safer response flow."
+    },
+    {
+      "heading": "1. Capture the actual request",
+      "text": "Service, requested date, preferred contact channel.",
+      "narration": "Record what they want, their requested time, and the contact method they chose. Do not turn a question into a booking or assume details the customer did not provide."
+    },
+    {
+      "heading": "2. Ask one useful question",
+      "text": "Only request details needed for a reliable estimate.",
+      "narration": "For a cleaning request, one useful question might be the size of the space. Request only the information needed to respond. Avoid collecting sensitive details just because a form can."
+    },
+    {
+      "heading": "3. Reply without overpromising",
+      "text": "We can check Saturday availability; it is not confirmed yet.",
+      "narration": "A useful reply is: Thanks for reaching out. We can check Saturday availability. Could you share the approximate size of the space? We will confirm an appointment before it is booked."
+    },
+    {
+      "heading": "4. Track the real status",
+      "text": "New inquiry → Needs details → Checking → Confirmed",
+      "narration": "Use a tracker with separate statuses: new inquiry, needs details, checking availability, and confirmed. Only change to confirmed after an authorized person or system really confirms the slot."
+    },
+    {
+      "heading": "5. Respect contact permission",
+      "text": "Keep replies in the authorized channel; honor opt-outs.",
+      "narration": "Respond through the channel the customer authorized. Keep a record of their consent and honor opt-outs. Do not add them to a marketing campaign merely because they requested a service estimate."
+    },
+    {
+      "heading": "6. Test three edge cases",
+      "text": "Full schedule • Missing details • Repeat inquiry",
+      "narration": "Before using a reply template, test fictional cases: no availability, missing information, and a repeat request. Does it stay accurate, avoid duplicates, and clearly separate requests from confirmed appointments?"
+    },
+    {
+      "heading": "Try it with one fictional inquiry",
+      "text": "Write a safe reply. Track status. Confirm before booking.",
+      "narration": "Write one example response, then walk it through your tracker. That small test catches overpromises before customers see them. Follow RMC AI Workshop for more practical workflow lessons."
+    }
+  ]
+}
