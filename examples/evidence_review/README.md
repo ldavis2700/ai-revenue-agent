@@ -33,9 +33,9 @@ The new `supabase_test_handoff.py` prepares deterministic approval-key rows from
 ### Exact test-table readback (source-only; never run on production)
 
 After an explicitly authorized test POST, the adapter now reads each submitted
-\`approval_key\` from the **same named test table**, compares all nine columns
+`approval_key` from the **same named test table**, compares all nine columns
 including reviewer decision and source digest, and reports
-\`verified_persisted_rows\` only after every expected record matches.
+`verified_persisted_rows` only after every expected record matches.
 It sends no read/write request when left in default dry-run mode. The test
 batch is capped at 20 approved rows to limit network/resource use; this is a
 test-batch safeguard, **not** an experiment-count limit.
