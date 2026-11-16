@@ -1,4 +1,5 @@
 """Offline regression tests for the opt-in Supabase pilot handoff."""
+import json
 import tempfile
 from pathlib import Path
 import unittest
@@ -7,15 +8,26 @@ from research_evidence_demo import connect, ingest, review
 from supabase_test_handoff import prepared_rows, run, send_test_rows, test_endpoint
 
 class FakeResponse:
-    status = 201
+    def __init__(self, status=201, body=b''):
+        self.status, self.body = status, body
     def __enter__(self): return self
     def __exit__(self, *_): return False
+    def read(self, limit): return self.body[:limit]
 
 class FakeOpener:
-    def __init__(self): self.requests = []
+    def __init__(self, rows, *, mismatch=False, fail_readback=False):
+        self.requests, self.rows = [], rows
+        self.mismatch, self.fail_readback = mismatch, fail_readback
     def open(self, request, timeout):
         self.requests.append(request)
-        return FakeResponse()
+        if request.get_method() == 'POST':
+            return FakeResponse()
+        if self.fail_readback:
+            raise OSError('simulated connection failure')
+        returned = dict(self.rows[0])
+        if self.mismatch:
+            returned['accepted_value'] = 'wrong-value'
+        return FakeResponse(200, json.dumps([returned]).encode('utf-8'))
 
 class TestHandoff(unittest.TestCase):
     def setUp(self):
@@ -58,15 +70,51 @@ class TestHandoff(unittest.TestCase):
             with self.subTest(url=url),self.assertRaises(ValueError):
                 test_endpoint(url)
     def test_mocked_explicit_test_request(self):
-        fake=FakeOpener()
-        with patch('supabase_test_handoff.build_opener',return_value=fake):
-            result=send_test_rows(prepared_rows(self.db),
-                'https://abcdefghijklmnopqrst.supabase.co','fictional',
-                execute=True,confirmed=True)
-        self.assertEqual(result['remote_requests'],1)
-        self.assertEqual(result['api_accepted_rows'],1)
-        self.assertIn('/rest/v1/apex_evidence_pilot_test',fake.requests[0].full_url)
-        self.assertEqual(fake.requests[0].get_method(),'POST')
+        rows = prepared_rows(self.db)
+        fake = FakeOpener(rows)
+        with patch('supabase_test_handoff.build_opener', return_value=fake):
+            result = send_test_rows(rows,
+                'https://abcdefghijklmnopqrst.supabase.co', 'fictional',
+                execute=True, confirmed=True)
+        self.assertEqual(result['remote_requests'], 2)
+        self.assertEqual(result['submitted_rows'], 1)
+        self.assertEqual(result['verified_persisted_rows'], 1)
+        self.assertEqual(len(fake.requests), 2)
+        self.assertEqual(fake.requests[0].get_method(), 'POST')
+        self.assertEqual(fake.requests[1].get_method(), 'GET')
+        self.assertIn('approval_key=eq.', fake.requests[1].full_url)
+
+    def test_mismatched_readback_does_not_claim_success(self):
+        rows = prepared_rows(self.db)
+        fake = FakeOpener(rows, mismatch=True)
+        with patch('supabase_test_handoff.build_opener', return_value=fake):
+            with self.assertRaisesRegex(ValueError, 'may have committed'):
+                send_test_rows(rows, 'https://abcdefghijklmnopqrst.supabase.co',
+                    'fictional', execute=True, confirmed=True)
+        self.assertEqual(len(fake.requests), 2)
+
+    def test_unavailable_readback_has_uncertain_outcome(self):
+        rows = prepared_rows(self.db)
+        fake = FakeOpener(rows, fail_readback=True)
+        with patch('supabase_test_handoff.build_opener', return_value=fake):
+            with self.assertRaisesRegex(ValueError, 'reconcile approval keys'):
+                send_test_rows(rows, 'https://abcdefghijklmnopqrst.supabase.co',
+                    'fictional', execute=True, confirmed=True)
+        self.assertEqual(len(fake.requests), 2)
+
+    def test_batch_guard_rejects_before_post(self):
+        rows = prepared_rows(self.db)
+        with patch('supabase_test_handoff.build_opener',
+                   side_effect=AssertionError('network forbidden')):
+            with self.assertRaisesRegex(ValueError, 'oversized'):
+                send_test_rows(rows * 21,
+                    'https://abcdefghijklmnopqrst.supabase.co', 'fictional',
+                    execute=True, confirmed=True)
+            bad = [dict(rows[0], approval_key='invalid')]
+            with self.assertRaisesRegex(ValueError, 'Invalid'):
+                send_test_rows(bad,
+                    'https://abcdefghijklmnopqrst.supabase.co', 'fictional',
+                    execute=True, confirmed=True)
 
 if __name__ == '__main__':
     unittest.main()
