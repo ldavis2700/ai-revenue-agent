@@ -33,7 +33,7 @@ class FinancingReadinessTests(unittest.TestCase):
         for field in ("legal_business_name", "entity_type", "state", "industry",
                       "business_description", "operating_since", "use_of_funds"):
             with self.subTest(field=field):
-                report = assess({field: "  \\t  ",
+                report = assess({field: "     ",
                                  "evidence": {field: {"status": "documented",
                                                       "source": "private:fixture"}}})
                 self.assertIn(field, report["missing_or_unsubstantiated"])
