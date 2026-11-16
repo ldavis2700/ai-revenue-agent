@@ -29,6 +29,31 @@ class FinancingReadinessTests(unittest.TestCase):
             assess({"evidence": {"industry": {"status": "documented",
                                              "source": {"BANK ACCOUNT": "never-log"}}}})
 
+    def test_whitespace_only_business_facts_are_unsubstantiated(self):
+        for field in ("legal_business_name", "entity_type", "state", "industry",
+                      "business_description", "operating_since", "use_of_funds"):
+            with self.subTest(field=field):
+                report = assess({field: "  \\t  ",
+                                 "evidence": {field: {"status": "documented",
+                                                      "source": "private:fixture"}}})
+                self.assertIn(field, report["missing_or_unsubstantiated"])
+                self.assertNotIn(field, report["verified_or_attested_facts"])
+
+    def test_nonscalar_descriptive_facts_cannot_be_misread_as_ready(self):
+        for value in (["California"], {"value": "California"}, 2026, True):
+            with self.subTest(value_type=type(value).__name__):
+                report = assess({"state": value,
+                                 "evidence": {"state": {"status": "owner_attested"}}})
+                self.assertIn("state", report["missing_or_unsubstantiated"])
+
+    def test_additional_private_identifier_keys_are_blocked_without_echoing_values(self):
+        for identifier in ("account_number", "bank_account_number", "IBAN",
+                           "employer-identification-number", "access_token",
+                           "private_key", "birth_date"):
+            with self.subTest(identifier=identifier):
+                with self.assertRaisesRegex(ValueError, "^Sensitive financing profile field"):
+                    assess({"source_documents": [{"note": {identifier: "DO_NOT_LOG"}}]})
+
     def test_safe_document_references_remain_usable(self):
         result = assess({"source_documents": [{"kind": "registration", "ref": "private:sample"}],
                          "evidence": {"source_documents": {"status": "owner_attested"}}})
