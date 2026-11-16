@@ -26,7 +26,14 @@ REQUIRED = (
 )
 SENSITIVE = {"ssn", "social_security_number", "ein", "tax_id", "dob",
              "date_of_birth", "bank_account", "routing_number", "password",
-             "api_key", "credit_card", "passport_number"}
+             "api_key", "credit_card", "passport_number",
+             "employer_identification_number", "taxpayer_identification_number",
+             "bank_account_number", "bank_routing_number", "account_number",
+             "iban", "swift_code", "birth_date", "drivers_license_number",
+             "card_number", "cvv", "cvc", "access_token", "client_secret",
+             "private_key"}
+TEXT_FIELDS = {"legal_business_name", "entity_type", "state", "industry",
+               "business_description", "operating_since", "use_of_funds"}
 OFFICIAL_SOURCES = {
     "SBA 7(a)": "https://www.sba.gov/loans/7a-loans/",
     "SBA microloans": "https://www.sba.gov/loans/microloans/",
@@ -138,9 +145,13 @@ def assess(profile: dict) -> dict:
             raise ValueError("Evidence source must be a short plain-text reference for " + field)
         # A documented numeric zero is a real reported value, not missing
         # (e.g. a business with no existing loan payments or no sales).
-        empty = val is None or val is False or val == "" or (
-            isinstance(val, (list, dict)) and not val
-        )
+        # Descriptive identity/use-of-funds fields must be meaningful text.
+        # A whitespace-only name, blank description, or non-text collection
+        # cannot substantiate a lender-readiness profile even with a pointer.
+        empty = (val is None or val is False
+                 or (isinstance(val, str) and not val.strip())
+                 or (isinstance(val, (list, dict)) and not val)
+                 or (field in TEXT_FIELDS and not isinstance(val, str)))
         if empty or status == "missing" or (status == "documented" and not source.strip()):
             gaps.append(field)
         else:
