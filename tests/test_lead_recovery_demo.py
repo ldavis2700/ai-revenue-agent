@@ -34,6 +34,29 @@ class LeadRecoveryTests(unittest.TestCase):
                                      event(event_id='demo_3', request_summary='person@example.org')])
         self.assertEqual(output['accepted'], 0)
 
+    def test_common_contact_patterns_and_control_characters_fail_closed(self):
+        unsafe = [
+            'Call (415) 555-0123',
+            'Call +1 415 555 0123',
+            'Text 4155550123',
+            'Email person@example.org',
+            'Visit https://example.org/private',
+            'See www.example.org/record',
+            'SSN 123-45-6789',
+            'Fictional line\n=HYPERLINK("example")',
+            'Fictional line\tdata',
+        ]
+        records = [event(event_id=f'demo_{i}', request_summary=value)
+                   for i, value in enumerate(unsafe)]
+        output = module.build_queue(records)
+        self.assertEqual(output['accepted'], 0)
+        self.assertEqual(output['rejected'], len(unsafe))
+        self.assertEqual(output['queue'], [])
+
+    def test_normal_fictional_summary_still_accepted(self):
+        output = module.build_queue([event(request_summary='Fictional request for two repair estimates')])
+        self.assertEqual(output['accepted'], 1)
+
     def test_csv_formula_is_not_executable(self):
         output = module.build_queue([event(request_summary='=1+1')])
         self.assertIn("'=1+1", module.to_csv(output))
