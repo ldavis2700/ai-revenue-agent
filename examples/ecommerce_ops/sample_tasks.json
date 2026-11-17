@@ -1,0 +1,5 @@
+[
+  {"id":"shipment-1","title":"Review inbound inventory count","owner":"ops-1","due_date":"2026-11-18","visibility":"team","status":"open","priority":"normal"},
+  {"id":"strategy-1","title":"Review confidential margin estimate","owner":"lead-1","due_date":"2026-11-19","visibility":"private","status":"open","priority":"urgent"},
+  {"id":"done-1","title":"Previous weekly report","owner":"ops-1","due_date":"2026-11-16","visibility":"team","status":"done","priority":"normal"}
+]
