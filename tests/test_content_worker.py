@@ -132,6 +132,11 @@ class ContentHTTPTests(unittest.TestCase):
                 self.assertIn("frame-ancestors 'none'",response.headers['Content-Security-Policy'])
         with urlopen(self.url+'/') as response:
             self.assertIn('href="/response-gap-audit"',response.read().decode())
+        with urlopen(self.url+'/home-services') as response:
+            home_services=response.read().decode()
+            self.assertIn('href="/response-gap-audit"',home_services)
+            self.assertIn('aggregate counts only',home_services)
+            self.assertNotIn('buy.stripe.com',home_services)
         with self.assertRaises(HTTPError) as exc:
             urlopen(self.url+'/sales/response-gap-audit.html')
         self.assertEqual(exc.exception.code,404)
