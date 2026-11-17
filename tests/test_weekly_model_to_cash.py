@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 from datetime import datetime,timezone,timedelta
 import unittest
+import json
 spec=importlib.util.spec_from_file_location("weekly_model",Path(__file__).parents[1]/"scripts/weekly_model_to_cash.py")
 w=importlib.util.module_from_spec(spec);spec.loader.exec_module(w)
 
