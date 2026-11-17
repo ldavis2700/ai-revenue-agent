@@ -51,6 +51,10 @@ class HandoffAuditTests(unittest.TestCase):
         f["client"] = "none"
         with self.assertRaises(ValueError):
             analyze(f)
+        f = fixture()
+        f["schema_version"] = True
+        with self.assertRaises(ValueError):
+            analyze(f)
 
 
 if __name__ == "__main__":
