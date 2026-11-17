@@ -18,6 +18,7 @@ import unicodedata
 
 
 TIFF_EXTENSIONS = {'.tif', '.tiff'}
+ALLOWED_PSM = (3, 6)  # default auto segmentation or opt-in uniform block
 
 
 @dataclass(frozen=True)
@@ -40,9 +41,11 @@ def safe_stem(text: str, max_length: int = 80) -> str:
     return label
 
 
-def extract_text(path: Path, *, language: str = 'eng', timeout: float = 20) -> str:
+def extract_text(path: Path, *, language: str = 'eng', timeout: float = 20, page_segmentation: int = 3) -> str:
     """Run locally installed OCR; do not read or emit full source text in logs."""
-    proc = subprocess.run(['tesseract', str(path), 'stdout', '-l', language],
+    if type(page_segmentation) is not int or page_segmentation not in ALLOWED_PSM:
+        raise ValueError('unsupported_page_segmentation')
+    proc = subprocess.run(['tesseract', str(path), 'stdout', '-l', language, '--psm', str(page_segmentation)],
                           capture_output=True, text=True, timeout=timeout, check=False)
     if proc.returncode != 0:
         raise RuntimeError('ocr_failed')
@@ -60,7 +63,9 @@ def discover(directory: Path, recursive: bool, max_files: int) -> list[Path]:
     return paths
 
 
-def make_plan(files: list[Path], expression: str, language: str = 'eng', timeout: float = 20) -> list[Decision]:
+def make_plan(files: list[Path], expression: str, language: str = 'eng', timeout: float = 20, page_segmentation: int = 3) -> list[Decision]:
+    if type(page_segmentation) is not int or page_segmentation not in ALLOWED_PSM:
+        raise ValueError('unsupported_page_segmentation')
     pattern = re.compile(expression)
     if pattern.groups != 1:
         raise ValueError('pattern_must_have_exactly_one_capture_group')
@@ -72,7 +77,7 @@ def make_plan(files: list[Path], expression: str, language: str = 'eng', timeout
             results.append(Decision(path, None, 'blocked', 'non_regular_or_symlink'))
             continue
         try:
-            text = extract_text(path, language=language, timeout=timeout)
+            text = extract_text(path, language=language, timeout=timeout, page_segmentation=page_segmentation)
             match = pattern.search(text)
             if not match:
                 results.append(Decision(path, None, 'skipped', 'pattern_not_found'))
@@ -160,6 +165,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--recursive', action='store_true')
     parser.add_argument('--language', default='eng')
     parser.add_argument('--ocr-timeout', type=float, default=20)
+    parser.add_argument('--ocr-psm', type=int, choices=ALLOWED_PSM, default=3,
+                        help='Tesseract segmentation: 3 auto (default), 6 uniform block; compare previews before apply')
     parser.add_argument('--max-files', type=int, default=1000)
     parser.add_argument('--manifest', type=Path)
     parser.add_argument('--apply', action='store_true', help='actually rename after safe dry-run planning')
@@ -170,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error('apply_requires_manifest')
     try:
         plan = make_plan(discover(args.directory, args.recursive, args.max_files),
-                         args.pattern, args.language, args.ocr_timeout)
+                         args.pattern, args.language, args.ocr_timeout, args.ocr_psm)
         # Preflight audit destination BEFORE any source rename; an existing or
         # unavailable manifest must never cause an unlogged partial apply.
         if args.manifest:
