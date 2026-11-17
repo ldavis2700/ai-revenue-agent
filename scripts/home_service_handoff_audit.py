@@ -11,7 +11,7 @@ MAX_CASES = 1_000_000
 
 
 def analyze(payload):
-    if not isinstance(payload, dict) or set(payload) != {"schema_version", "flows"} or payload["schema_version"] != 1:
+    if not isinstance(payload, dict) or set(payload) != {"schema_version", "flows"} or type(payload["schema_version"]) is not int or payload["schema_version"] != 1:
         raise ValueError("expected exact schema_version=1 and flows")
     flows = payload["flows"]
     if not isinstance(flows, list) or not (1 <= len(flows) <= len(FLOWS)):
