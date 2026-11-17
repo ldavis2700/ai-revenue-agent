@@ -256,6 +256,117 @@ def execution_review(candidate, evaluation, now):
 
 
 
+
+def active_experiment_record_review(capacity, active_ids, now):
+    """Fail closed on incomplete operator records for already-active experiments.
+
+    This audits only supplied metadata; HTTPS links, booleans, and hashes are
+    not independent proof of buyer demand, QA, costs, consent, or settlement.
+    Never expose buyer details in result reasons.
+    """
+    records = capacity.get("active_experiment_records")
+    if not active_ids:
+        return [] if records in (None, []) else ["unexpected_active_experiment_records"]
+    if not isinstance(records, list) or len(records) != len(active_ids):
+        return ["active_experiment_records_required"]
+    if any(not isinstance(record, dict) for record in records):
+        return ["active_experiment_record_must_be_object"]
+    identifiers = [record.get("model_id") for record in records]
+    if (any(not isinstance(value, str) or not value.strip() for value in identifiers)
+            or len(set(identifiers)) != len(identifiers)
+            or set(identifiers) != set(active_ids)):
+        return ["active_experiment_record_ids_must_match"]
+    reasons = set()
+    reserved_total = 0
+    texts = (
+        "buyer_problem", "lawful_acquisition_channel", "original_deliverable",
+        "cost_accounting_method", "objective", "stop_revise_trigger",
+        "rollback_action", "next_conversion_or_delivery_action", "support_plan",
+    )
+    costs = (
+        "estimated_direct_cost_cents", "estimated_indirect_cost_cents",
+        "estimated_labor_cost_cents", "estimated_processor_fees_cents",
+        "estimated_hosting_cost_cents", "estimated_support_cost_cents",
+        "estimated_acquisition_cost_cents", "estimated_opportunity_cost_cents",
+    )
+    effort = (
+        "reserved_minutes", "implementation_minutes", "delivery_minutes",
+        "qa_minutes", "support_minutes", "available_execution_minutes",
+        "time_cap_minutes",
+    )
+    attestations = (
+        "permission_and_terms_verified", "privacy_and_brand_boundary_verified",
+        "original_rights_verified", "delivery_qa_support_verified",
+        "no_new_spend_resources_verified",
+    )
+    for record in records:
+        if record.get("property_id") != "003":
+            reasons.add("active_experiment_apex_property_boundary_required")
+        for key in texts:
+            if not isinstance(record.get(key), str) or not record[key].strip():
+                reasons.add("active_experiment_" + key + "_required")
+        for key in ("demand_evidence_url", "original_qa_evidence_url", "resources_evidence_url"):
+            if not _source_url(record.get(key)):
+                reasons.add("active_experiment_" + key + "_required")
+        for key in attestations:
+            if record.get(key) is not True:
+                reasons.add("active_experiment_" + key + "_required")
+        for key in costs:
+            value = record.get(key)
+            if type(value) is not int or value < 0:
+                reasons.add("active_experiment_" + key + "_must_be_nonnegative_integer")
+        for key in effort:
+            value = record.get(key)
+            if type(value) is not int or value < 0 or value > 10000000:
+                reasons.add("active_experiment_" + key + "_must_be_nonnegative_integer")
+        minutes = record.get("reserved_minutes")
+        if type(minutes) is int and 0 < minutes <= 10000000:
+            reserved_total += minutes
+        else:
+            reasons.add("active_experiment_positive_reserved_minutes_required")
+        if (type(minutes) is int
+                and type(record.get("available_execution_minutes")) is int
+                and minutes > record["available_execution_minutes"]):
+            reasons.add("active_experiment_reservation_exceeds_available_capacity")
+        if (type(minutes) is int
+                and type(record.get("time_cap_minutes")) is int
+                and minutes > record["time_cap_minutes"]):
+            reasons.add("active_experiment_reservation_exceeds_time_cap")
+        if record.get("max_new_spend_cents") != 0 or type(record.get("max_new_spend_cents")) is not int:
+            reasons.add("active_experiment_zero_new_spend_required")
+        for key in ("baseline", "success_threshold"):
+            if type(record.get(key)) is not int or record[key] < 0:
+                reasons.add("active_experiment_" + key + "_must_be_nonnegative_integer")
+        if (type(record.get("baseline")) is int
+                and type(record.get("success_threshold")) is int
+                and record["success_threshold"] <= record["baseline"]):
+            reasons.add("active_experiment_threshold_must_exceed_baseline")
+        if record.get("success_metric") not in (
+                "qualified_opt_in_requests", "buyer_accepted_deliveries", "settled_paid_deliveries"):
+            reasons.add("active_experiment_measurable_customer_outcome_required")
+        artifact_hash = record.get("original_deliverable_sha256")
+        if (not isinstance(artifact_hash, str) or len(artifact_hash) != 64
+                or any(ch not in "0123456789abcdef" for ch in artifact_hash)):
+            reasons.add("active_experiment_original_artifact_hash_required")
+        try:
+            checked = datetime.fromisoformat(record["demand_checked_at"].replace("Z", "+00:00"))
+            if (checked.tzinfo is None or checked.utcoffset() is None
+                    or not timedelta(0) <= now - checked < timedelta(days=14)):
+                raise ValueError("not current")
+        except (KeyError, AttributeError, TypeError, ValueError, OverflowError):
+            reasons.add("active_experiment_current_demand_date_required")
+        try:
+            deadline = datetime.fromisoformat(record["review_at"].replace("Z", "+00:00"))
+            if (deadline.tzinfo is None or deadline.utcoffset() is None
+                    or not timedelta(0) < deadline - now <= timedelta(days=14)):
+                raise ValueError("not within review window")
+        except (KeyError, AttributeError, TypeError, ValueError, OverflowError):
+            reasons.add("active_experiment_review_within_fourteen_days_required")
+    if reserved_total != capacity.get("existing_active_experiments_minutes"):
+        reasons.add("active_experiment_reserved_minutes_must_reconcile")
+    return sorted(reasons)
+
+
 def capacity_review(eligible, capacity, now):
     """Rank reversible preparations using explicitly supplied, bounded capacity.
 
@@ -297,6 +408,8 @@ def capacity_review(eligible, capacity, now):
     if not isinstance(active_ids, list) or not all(isinstance(v, str) and v.strip() for v in active_ids) or len(set(active_ids)) != len(active_ids):
         reasons.append("unique_active_model_ids_required")
         active_ids = []
+    if not reasons:
+        reasons.extend(active_experiment_record_review(capacity, active_ids, now))
     if not reasons:
         remaining = (capacity["total_available_minutes"]
                      - capacity["haeven_reserved_minutes"]
