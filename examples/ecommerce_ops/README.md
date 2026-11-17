@@ -1,0 +1,11 @@
+# Notion/Slack-style task digest: original offline sales demonstration
+
+**Status:** Fictional, offline, human-reviewed pre-sales proof only (November 17, 2026). Not a client delivery, a paid contract, a real Notion or Slack integration, or a production AI assistant.
+
+Run `python task_digest.py --input sample_tasks.json --date 2026-11-17` from this directory. Test with `python -m unittest -v test_task_digest.py`. No packages, tokens, subscriptions, calls, or network are required.
+
+Input represents a hypothetical Notion task export containing task ID, title, owner key, ISO due date, `team` or `private` visibility, `open` or `done` status, and `normal` or `urgent` priority. The output is a deterministic **preview**, separated into a team summary and private per-owner summaries. Completed tasks and ordinary tasks more than seven days away are filtered. Urgent tasks appear regardless of due date. Private task titles and even their counts do not appear in team summaries. Slack-like markup and `@channel` / user mentions are neutralized. There is **no outbound send** and a human must verify task ownership, current state, source accuracy and recipient authorization.
+
+**Buyer-conditional phased plan:** (1) validate a buyer-approved Notion schema, task visibility rules, Slack channel/DM permission model and review cadence; (2) build a read-only adapter against a sandbox with least-privilege credentials; (3) obtain approval for a specific channel/recipient and test only synthetic tasks; (4) validate no private task leakage, correct reviewer corrections, idempotent scheduling, rate limits, errors, rollback and documented cost; (5) propose optional integrations for call recordings/SOPs, inventory and forecasting as *separate* funded scopes. Do not accept real business records or write to Notion/Slack without documented access consent and a funded engagement.
+
+The demonstration uses explicit structured records and deterministic rules, not LLM reasoning, forecasting, transcript extraction, delivery tracking, or a secure multi-tenant service. Do not claim those capabilities are implemented or that any buyer has accepted this proof. Any proposal to the actual buyer must be approved and must follow Upwork Connect-spend and transaction rules.
