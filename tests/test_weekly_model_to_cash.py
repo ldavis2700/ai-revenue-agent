@@ -201,6 +201,96 @@ class WeeklyModelTests(unittest.TestCase):
   info.update(changes)
   return info
 
+ def active_experiment_record(self, model_id="model-1", **changes):
+  # Synthetic-only metadata fixture; URLs and hashes are NOT actual buyer proof.
+  data={
+   "model_id":model_id, "property_id":"003",
+   "buyer_problem":"Consented small business responses need timely follow-up",
+   "lawful_acquisition_channel":"Opted-in service inquiry",
+   "demand_evidence_url":"https://example.org/synthetic-demand",
+   "demand_checked_at":self.now.isoformat(),
+   "original_deliverable":"Offline response pack and original QA guide",
+   "original_deliverable_sha256":"a"*64,
+   "original_qa_evidence_url":"https://example.org/synthetic-qa",
+   "resources_evidence_url":"https://example.org/synthetic-resources",
+   "cost_accounting_method":"Separate labor, direct, indirect and fees without asserting a net profit",
+   "estimated_direct_cost_cents":0, "estimated_indirect_cost_cents":0,
+   "estimated_labor_cost_cents":2000, "estimated_processor_fees_cents":300,
+   "estimated_hosting_cost_cents":0, "estimated_support_cost_cents":250,
+   "estimated_acquisition_cost_cents":0, "estimated_opportunity_cost_cents":500,
+   "reserved_minutes":60, "implementation_minutes":15, "delivery_minutes":15,
+   "qa_minutes":15, "support_minutes":15, "available_execution_minutes":60,
+   "time_cap_minutes":120, "max_new_spend_cents":0,
+   "objective":"One accepted paid response pack with supported customer handoff",
+   "success_metric":"buyer_accepted_deliveries", "baseline":0, "success_threshold":1,
+   "review_at":(self.now+timedelta(days=7)).isoformat(),
+   "stop_revise_trigger":"Stop if quality or permission gate fails",
+   "rollback_action":"Withdraw the prepared draft; never undo a buyer's records",
+   "next_conversion_or_delivery_action":"Review verified buyer reply and prepare exact scope",
+   "support_plan":"One documented revision and human handoff",
+   "permission_and_terms_verified":True, "privacy_and_brand_boundary_verified":True,
+   "original_rights_verified":True, "delivery_qa_support_verified":True,
+   "no_new_spend_resources_verified":True
+  }
+  data.update(changes)
+  return data
+
+ def test_active_experiments_fail_closed_without_complete_records(self):
+  candidates=[dict(self.ready_candidate(),model_id=f"model-{i}") for i in range(2)]
+  plan=w.weekly_report(candidates,self.now,
+      capacity=self.operator_capacity(active_model_ids=["model-1"]))["capacity_admission"]
+  self.assertEqual(plan["state"],"capacity_evidence_required")
+  self.assertIn("active_experiment_records_required",plan["reasons"])
+  self.assertEqual(plan["proposed_preparation_reservations"],[])
+  self.assertFalse(plan["active_experiments_started"])
+
+ def test_active_records_reconcile_with_time_reserves_without_fixed_model_count(self):
+  candidates=[dict(self.ready_candidate(),model_id=f"model-{i}") for i in range(3)]
+  cap=self.operator_capacity(active_model_ids=["model-1"],
+      active_experiment_records=[self.active_experiment_record()])
+  plan=w.weekly_report(candidates,self.now,capacity=cap)["capacity_admission"]
+  self.assertEqual(plan["state"],"operator_reported_capacity_plan_only")
+  self.assertIn("model-1",plan["not_reserved_model_ids"])
+  self.assertEqual({v["model_id"] for v in plan["proposed_preparation_reservations"]},
+                   {"model-0","model-2"})
+  self.assertFalse(plan["external_actions_authorized"])
+  bad=w.weekly_report(candidates,self.now,capacity=self.operator_capacity(
+      active_model_ids=["model-1"],
+      active_experiment_records=[self.active_experiment_record(reserved_minutes=40)]))["capacity_admission"]
+  self.assertIn("active_experiment_reserved_minutes_must_reconcile",bad["reasons"])
+  self.assertEqual(bad["proposed_preparation_reservations"],[])
+
+ def test_active_records_require_consent_cost_qa_dates_and_rollback(self):
+  invalid_cases=[
+   ("permission_and_terms_verified",False,"active_experiment_permission_and_terms_verified_required"),
+   ("privacy_and_brand_boundary_verified",False,"active_experiment_privacy_and_brand_boundary_verified_required"),
+   ("no_new_spend_resources_verified",False,"active_experiment_no_new_spend_resources_verified_required"),
+   ("original_deliverable_sha256","bad","active_experiment_original_artifact_hash_required"),
+   ("demand_checked_at",(self.now-timedelta(days=16)).isoformat(),"active_experiment_current_demand_date_required"),
+   ("review_at",(self.now+timedelta(days=15)).isoformat(),"active_experiment_review_within_fourteen_days_required"),
+   ("max_new_spend_cents",1,"active_experiment_zero_new_spend_required"),
+   ("estimated_processor_fees_cents",True,"active_experiment_estimated_processor_fees_cents_must_be_nonnegative_integer"),
+   ("rollback_action","", "active_experiment_rollback_action_required"),
+   ("available_execution_minutes",30,"active_experiment_reservation_exceeds_available_capacity"),
+   ("property_id","002","active_experiment_apex_property_boundary_required"),
+  ]
+  for key,value,reason in invalid_cases:
+   with self.subTest(key=key):
+    entry=self.active_experiment_record(**{key:value})
+    output=w.weekly_report([self.ready_candidate()],self.now,capacity=self.operator_capacity(
+       active_model_ids=["model-1"],active_experiment_records=[entry]))["capacity_admission"]
+    self.assertIn(reason,output["reasons"])
+    self.assertEqual(output["proposed_preparation_reservations"],[])
+
+ def test_active_records_never_echo_private_buyer_details(self):
+  entry=self.active_experiment_record(buyer_problem="PRIVATE_CUSTOMER_ACCOUNT",
+      demand_evidence_url="https://example.org/PRIVATE_BUYER_URL")
+  report=w.weekly_report([self.ready_candidate()],self.now,capacity=self.operator_capacity(
+      active_model_ids=["model-1"],active_experiment_records=[entry]))
+  rendered=json.dumps(report)
+  self.assertNotIn("PRIVATE_CUSTOMER_ACCOUNT",rendered)
+  self.assertNotIn("PRIVATE_BUYER_URL",rendered)
+
  def test_capacity_is_not_a_fixed_count_and_preserves_reserves(self):
   items=[dict(self.ready_candidate(),model_id=f"model-{i}",estimated_revenue_cents=10000+i)
          for i in range(3)]
@@ -245,7 +335,8 @@ class WeeklyModelTests(unittest.TestCase):
  def test_already_active_ids_are_not_reproposed(self):
   items=[dict(self.ready_candidate(),model_id=f"model-{i}",estimated_revenue_cents=10000+i)
          for i in range(2)]
-  report=w.weekly_report(items,self.now,capacity=self.operator_capacity(active_model_ids=["model-1"]))
+  report=w.weekly_report(items,self.now,capacity=self.operator_capacity(active_model_ids=["model-1"],
+       active_experiment_records=[self.active_experiment_record()]))
   ids=[r["model_id"] for r in report["capacity_admission"]["proposed_preparation_reservations"]]
   self.assertEqual(ids,["model-0"])
   self.assertIn("model-1",report["capacity_admission"]["not_reserved_model_ids"])
