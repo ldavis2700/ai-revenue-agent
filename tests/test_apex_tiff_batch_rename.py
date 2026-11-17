@@ -1,5 +1,6 @@
 """Offline synthetic-only regression for the APEX TIFF rename example."""
 import sys
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -121,5 +122,33 @@ class TiffDemoTests(unittest.TestCase):
             self.assertEqual(result[0].status,'blocked')
             self.assertTrue(src.exists())
             self.assertFalse((d/'ABC-12.tif').exists())
+
+
+    def test_psm_default_and_opt_in_commands(self):
+        with patch.object(m.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, stdout='INVOICE: TEST-19')) as run:
+            self.assertIn('TEST-19', m.extract_text(Path('fictional.tif')))
+            self.assertEqual(run.call_args.args[0][-2:], ['--psm', '3'])
+            m.extract_text(Path('fictional.tif'), page_segmentation=6)
+            self.assertEqual(run.call_args.args[0][-2:], ['--psm', '6'])
+
+    def test_invalid_psm_fails_closed_before_ocr_or_rename(self):
+        with self.assertRaisesRegex(ValueError, 'unsupported_page_segmentation'):
+            m.make_plan([], r'(X)', page_segmentation=4)
+        with self.assertRaisesRegex(ValueError, 'unsupported_page_segmentation'):
+            m.extract_text(Path('fictional.tif'), page_segmentation=True)
+        with tempfile.TemporaryDirectory() as tmp:
+            source=Path(tmp)/'original.tif';source.write_bytes(b'fictional')
+            with self.assertRaises(SystemExit):
+                m.main([tmp, '--pattern', r'INVOICE:\s+([A-Z0-9-]+)', '--ocr-psm', '4'])
+            self.assertTrue(source.exists())
+
+    def test_opt_in_mode_remains_review_only_without_apply(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source=Path(tmp)/'original.tif';source.write_bytes(b'fictional')
+            with patch.object(m, 'extract_text', return_value='INVOICE: TEST-19') as ocr:
+                self.assertEqual(m.main([tmp, '--pattern', r'INVOICE:\s+([A-Z0-9-]+)', '--ocr-psm','6']), 0)
+                self.assertEqual(ocr.call_args.kwargs['page_segmentation'], 6)
+            self.assertTrue(source.exists())
+            self.assertFalse((Path(tmp)/'TEST-19.tif').exists())
 
 if __name__=='__main__':unittest.main()
