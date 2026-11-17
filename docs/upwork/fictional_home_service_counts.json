@@ -1,0 +1,1 @@
+{"schema_version":1,"flows":[{"id":"inquiry_to_estimate","cases":20,"late_or_missing_handoffs":4,"staff_review_minutes":110},{"id":"estimate_to_job","cases":14,"late_or_missing_handoffs":2,"staff_review_minutes":65},{"id":"job_to_invoice","cases":10,"late_or_missing_handoffs":0,"staff_review_minutes":85}]}
