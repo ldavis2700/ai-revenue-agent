@@ -1,0 +1,46 @@
+{
+  "id": "measure-followup-before-ai-20261117",
+  "title": "Measure Your Follow-Up Before Buying More AI",
+  "format": "vertical",
+  "audience": "adults",
+  "original": true,
+  "rights": "Original educational script and typography-only slides written for APEX/RMC AI Workshop. Local CMU Flite slt narration; no third-party footage, music, images, testimonials or customer data.",
+  "description": "A practical, no-cost baseline for a small service business before purchasing an AI receptionist, chatbot or extra automation. Map an opted-in inquiry through owner assignment, the first human reply and the next action; record the missing observations as unknown. All examples are fictional. This is an educational checklist, not a promise of sales or cost savings. Optional service inquiry only: https://apex-content-worker-production.up.railway.app/home-services (public checkout remains paused).",
+  "scenes": [
+    {
+      "heading": "Before buying another AI tool",
+      "text": "First measure where a real inquiry goes.",
+      "narration": "A new chatbot will not fix a broken handoff by itself. Before paying for another tool, map what happens after a customer chooses to contact your business."
+    },
+    {
+      "heading": "1. Map one simple path",
+      "text": "Opt-in inquiry → assigned owner → first reply → next action",
+      "narration": "For a fictional cleaning company, start when a person requests a quote. Record where that inquiry arrives, who is responsible for answering, and what the next step should be."
+    },
+    {
+      "heading": "2. Record three facts",
+      "text": "Time received, response time, and follow-up owner",
+      "narration": "Use a simple tracker. Write down when the opt-in request arrived, when the first response happened, and who owns the next action. If a timestamp is missing, mark it unknown."
+    },
+    {
+      "heading": "3. Separate gaps from guesses",
+      "text": "Missing record ≠ missed customer",
+      "narration": "A blank field might mean the event was not recorded. It does not prove that a customer was ignored. Confirm a small sample with your team before labeling a workflow broken."
+    },
+    {
+      "heading": "4. Protect customer permission",
+      "text": "Only use contact details for permitted purposes.",
+      "narration": "Document the requester's consent and your privacy rules. Do not auto-message people who did not ask to hear from you. Use fictional examples when testing a new response workflow."
+    },
+    {
+      "heading": "5. Test a seven-day baseline",
+      "text": "Count opt-in requests, confirmed replies, and exceptions.",
+      "narration": "Run a small seven-day sample before and after any change. Check for duplicates, missing handoffs and false alerts. A small sample is not proof that a tool increased revenue."
+    },
+    {
+      "heading": "A free first step",
+      "text": "Start with a tracker, not a new subscription.",
+      "narration": "Write one approved response template and a follow-up checklist. Test them with your team. RMC AI Workshop shares practical examples, and the APEX home-services page accepts optional inquiries without requiring a purchase."
+    }
+  ]
+}
