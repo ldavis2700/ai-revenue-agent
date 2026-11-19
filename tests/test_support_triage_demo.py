@@ -37,6 +37,14 @@ class SupportTriageDemoTests(unittest.TestCase):
         self.assertNotIn("message", event)
         self.assertFalse(event["auto_sent"])
 
+    def test_audit_omits_potentially_identifying_ticket_id(self):
+        # Even a caller-supplied ticket ID can accidentally contain a customer email.
+        item = prepare_ticket("customer@example.com", "Please check my order")
+        event = safe_audit_event(item)
+        self.assertNotIn("ticket_id", event)
+        self.assertNotIn("customer@example.com", str(event))
+        self.assertEqual(event["approval_state"], "pending_human_review")
+
     def test_reject_blank_or_oversized_ticket(self):
         for value in ("", " ", "x" * 20001):
             with self.assertRaises(ValueError):
