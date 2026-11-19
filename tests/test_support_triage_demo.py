@@ -33,6 +33,26 @@ class SupportTriageDemoTests(unittest.TestCase):
             self.assertEqual(item.approval_state, "pending_human_review")
             self.assertFalse(item.auto_sent)
 
+    def test_product_harm_escalates_to_human_without_send(self):
+        # Synthetic product safety incidents are never routed to routine support.
+        for body in (
+            "My child had an allergic reaction to the product",
+            "The charger is a fire hazard",
+            "The device caused an injury",
+        ):
+            item = prepare_ticket("fictional-safety", body)
+            self.assertEqual(item.urgency, "high")
+            self.assertEqual(item.internal_route, "human_escalation")
+            self.assertTrue(item.needs_human_review)
+            self.assertFalse(item.auto_sent)
+            self.assertEqual(item.approval_state, "pending_human_review")
+
+    def test_normal_shipping_remains_nonurgent(self):
+        item = prepare_ticket("fictional-routine", "When will my order ship?")
+        self.assertEqual(item.urgency, "normal")
+        self.assertEqual(item.internal_route, "fulfillment_review")
+        self.assertFalse(item.auto_sent)
+
     def test_no_fake_refund_or_delivery_assertions(self):
         item = prepare_ticket("t-3", "Please refund me now")
         self.assertNotIn("refund processed", item.suggested_reply.lower())
