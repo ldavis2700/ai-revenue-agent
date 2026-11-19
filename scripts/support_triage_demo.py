@@ -22,7 +22,7 @@ TOPIC_RULES: tuple[tuple[Topic, re.Pattern[str]], ...] = (
     ("order", re.compile(r"\b(order|cancel|item|product)\b", re.I)),
 )
 HIGH_URGENCY = re.compile(
-    r"\b(fraud|stolen|unauthorized|charged twice|chargeback|urgent|immediately|lost package|compromised|hacked|account takeover|data breach)\b",
+    r"\b(fraud|stolen|unauthorized|charged twice|chargeback|urgent|immediately|lost package|compromised|hacked|account takeover|data breach|product safety|safety hazard|unsafe product|injur(?:y|ies)|allergic reaction|poisoned|medical emergency|fire hazard|battery fire)\b",
     re.I,
 )
 ORDER_NUMBER = re.compile(
