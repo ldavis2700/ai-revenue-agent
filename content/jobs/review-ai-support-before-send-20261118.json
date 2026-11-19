@@ -1,0 +1,51 @@
+{
+  "id": "review-ai-support-before-send-20261118",
+  "title": "AI Support Replies: Keep a Human in Control",
+  "format": "vertical",
+  "audience": "adults",
+  "original": true,
+  "rights": "Original APEX/RMC AI Workshop educational writing and typography-only visuals. CMU Flite slt synthetic narration rendered locally with FFmpeg; no third-party media, brand marks, real customer data, or music.",
+  "description": "A free practical checklist for owners testing AI-assisted customer support: classify the request, redact sensitive information, draft for a human, and test uncertain cases. Fictional examples only. No AI reply is automatically sent, no live helpdesk service is claimed, and no sales lift is promised. Optional opt-in small-business response workflow inquiry: https://apex-content-worker-production.up.railway.app/home-services. Public checkout remains paused.",
+  "scenes": [
+    {
+      "heading": "Drafting is not sending",
+      "text": "Keep one human decision before any reply leaves.",
+      "narration": "An AI tool can help draft a customer reply, but a draft is not permission to send. Start with human review and a clear path for exceptions."
+    },
+    {
+      "heading": "1. Classify the request",
+      "text": "Routine question | missing facts | urgent human review",
+      "narration": "A fictional cleaning business receives three messages: a request for hours, a disputed invoice, and a safety complaint. These need different handling. Do not treat all three as routine."
+    },
+    {
+      "heading": "2. Hide private details",
+      "text": "Use a sample ID. Mask contact and payment fields.",
+      "narration": "Before trying a new workflow, replace real names, phone numbers and payment details with fictional values. Keep only the fields needed to decide who should review the request."
+    },
+    {
+      "heading": "3. Draft with uncertainty",
+      "text": "Unknown price or policy? Ask the owner, not the model.",
+      "narration": "If the booking price, refund rule or appointment availability is unknown, the draft should say that a team member needs to confirm. Never invent a refund or promise a booking."
+    },
+    {
+      "heading": "4. Route high-risk cases",
+      "text": "Safety, billing disputes and complaints need a person.",
+      "narration": "Set a simple rule for urgent safety issues and billing disputes. Flag the request for an authorized human. Do not allow an automatic response to close the case or make a financial commitment."
+    },
+    {
+      "heading": "5. Test before enabling",
+      "text": "Try duplicates, blanks, wrong categories and restarts.",
+      "narration": "Use fictional messages to test duplicate submissions, missing details, uncertain classification and a worker restart. Confirm that every case stays reviewable and that no duplicate message is sent."
+    },
+    {
+      "heading": "6. Measure the outcome",
+      "text": "Track reviewed drafts, corrections and exceptions.",
+      "narration": "Count how many drafts a reviewer accepts and corrects. Also count exceptions and the time spent reviewing. A synthetic demonstration cannot establish customer satisfaction or increased revenue."
+    },
+    {
+      "heading": "Free first step",
+      "text": "Start with one human-reviewed response template.",
+      "narration": "Write one response template and an escalation checklist before buying more automation. RMC AI Workshop shares educational examples. The APEX home services page accepts optional inquiries, without requiring a purchase."
+    }
+  ]
+}
