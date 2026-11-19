@@ -261,6 +261,23 @@ class WeeklyModelTests(unittest.TestCase):
   self.assertIn("active_experiment_reserved_minutes_must_reconcile",bad["reasons"])
   self.assertEqual(bad["proposed_preparation_reservations"],[])
 
+ def test_active_experiment_reserve_covers_all_delivery_effort(self):
+  # Synthetic-only regression: no record here verifies a real customer or capacity.
+  for effort_key in ("implementation_minutes", "delivery_minutes", "qa_minutes", "support_minutes"):
+   with self.subTest(effort_key=effort_key):
+    entry=self.active_experiment_record(**{effort_key:16})
+    plan=w.weekly_report([self.ready_candidate()],self.now,capacity=self.operator_capacity(
+        active_model_ids=["model-1"],active_experiment_records=[entry]))["capacity_admission"]
+    self.assertEqual(plan["state"],"capacity_evidence_required")
+    self.assertIn("active_experiment_effort_exceeds_reserved_minutes",plan["reasons"])
+    self.assertEqual(plan["proposed_preparation_reservations"],[])
+    self.assertFalse(plan["active_experiments_started"])
+  # The original 15+15+15+15 = 60-minute reservation remains valid.
+  valid=w.weekly_report([self.ready_candidate()],self.now,capacity=self.operator_capacity(
+      active_model_ids=["model-1"],active_experiment_records=[self.active_experiment_record()]))["capacity_admission"]
+  self.assertEqual(valid["state"],"operator_reported_capacity_plan_only")
+  self.assertNotIn("active_experiment_effort_exceeds_reserved_minutes",valid["reasons"])
+
  def test_active_records_require_consent_cost_qa_dates_and_rollback(self):
   invalid_cases=[
    ("permission_and_terms_verified",False,"active_experiment_permission_and_terms_verified_required"),
