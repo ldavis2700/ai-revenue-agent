@@ -332,6 +332,15 @@ def active_experiment_record_review(capacity, active_ids, now):
                 and type(record.get("time_cap_minutes")) is int
                 and minutes > record["time_cap_minutes"]):
             reasons.add("active_experiment_reservation_exceeds_time_cap")
+        # Reserve the full delivery burden, not just an arbitrary positive slot.
+        # Operator-supplied estimates still require independent verification.
+        effort_keys = ("implementation_minutes", "delivery_minutes",
+                       "qa_minutes", "support_minutes")
+        if (type(minutes) is int and 0 < minutes <= 10000000
+                and all(type(record.get(key)) is int
+                        and 0 <= record[key] <= 10000000 for key in effort_keys)
+                and sum(record[key] for key in effort_keys) > minutes):
+            reasons.add("active_experiment_effort_exceeds_reserved_minutes")
         if record.get("max_new_spend_cents") != 0 or type(record.get("max_new_spend_cents")) is not int:
             reasons.add("active_experiment_zero_new_spend_required")
         for key in ("baseline", "success_threshold"):
