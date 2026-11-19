@@ -19,6 +19,20 @@ class SupportTriageDemoTests(unittest.TestCase):
         self.assertFalse(item.auto_sent)
         self.assertTrue(item.needs_human_review)
 
+    def test_security_compromise_escalates_for_human_review(self):
+        # Synthetic security reports require immediate human escalation.
+        for message in (
+            "My login was hacked",
+            "My account was compromised",
+            "I suspect an account takeover",
+            "There may have been a data breach",
+        ):
+            item = prepare_ticket("synthetic-security", message)
+            self.assertEqual(item.urgency, "high")
+            self.assertEqual(item.internal_route, "human_escalation")
+            self.assertEqual(item.approval_state, "pending_human_review")
+            self.assertFalse(item.auto_sent)
+
     def test_no_fake_refund_or_delivery_assertions(self):
         item = prepare_ticket("t-3", "Please refund me now")
         self.assertNotIn("refund processed", item.suggested_reply.lower())
