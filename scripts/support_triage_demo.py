@@ -88,7 +88,7 @@ def prepare_ticket(ticket_id: str, message: str) -> PreparedTicket:
 def safe_audit_event(item: PreparedTicket) -> dict[str, str | bool]:
     """Minimal event without customer message, email, name or an order number."""
     return {
-        "ticket_id": item.ticket_id,
+        # No raw, reversible, or unsalted hashed customer-supplied identifier.
         "topic": item.topic,
         "urgency": item.urgency,
         "internal_route": item.internal_route,
