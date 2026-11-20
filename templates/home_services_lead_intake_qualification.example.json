@@ -1,0 +1,50 @@
+{
+  "monthly_inbound_leads": 60,
+  "business_hours_missed_calls": 4,
+  "after_hours_missed_calls": 12,
+  "median_first_response_minutes": 45,
+  "current_rates": {
+    "contact": 0.7,
+    "qualification": 0.6,
+    "booking": 0.4,
+    "attendance": 0.8,
+    "close": 0.5
+  },
+  "average_job_revenue_cents": 65000,
+  "gross_profit_per_job_cents": 25000,
+  "channels": [
+    "phone",
+    "sms",
+    "email"
+  ],
+  "crm_or_source_of_truth": "redacted CRM aggregate",
+  "calendar_or_scheduler": "authorized scheduler",
+  "consent_basis": "customer requested service through an owned form or business phone line",
+  "opt_out_process_confirmed": true,
+  "quiet_hours_defined": true,
+  "suppression_list_available": true,
+  "human_escalation_owner": "dispatch role",
+  "human_escalation_sla_minutes": 15,
+  "authorized_integration_method": "scoped OAuth",
+  "integration_authorized": true,
+  "baseline_evidence": [
+    "redacted CRM aggregate reference",
+    "redacted call-log summary reference"
+  ],
+  "uses_bought_or_scraped_lists": false,
+  "emergency_dispatch_required": false,
+  "guaranteed_outcome_requested": false,
+  "outcome_pricing_requested": false,
+  "economics": {
+    "diagnostic_price_cents": 35000,
+    "implementation_price_cents": 200000,
+    "monthly_fee_cents": 90000,
+    "initial_delivery_cost_cents": 40000,
+    "monthly_delivery_cost_cents": 15000,
+    "estimated_initial_api_cost_cents": 5000,
+    "estimated_monthly_api_cost_cents": 5000,
+    "estimated_cac_cents": 10000,
+    "estimated_initial_human_hours": 8,
+    "estimated_monthly_human_hours": 2
+  }
+}

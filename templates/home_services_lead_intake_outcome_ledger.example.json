@@ -1,0 +1,46 @@
+{
+  "paid_pilot_accepted": true,
+  "pilot_acceptance_evidence_ref": "redacted://buyer/accepted-pilot-report",
+  "pilot_settled_payment_verified": true,
+  "pilot_payment_evidence_ref": "redacted://authorized-rail/settled-pilot-payment",
+  "outcome_terms_accepted": true,
+  "outcome_terms_evidence_ref": "redacted://authorized-channel/outcome-scope-v1",
+  "objective_billable_event": "attended_appointment",
+  "source_of_truth": "authorized CRM and scheduling reconciliation",
+  "attribution_window_start": "2026-09-01T00:00:00Z",
+  "attribution_window_end": "2026-10-01T00:00:00Z",
+  "attribution_exclusions": [
+    "duplicate records",
+    "cancellations and no-shows",
+    "existing customers outside the accepted campaign",
+    "organic or disputed events"
+  ],
+  "fee_per_event_cents": 2500,
+  "monthly_cap_cents": 25000,
+  "buyer_review_window_days": 7,
+  "dispute_process": "buyer reviews redacted event evidence; unresolved items escalate to the named owners",
+  "human_escalation_owner": "authorized operations role",
+  "events": [
+    {
+      "event_id": "evt-redacted-001",
+      "source_evidence_ref": "redacted://source-of-truth/event-001",
+      "occurred_at": "2026-09-12T18:00:00Z",
+      "event_type": "attended_appointment",
+      "buyer_verified": true,
+      "attributable": true,
+      "excluded": false,
+      "disputed": false
+    },
+    {
+      "event_id": "evt-redacted-002",
+      "source_evidence_ref": "redacted://source-of-truth/event-002",
+      "occurred_at": "2026-09-14T20:00:00Z",
+      "event_type": "attended_appointment",
+      "buyer_verified": false,
+      "attributable": false,
+      "excluded": true,
+      "exclusion_reason": "buyer did not verify attendance",
+      "disputed": false
+    }
+  ]
+}
