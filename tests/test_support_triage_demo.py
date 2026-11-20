@@ -47,6 +47,30 @@ class SupportTriageDemoTests(unittest.TestCase):
             self.assertFalse(item.auto_sent)
             self.assertEqual(item.approval_state, "pending_human_review")
 
+    def test_thermal_product_harm_never_routes_to_routine(self):
+        # Synthetic-only missed safety phrasings; this is not production safety assurance.
+        for body in (
+            "The charger caught fire",
+            "My device is on fire",
+            "The product is smoking",
+            "The battery is overheating",
+            "The battery overheated",
+            "My hand was burned",
+        ):
+            with self.subTest(body=body):
+                item = prepare_ticket("fictional-thermal", body)
+                self.assertEqual(item.urgency, "high")
+                self.assertEqual(item.internal_route, "human_escalation")
+                self.assertEqual(item.approval_state, "pending_human_review")
+                self.assertTrue(item.needs_human_review)
+                self.assertFalse(item.auto_sent)
+
+    def test_ordinary_shipping_is_not_thermal_incident(self):
+        for body in ("When will my order ship?", "Is my smoked salmon order shipping?"):
+            item = prepare_ticket("fictional-ordinary", body)
+            self.assertEqual(item.urgency, "normal")
+            self.assertFalse(item.auto_sent)
+
     def test_normal_shipping_remains_nonurgent(self):
         item = prepare_ticket("fictional-routine", "When will my order ship?")
         self.assertEqual(item.urgency, "normal")
