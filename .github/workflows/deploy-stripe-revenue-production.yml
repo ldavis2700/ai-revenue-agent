@@ -32,6 +32,19 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Require the exact current main revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+          current_commit="$(git rev-parse --verify 'HEAD^{commit}')"
+          main_commit="$(git rev-parse --verify 'refs/remotes/origin/main^{commit}')"
+          test "$current_commit" = "$main_commit" || {
+            echo "Refusing production mutation: requested revision $current_commit is not current main $main_commit."
+            exit 1
+          }
+          echo "Authorized exact current-main production revision: $current_commit"
+
       - name: Verify release prerequisites
         shell: bash
         run: |

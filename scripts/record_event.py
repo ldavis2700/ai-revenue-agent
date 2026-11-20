@@ -54,9 +54,19 @@ def main():
         COALESCE(SUM(CASE WHEN event_type='refund' THEN value ELSE 0 END),0),
         COUNT(CASE WHEN event_type='sale' THEN 1 END)
         FROM events''').fetchone()
-    totals = dict(zip(['gross_revenue', 'refunds', 'sales'], row))
-    totals['net_revenue'] = totals['gross_revenue'] - totals['refunds']
-    print(json.dumps({'ok': True, 'lead_id': args.lead_id, 'event_type': args.event_type, 'totals': totals}))
+    claimed = dict(zip(
+        ['claimed_sale_value', 'claimed_refund_value', 'claimed_sale_events'],
+        row,
+    ))
+    claimed['claimed_net_value'] = (
+        claimed['claimed_sale_value'] - claimed['claimed_refund_value'])
+    claimed['status'] = 'unverified_not_collected_revenue'
+    print(json.dumps({
+        'ok': True,
+        'lead_id': args.lead_id,
+        'event_type': args.event_type,
+        'claimed_sales': claimed,
+    }))
 
 
 if __name__ == '__main__':

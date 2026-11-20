@@ -10,6 +10,15 @@ from typing import Any
 
 VALIDATED_STATES = {"continue_validation", "scale_candidate"}
 RETIRED_STATES = {"deprioritize"}
+PUBLIC_LEDGER_ONLY_FIELDS = frozenset({
+    "_ledger_verified", "economics_verified", "observed_profit",
+    "verified_retention_receipts", "verified_expansion_receipts",
+    "verified_reuse_receipts", "verified_reused_opportunities",
+    "retained_recurring_value_cents", "expanded_value_delta_cents",
+    "realized_recurring_net_cents", "realized_recurring_contribution_cents",
+    "realized_recurring_cost_cents", "mastery", "receipt_lineage",
+    "reuse_receipt_lineage",
+})
 
 
 def _finite_number(value: Any, field: str) -> float:
@@ -53,6 +62,9 @@ def _validated_candidates(candidates: list[dict[str, Any]]) -> tuple[list[dict[s
             )
             if not 0 <= quality <= 1:
                 raise ValueError("effective_evidence_quality must be between 0 and 1")
+            economics_verified = candidate.get("economics_verified", False)
+            if not isinstance(economics_verified, bool):
+                raise ValueError("economics_verified must be a boolean")
         except ValueError:
             rejected.append(rejection_id)
             continue
@@ -62,6 +74,7 @@ def _validated_candidates(candidates: list[dict[str, Any]]) -> tuple[list[dict[s
             "eligible": eligibility,
             "pursuit_score": score,
             "effective_evidence_quality": quality,
+            "economics_verified": economics_verified,
         })
     return valid, rejected
 
@@ -69,8 +82,9 @@ def _validated_candidates(candidates: list[dict[str, Any]]) -> tuple[list[dict[s
 def compare_candidates(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     """Return a recommendation-only champion/challenger comparison.
 
-    A champion must have measured evidence and a non-retired experiment state. A challenger
-    is the highest-scoring distinct eligible candidate. This never authorizes spend, outreach,
+    A champion must have receipt-verified economics, measured evidence, and a
+    non-retired validated experiment state. A challenger is the highest-scoring
+    distinct eligible candidate. This never authorizes spend, outreach,
     contracts, charging, deployment, or customer-system changes.
 
     Raises ValueError if the selected scores have an unrepresentable difference, rather
@@ -80,7 +94,9 @@ def compare_candidates(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     eligible = [c for c in candidates if c["eligible"] and c.get("experiment_state") not in RETIRED_STATES]
     measured = [
         c for c in eligible
-        if c.get("experiment_state") in VALIDATED_STATES and float(c.get("effective_evidence_quality", 0) or 0) > 0
+        if c["economics_verified"]
+        and c.get("experiment_state") in VALIDATED_STATES
+        and float(c.get("effective_evidence_quality", 0) or 0) > 0
     ]
     champion = max(measured, key=lambda c: float(c.get("pursuit_score", 0) or 0), default=None)
 
@@ -141,12 +157,33 @@ def candidates_from_intelligence(payload: dict[str, Any]) -> list[dict[str, Any]
     return candidates if isinstance(candidates, list) else []
 
 
+def public_candidates_from_intelligence(
+    payload: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Strip ledger-derived assertions from an untrusted snapshot file."""
+    sanitized: list[dict[str, Any]] = []
+    for candidate in candidates_from_intelligence(payload):
+        if not isinstance(candidate, dict):
+            sanitized.append(candidate)
+            continue
+        public = {
+            key: value for key, value in candidate.items()
+            if key not in PUBLIC_LEDGER_ONLY_FIELDS
+        }
+        public["economics_verified"] = False
+        if public.get("experiment_state") in VALIDATED_STATES:
+            public["experiment_state"] = "validate"
+        sanitized.append(public)
+    return sanitized
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare APEX champion and challenger opportunities")
     parser.add_argument("--intelligence-json", required=True, help="Path to a business-model intelligence snapshot")
     args = parser.parse_args()
     payload = json.loads(Path(args.intelligence_json).read_text(encoding="utf-8"))
-    print(json.dumps(compare_candidates(candidates_from_intelligence(payload)), indent=2))
+    candidates = public_candidates_from_intelligence(payload)
+    print(json.dumps(compare_candidates(candidates), indent=2))
 
 
 if __name__ == "__main__":
