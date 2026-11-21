@@ -148,7 +148,7 @@ class BusinessFinancingPacketTests(unittest.TestCase):
     def test_tiny_positive_rate_keeps_stable_payment(self):
         lines = repayment_lines(self._documented_repayment_profile(annual_interest_rate_pct=1e-12))
         self.assertIn("monthly payment: $1,000.00", " ".join(lines))
-        self.assertNotIn("nan", " ".join(lines).lower())
+        self.assertNotRegex(" ".join(lines).lower(), r"\bnan\b")
         self.assertNotIn("infinity", " ".join(lines).lower())
 
     def test_output_is_private_and_never_overwrites(self):
