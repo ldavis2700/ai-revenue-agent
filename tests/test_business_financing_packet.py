@@ -67,6 +67,22 @@ class BusinessFinancingPacketTests(unittest.TestCase):
         self.assertIn("not a lender quote or approval", packet)
         self.assertIn("existing annual debt service: $0.00", packet)
 
+    def test_fee_treatment_is_not_inferred_from_a_documented_amount(self):
+        packet = render(self._documented_repayment_profile(
+            annual_interest_rate_pct=0, term_months=12, upfront_fees=300))
+        self.assertIn("Scheduled installments only (excluding any separately paid fee): $12,000.00.", packet)
+        self.assertIn("Conditional installments-plus-fees if $300.00", packet)
+        self.assertIn("principal: $12,300.00. Not a verified all-in loan cost.", packet)
+        self.assertIn("Fee treatment is NOT VERIFIED", packet)
+        self.assertIn("net funds received", packet)
+        self.assertNotIn("Illustrative lifetime loan payments plus known upfront fees", packet)
+
+    def test_zero_fee_case_still_disclaims_unverified_disbursement(self):
+        packet = render(self._documented_repayment_profile(
+            annual_interest_rate_pct=0, term_months=12, upfront_fees=0))
+        self.assertIn("Scheduled installments only", packet)
+        self.assertIn("Fee treatment is NOT VERIFIED", packet)
+
     def test_optional_lender_terms_reject_malformed_documented_sources(self):
         # All three optional loan-term fields must meet the same documented
         # evidence reference standard as mandatory financing facts.
