@@ -67,6 +67,9 @@
   <h1>Turn more home-service inquiries into clear next steps.</h1>
   <p>Plumbers, cleaners, landscapers, HVAC companies, electricians, handymen, and other local service businesses often lose momentum when calls are missed or estimates receive no follow-up. I build a tailored set of ready-to-use responses so your team can reply consistently and quickly.</p>
 
+  <a data-preview-campaign="home_services_hero" class="cta" href="/?utm_source=organic&amp;utm_medium=landing&amp;utm_campaign=home_services_hero#lead-form">Request a free tailored preview</a>
+  <p class="muted">No payment or subscription is required to request a preview. This does not authorize automated messages to your customers.</p>
+
   <h2>Messages tailored to the way service work is sold</h2>
   <ul>
     <li>New-job inquiry and service-area questions</li>
@@ -92,8 +95,33 @@
   <p><strong>Does requesting a preview cost anything?</strong><br />No. It does not purchase anything or enroll you in a subscription.</p>
   <p><strong>Is the monthly plan required?</strong><br />No. The $99 monthly optimization service is optional and separate from the one-time setup.</p>
   <p><strong>Will this automatically message customers?</strong><br />No. The setup provides tailored response assets and a practical response system. Automated sending or access to customer systems requires separate authorization.</p>
-  <a class="cta" href="/?utm_source=organic&amp;utm_medium=landing&amp;utm_campaign=home_services#lead-form">Request a free tailored preview</a>
+  <a data-preview-campaign="home_services" class="cta" href="/?utm_source=organic&amp;utm_medium=landing&amp;utm_campaign=home_services#lead-form">Request a free tailored preview</a>
   <p>Want to measure your reply process before requesting a preview? Try the <a href="/response-gap-audit">free seven-day response-gap audit</a> with aggregate counts only. No customer details are needed, no payment or signup is required, and the worksheet does not estimate revenue.</p>
   <p class="muted">Requesting a preview does not purchase anything or enroll you in a subscription.</p>
-</article><footer><a href="/">AI Customer Response System</a> · <a href="/privacy.html">Privacy</a></footer></main></body>
+</article><footer><a href="/">AI Customer Response System</a> · <a href="/privacy.html">Privacy</a></footer></main><script>
+  // Carry genuine campaign tags into the existing consented free-preview form.
+  // Static same-origin fallbacks still work when JavaScript is unavailable.
+  (() => {
+    const inbound = new URLSearchParams(window.location.search);
+    const tagged = new URLSearchParams();
+    for (const key of ['utm_source', 'utm_medium', 'utm_campaign']) {
+      const clean = (inbound.get(key) || '').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 80);
+      if (clean) tagged.set(key, clean);
+    }
+    for (const link of document.querySelectorAll('a[data-preview-campaign]')) {
+      const params = new URLSearchParams(tagged);
+      if (!params.toString()) {
+        params.set('utm_source', 'organic');
+        params.set('utm_medium', 'landing');
+      }
+      // An incoming source-only tag must not erase which CTA was clicked.
+      // Retain an explicitly supplied campaign without overwriting it.
+      if (!params.has('utm_campaign')) {
+        params.set('utm_campaign', link.dataset.previewCampaign);
+      }
+      link.href = '/?' + params.toString() + '#lead-form';
+    }
+  })();
+</script>
+</body>
 </html>

@@ -136,6 +136,11 @@ class ContentHTTPTests(unittest.TestCase):
             home_services=response.read().decode()
             self.assertIn('href="/response-gap-audit"',home_services)
             self.assertIn('aggregate counts only',home_services)
+            self.assertIn('utm_campaign=home_services_hero#lead-form',home_services)
+            self.assertLess(
+                home_services.index('utm_campaign=home_services_hero#lead-form'),
+                home_services.index('<h2>Messages tailored'))
+            self.assertIn('No payment or subscription is required',home_services)
             self.assertNotIn('buy.stripe.com',home_services)
         with self.assertRaises(HTTPError) as exc:
             urlopen(self.url+'/sales/response-gap-audit.html')
