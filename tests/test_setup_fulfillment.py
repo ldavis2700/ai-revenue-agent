@@ -34,11 +34,16 @@ class SetupFulfillmentTests(unittest.TestCase):
             INSERT INTO events VALUES ('buyer','sale','{"processor_event_id":"pay1"}','2026-01-01T00:00:00Z');
         ''')
 
-    def actions(self):
+    def actions(self, **runtime_overrides):
         self.conn.commit()
         output = subprocess.check_output([sys.executable, str(ROOT / 'scripts/next_actions.py')],
             env={**os.environ, 'REVENUE_DB_PATH': self.path,
-                 'MANAGED_CHECKOUT_URL_TEMPLATE': 'https://pay.example.test/managed'}, text=True)
+                 'MANAGED_CHECKOUT_URL_TEMPLATE': 'https://pay.example.test/managed',
+                 'CHECKOUT_URL_TEMPLATE': 'https://pay.example.test/setup?lead={lead_id}',
+                 'DELIVERY_ENABLED': 'true',
+                 'REVENUE_AGENT_EXECUTION_ENABLED': 'true',
+                 'REVENUE_AGENT_KILL_SWITCH': 'false',
+                 **runtime_overrides}, text=True)
         return json.loads(output)['actions']
 
     def receipt(self, **overrides):
@@ -68,6 +73,29 @@ class SetupFulfillmentTests(unittest.TestCase):
         self.assertEqual(self.actions()[0]['action'], 'fulfill_setup')
         self.receipt()
         self.assertEqual(self.actions()[0]['action'], 'send_managed_checkout')
+
+    def test_checkout_generation_requires_delivery_and_execution(self):
+        self.conn.execute("DELETE FROM events WHERE lead_id='buyer'")
+        self.conn.execute("INSERT INTO events VALUES ('buyer','affirmative_purchase_intent','{}','2026-01-02T00:00:00Z')")
+        self.assertEqual(self.actions()[0]['action'], 'send_checkout')
+        for gate in ({'DELIVERY_ENABLED': 'false'},
+                     {'REVENUE_AGENT_EXECUTION_ENABLED': 'false'},
+                     {'REVENUE_AGENT_KILL_SWITCH': 'true'}):
+            with self.subTest(gate=gate):
+                item = self.actions(**gate)[0]
+                self.assertEqual(item['action'], 'human_close')
+                self.assertIsNone(item['checkout_url'])
+
+    def test_checkout_cli_blocks_unready_live_link(self):
+        result = subprocess.check_output(
+            [sys.executable, str(ROOT / 'scripts/checkout_link.py'), 'buyer'],
+            env={**os.environ, 'CHECKOUT_URL_TEMPLATE': 'https://pay.example.test/{lead_id}',
+                 'DELIVERY_ENABLED': 'false', 'REVENUE_AGENT_EXECUTION_ENABLED': 'true',
+                 'REVENUE_AGENT_KILL_SWITCH': 'false'}, text=True)
+        parsed = json.loads(result)
+        self.assertFalse(parsed['ready'])
+        self.assertEqual(parsed['reason'], 'checkout_not_authorized_for_delivery')
+        self.assertNotIn('checkout_url', parsed)
 
     def test_opt_out_preserves_internal_obligation_but_blocks_upsell(self):
         self.conn.execute("UPDATE leads SET contact_allowed=0")
