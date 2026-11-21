@@ -226,6 +226,9 @@ jobs:
         env:
           REVENUE_DB_PATH: /tmp/revenue_agent.db
           CHECKOUT_URL_TEMPLATE: "https://pay.example.test/checkout?lead={lead_id}&email={email}&amount={amount}&offer={offer}"
+          DELIVERY_ENABLED: "true"
+          REVENUE_AGENT_EXECUTION_ENABLED: "true"
+          REVENUE_AGENT_KILL_SWITCH: "false"
         run: |
           LEAD_ID=$(python - <<'PY'
           import sqlite3
