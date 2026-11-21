@@ -104,15 +104,23 @@ def repayment_lines(profile: dict) -> list[str]:
         payment = principal * monthly_rate / (-expm1(-months * log1p(monthly_rate)))
     payment = finite(payment)
     combined_service = finite(finite(payment * 12) + existing)
-    total_paid = finite(finite(payment * months) + fees)
+    installments_total = finite(payment * months)
+    # Upfront fees may be withheld, financed on top, included in principal, or paid separately.
+    # The bare amount alone cannot establish the actual cash outflow or net disbursement.
+    fee_separate_total = finite(installments_total + fees)
     stress_cash = finite(cash - 0.20 * abs(cash))
     base_dscr = finite(cash / combined_service)
     stress_dscr = finite(stress_cash / combined_service)
     return [
         "**Illustrative only: documented borrower inputs, not a lender quote or approval.**",
         f"New-loan scheduled monthly payment: ${payment:,.2f}; existing annual debt service: ${existing:,.2f}.",
-        f"Illustrative lifetime loan payments plus known upfront fees: ${total_paid:,.2f}; "
-        f"of which upfront fees are ${fees:,.2f}. Other costs remain unresolved.",
+        f"Scheduled installments only (excluding any separately paid fee): ${installments_total:,.2f}.",
+        f"Conditional installments-plus-fees if ${fees:,.2f} of fees are paid OUTSIDE the loan "
+        f"principal: ${fee_separate_total:,.2f}. Not a verified all-in loan cost.",
+        "Fee treatment is NOT VERIFIED: when fees are financed, deducted from proceeds, or "
+        "already included in principal, the conditional sum does not establish actual total "
+        "borrowing cost or net funds received. Obtain written gross principal, net disbursement, "
+        "APR, and itemized fee treatment.",
         f"Base debt-service coverage: {base_dscr:.2f}x; conservative cash-flow downside "
         f"(-20% of absolute cash amount): {stress_dscr:.2f}x.",
         "The payment approximation uses the documented nominal annual rate, not an APR disclosure. "
