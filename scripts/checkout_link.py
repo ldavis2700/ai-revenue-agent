@@ -26,6 +26,14 @@ def main():
         print(json.dumps({'ready': False, 'reason': 'CHECKOUT_URL_TEMPLATE_not_configured'}))
         return
 
+    # A payment link is never ready while operational delivery or execution is disabled.
+    # This does not replace purchase-intent, funding, and fulfillment verification.
+    if (os.getenv('DELIVERY_ENABLED', 'false').strip().lower() != 'true'
+            or os.getenv('REVENUE_AGENT_EXECUTION_ENABLED', 'false').strip().lower() != 'true'
+            or os.getenv('REVENUE_AGENT_KILL_SWITCH', 'false').strip().lower() == 'true'):
+        print(json.dumps({'ready': False, 'reason': 'checkout_not_authorized_for_delivery'}))
+        return
+
     values = {
         'lead_id': urllib.parse.quote(args.lead_id, safe=''),
         'email': urllib.parse.quote(args.email, safe=''),
