@@ -92,8 +92,28 @@
   <p><strong>Does requesting a preview cost anything?</strong><br />No. It does not purchase anything or enroll you in a subscription.</p>
   <p><strong>Is the monthly plan required?</strong><br />No. The $99 monthly optimization service is optional and separate from the one-time setup.</p>
   <p><strong>Will this automatically message customers?</strong><br />No. The setup provides tailored response assets and a practical response system. Automated sending or access to customer systems requires separate authorization.</p>
-  <a class="cta" href="/?utm_source=organic&amp;utm_medium=landing&amp;utm_campaign=home_services#lead-form">Request a free tailored preview</a>
+  <a id="home-preview-cta" class="cta" href="/?utm_source=organic&amp;utm_medium=landing&amp;utm_campaign=home_services#lead-form">Request a free tailored preview</a>
   <p>Want to measure your reply process before requesting a preview? Try the <a href="/response-gap-audit">free seven-day response-gap audit</a> with aggregate counts only. No customer details are needed, no payment or signup is required, and the worksheet does not estimate revenue.</p>
   <p class="muted">Requesting a preview does not purchase anything or enroll you in a subscription.</p>
-</article><footer><a href="/">AI Customer Response System</a> · <a href="/privacy.html">Privacy</a></footer></main></body>
+</article><footer><a href="/">AI Customer Response System</a> · <a href="/privacy.html">Privacy</a></footer></main><script>
+  // Preserve a real inbound campaign through the second page of the opt-in flow.
+  // Without this handoff, the fixed "organic/landing" fallback overwrites
+  // YouTube and other campaign attribution before the consented request.
+  (() => {
+    const incoming = new URLSearchParams(window.location.search);
+    const forwarded = new URLSearchParams();
+    for (const key of ['utm_source', 'utm_medium', 'utm_campaign']) {
+      const clean = (incoming.get(key) || '').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 80);
+      if (clean) forwarded.set(key, clean);
+    }
+    if (!forwarded.toString()) {
+      forwarded.set('utm_source', 'organic');
+      forwarded.set('utm_medium', 'landing');
+      forwarded.set('utm_campaign', 'home_services');
+    }
+    document.getElementById('home-preview-cta').href =
+      '/?' + forwarded.toString() + '#lead-form';
+  })();
+</script>
+</body>
 </html>
