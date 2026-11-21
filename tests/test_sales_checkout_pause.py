@@ -76,6 +76,19 @@ class PausedCheckoutOfferTests(unittest.TestCase):
                 self.assertIn(f"<loc>{url}</loc>", sitemap)
                 self.assertNotIn(legacy, html)
 
+    def test_home_services_handoff_preserves_sanitized_inbound_campaign(self):
+        home = (OFFER.parent / "home-services.html").read_text(encoding="utf-8")
+        self.assertIn('id="home-preview-cta"', home)
+        self.assertIn("new URLSearchParams(window.location.search)", home)
+        self.assertIn("const forwarded = new URLSearchParams()", home)
+        self.assertIn("['utm_source', 'utm_medium', 'utm_campaign']", home)
+        self.assertIn("replace(/[^a-zA-Z0-9._-]/g, '')", home)
+        self.assertIn("slice(0, 80)", home)
+        self.assertIn("if (!forwarded.toString())", home)
+        self.assertIn("'/?' + forwarded.toString() + '#lead-form'", home)
+        self.assertNotIn("buy.stripe.com", home.lower())
+        self.assertNotIn("checkout.stripe.com", home.lower())
+
     def test_visible_copy_does_not_promise_live_checkout(self):
         self.assertIn("Online checkout is paused", self.html)
         self.assertIn("does not currently accept payments or subscriptions", self.html)
