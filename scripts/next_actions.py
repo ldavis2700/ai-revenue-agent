@@ -27,6 +27,11 @@ def parse_ts(value):
 def checkout_url(lead, template=CHECKOUT_URL_TEMPLATE, amount=OFFER_PRICE, offer=OFFER_NAME):
     if not template:
         return None
+    # An interest event alone is not an authorization to sell what cannot be delivered.
+    if (os.getenv('DELIVERY_ENABLED', 'false').strip().lower() != 'true'
+            or os.getenv('REVENUE_AGENT_EXECUTION_ENABLED', 'false').strip().lower() != 'true'
+            or os.getenv('REVENUE_AGENT_KILL_SWITCH', 'false').strip().lower() == 'true'):
+        return None
     values = {
         'lead_id': urllib.parse.quote(str(lead['id']), safe=''),
         'email': urllib.parse.quote(str(lead['email'] or ''), safe=''),
