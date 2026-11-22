@@ -59,15 +59,16 @@ def process(messages, output_dir, inject_failure=False):
     sheet = output_dir / "synthetic_sheet.csv"
     log = output_dir / "execution_log.json"
     rows = []
-    if sheet.exists():
-        with sheet.open(newline="", encoding="utf-8") as existing:
-            reader = csv.DictReader(existing)
-            if reader.fieldnames != HEADERS:
-                raise ValueError("unexpected sheet schema")
-            rows = list(reader)
-    seen = {row["message_id"] for row in rows}
     appended = []
     try:
+        if sheet.exists():
+            with sheet.open(newline="", encoding="utf-8") as existing:
+                reader = csv.DictReader(existing)
+                if reader.fieldnames != HEADERS:
+                    raise ValueError("unexpected sheet schema")
+                rows = list(reader)
+        seen = {row["message_id"] for row in rows}
+
         if not isinstance(messages, list):
             raise ValueError("input root must be array")
         for raw in messages:
