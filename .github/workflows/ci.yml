@@ -55,6 +55,8 @@ jobs:
         run: python -m unittest discover -s examples/ecommerce_ops -p 'test_task_digest.py' -v
       - name: Test isolated, consent-gated Supabase evidence handoff
         run: python -m unittest discover -s examples/evidence_review -p 'test_supabase_test_handoff.py' -v
+      - name: Test offline email-to-sheet reliability sample (synthetic, no network)
+        run: python -m unittest discover -s examples/offline_email_to_sheet -p 'test_pilot.py' -v
       - name: Build and smoke test continuous worker container
         run: |
           docker build -f Dockerfile.worker -t apex-worker-ci .
