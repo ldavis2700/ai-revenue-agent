@@ -64,5 +64,16 @@ class OfflinePilotTests(unittest.TestCase):
         self.assertTrue(all(row["followup_status"] == "APPROVAL_REQUIRED_NO_EXTERNAL_ACTION" for row in self.rows()))
 
 
+    def test_invalid_existing_sheet_fails_closed_and_logs(self):
+        sheet = self.output / "synthetic_sheet.csv"
+        sheet.write_text("unexpected_column\\nsynthetic\\n", encoding="utf-8")
+        before = sheet.read_bytes()
+        result = process(MESSAGES, self.output)
+        self.assertEqual(result["state"], "failure")
+        self.assertEqual(result["new_records"], 0)
+        self.assertEqual(sheet.read_bytes(), before)
+        self.assertEqual(json.loads((self.output / "execution_log.json").read_text(encoding="utf-8"))["state"], "failure")
+
+
 if __name__ == "__main__":
     unittest.main()
