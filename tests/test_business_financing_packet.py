@@ -67,6 +67,14 @@ class BusinessFinancingPacketTests(unittest.TestCase):
         self.assertIn("not a lender quote or approval", packet)
         self.assertIn("existing annual debt service: $0.00", packet)
 
+    def test_interest_model_is_not_misrepresented_as_lender_simple_interest(self):
+        packet = render(self._documented_repayment_profile())
+        self.assertIn("level-payment, declining-balance", packet)
+        self.assertIn("fixed/simple interest", packet)
+        self.assertIn("NOT an APR", packet)
+        self.assertIn("exact payment schedule", packet)
+        self.assertIn("before any affordability judgment", packet)
+
     def test_fee_treatment_is_not_inferred_from_a_documented_amount(self):
         packet = render(self._documented_repayment_profile(
             annual_interest_rate_pct=0, term_months=12, upfront_fees=300))
