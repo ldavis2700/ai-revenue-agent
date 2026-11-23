@@ -1,0 +1,4 @@
+[
+  {"id":"demo-mail-0001","received_at":"2026-11-22T13:00:00Z","sender":"example-a@test.invalid","subject":"Request for an estimate"},
+  {"id":"demo-mail-0002","received_at":"2026-11-22T13:10:00Z","sender":"example-b@test.invalid","subject":"Schedule a meeting"}
+]
