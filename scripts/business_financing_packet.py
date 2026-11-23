@@ -123,9 +123,14 @@ def repayment_lines(profile: dict) -> list[str]:
         "APR, and itemized fee treatment.",
         f"Base debt-service coverage: {base_dscr:.2f}x; conservative cash-flow downside "
         f"(-20% of absolute cash amount): {stress_dscr:.2f}x.",
-        "The payment approximation uses the documented nominal annual rate, not an APR disclosure. "
-        "Ask the lender for actual APR, amortization, servicing fees, default terms, "
-        "personal guarantees and collateral. These ratios are not underwriting decisions.",
+        "The payment approximation assumes level-payment, declining-balance amortization "
+        "using the nominal annual rate divided into monthly periods; this is NOT an APR "
+        "disclosure or a lender payment quote. Products described as fixed/simple interest, "
+        "daily-accrual, factor-rate or flat-fee financing may use materially different "
+        "payment calculations. Obtain the lender's written APR, exact payment schedule, "
+        "interest calculation method, fee treatment, servicing fees, default terms, "
+        "personal guarantees and collateral before any affordability judgment. "
+        "These ratios are not underwriting decisions.",
     ]
 
 def render(profile: dict) -> str:
