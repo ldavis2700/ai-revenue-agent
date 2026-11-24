@@ -30,7 +30,7 @@
     </div>
     <p><a href="https://github.com/ldavis2700/ai-revenue-agent/blob/main/docs/cleaning-response-gap-audit.html" target="_blank" rel="noopener noreferrer">Get a blank offline copy on GitHub</a> (select <strong>Download raw file</strong> there, then open the saved HTML file locally). This opens GitHub only when you select the link; no audit counts are included in that link.</p>
     <h2>Enter seven daily inquiry cohorts</h2>
-    <p>Count genuine new inquiries once on their original day. For each cohort, count only replies actually sent within 24 hours. Drafts and failed attempts do not count. You can revise yesterday's replies after the 24-hour window closes. Record actual staff review time in whole minutes.</p>
+    <p>Count genuine new inquiries once on their original day. For each cohort, count only replies actually sent within 24 hours. Drafts and failed attempts do not count. Only enter a day after every inquiry in that cohort has had a full 24-hour response window. Leave incomplete days blank until then. Record actual staff review time in whole minutes.</p>
     <form id="audit" novalidate>
       <div class="scroll">
         <table>
@@ -43,6 +43,7 @@
     </form>
     <section id="results" aria-live="polite" hidden>
       <h2>Your self-audit (not a revenue estimate)</h2>
+      <p>Completed daily cohorts entered: <output id="days"></output> of 7</p>
       <p>New inquiries: <output id="n"></output></p>
       <p>Replies actually sent within 24h: <output id="r"></output></p>
       <p>Unanswered within 24h: <output id="gap"></output></p>
@@ -85,7 +86,7 @@
       event.preventDefault();
       error.textContent = "";
       results.hidden = true;
-      let N = 0, R = 0, M = 0;
+      let N = 0, R = 0, M = 0, days = 0;
       for (let day = 1; day <= 7; day += 1) {
         const values = ["n","r","m"].map(k => document.getElementById(k + day).value.trim());
         if (values.every(v => v === "")) continue;
@@ -98,14 +99,23 @@
           error.textContent = "Day " + day + ": replies within 24 hours cannot exceed new inquiries in that day's cohort.";
           return;
         }
-        N += n; R += r; M += m;
+        N += n; R += r; M += m; days += 1;
       }
+      if (!days) {
+        error.textContent = "Enter at least one completed daily cohort; a blank worksheet is not a measured zero.";
+        return;
+      }
+      document.getElementById("days").textContent = String(days);
       document.getElementById("n").textContent = N.toLocaleString();
       document.getElementById("r").textContent = R.toLocaleString();
       document.getElementById("gap").textContent = (N - R).toLocaleString();
       document.getElementById("share").textContent = N ? (100 * R / N).toFixed(1) + "%" : "Not measurable (no inquiries)";
       document.getElementById("mins").textContent = M.toLocaleString();
       results.hidden = false;
+    });
+    form.addEventListener("input", () => {
+      results.hidden = true;
+      error.textContent = "";
     });
     document.getElementById("reset").addEventListener("click", () => {
       form.reset();
