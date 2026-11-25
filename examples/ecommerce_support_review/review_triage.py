@@ -15,7 +15,15 @@ _TOPICS = (
     ("shipping", ("tracking", "shipment", "shipped", "delivery", "where is my order", "late order")),
     ("cancellation", ("cancel", "cancellation")),
 )
-_URGENT = ("fraud", "identity theft", "security breach", "unsafe", "charged twice", "double charged")
+# Conservative review hints only; all messages still require human approval.
+_URGENT = re.compile(
+    r"\b(fraud|identity theft|security breach|unsafe|charged twice|double charged|"
+    r"hacked|compromised|account takeover|data breach|unauthorized|chargeback|"
+    r"product safety|safety hazard|injur(?:y|ies)|allergic reaction|poisoned|"
+    r"medical emergency|fire hazard|battery fire|on fire|caught fire|smoking|"
+    r"overheat(?:ing|ed|s)?|burn(?:s|ed|ing)?)\b",
+    re.IGNORECASE,
+)
 _DRAFTS = {
     "billing": "Thanks for contacting us about a billing concern. A team member will review the details and respond through the approved support channel.",
     "refund": "Thanks for reaching out about a return or refund. Our team will review the request against the applicable policy before replying.",
@@ -40,7 +48,7 @@ def triage(ticket: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("A safe opaque ticket id is required")
     folded = text.casefold()
     topic = next((name for name, keywords in _TOPICS if any(word in folded for word in keywords)), "other")
-    urgent = any(term in folded for term in _URGENT)
+    urgent = bool(_URGENT.search(text))
     match = _ORDER.search(text)
     order_ref = ("***" + match.group(1)[-4:]) if match else None
     language = ticket.get("language")
