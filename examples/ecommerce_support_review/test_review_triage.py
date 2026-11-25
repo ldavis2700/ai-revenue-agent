@@ -47,6 +47,28 @@ class ReviewTriageTests(unittest.TestCase):
         self.assertNotIn("approved", item["draft_for_review"].lower())
         self.assertNotIn("processed", item["draft_for_review"].lower())
 
+    def test_security_and_product_harm_review_hints(self):
+        for body in (
+            "My login was hacked", "The charger caught fire",
+            "The battery is overheating", "I suspect an account takeover",
+            "Unauthorized charge on order 12345", "There was a data breach",
+            "The product caused an injury", "The battery overheated",
+            "My hand was burned", "I had an allergic reaction",
+        ):
+            with self.subTest(body=body):
+                item = triage({"id": "fictional-risk", "synthetic": True, "message": body})
+                self.assertEqual(item["urgency_hint"], "review_soon")
+                self.assertTrue(item["human_approval_required"])
+                self.assertFalse(item["customer_send_enabled"])
+                self.assertEqual(item["status"], "internal_draft_only")
+
+    def test_ordinary_text_not_matched_as_safety_keyword(self):
+        for body in ("When will my order ship?", "Is my smoked salmon shipping?", "I ordered a burner cover"):
+            with self.subTest(body=body):
+                item = triage({"id": "fictional-routine", "synthetic": True, "message": body})
+                self.assertEqual(item["urgency_hint"], "standard_review")
+                self.assertFalse(item["customer_send_enabled"])
+
 
 if __name__ == "__main__":
     unittest.main()
