@@ -173,7 +173,7 @@
       <label class="consent"><input name="contact_consent" type="checkbox" required /><span>I agree that RMC Family Enterprises LLC may contact me about this request. I can opt out at any time.</span></label>
       <label class="consent"><input name="privacy_acknowledged" type="checkbox" required /><span>I acknowledge the <a href="/privacy" target="_blank" rel="noopener">privacy notice</a>.</span></label>
       <button id="lead-submit" class="cta disabled" type="submit" disabled>Request my preview</button>
-      <p id="lead-status" class="muted">Lead intake is being connected. The form will activate only after its secure endpoint is verified.</p>
+      <p id="lead-status" class="muted" role="status" aria-live="polite" aria-atomic="true">Lead intake is being connected. The form will activate only after its secure endpoint is verified.</p>
       <section id="instant-preview" class="preview instant-preview" aria-live="polite" hidden>
         <h2>General starter reply examples</h2>
         <p id="instant-summary" class="muted"></p>
@@ -223,31 +223,56 @@
     document.getElementById('instant-preview').hidden = false;
   }
 
+  let requestInFlight = false;
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
-    if (!/^https:\/\//i.test(endpoint)) return;
-    submit.disabled = true;
-    status.textContent = 'Sending securely…';
+    if (requestInFlight || !/^https:\/\//i.test(endpoint)) return;
+    const preview = document.getElementById('instant-preview');
+    preview.hidden = true;
     const payload = Object.fromEntries(new FormData(form).entries());
     payload.contact_consent = form.elements.contact_consent.checked;
     payload.privacy_acknowledged = form.elements.privacy_acknowledged.checked;
     payload.consent_version = 'contact-v1';
     if (campaign) payload.campaign = campaign;
     payload.pain_point = String(payload.pain_point || '').trim();
-    if (payload.pain_point.length < 12 || payload.pain_point.length > 1000) {
-      status.textContent = 'Describe the customer-response problem in 12–1,000 characters without private customer information.';
-      submit.disabled = false;
+    if (!form.checkValidity() || payload.pain_point.length < 12 || payload.pain_point.length > 1000) {
+      status.textContent = 'Review the required fields and describe the problem in 12–1,000 characters without private customer information.';
       return;
     }
+    requestInFlight = true;
+    const controls = Array.from(form.querySelectorAll('input, textarea, button'));
+    const disabledBefore = controls.map(control => control.disabled);
+    controls.forEach(control => { control.disabled = true; });
+    form.setAttribute('aria-busy','true');
+    status.textContent = 'Sending securely…';
+    const uncertain = 'We could not confirm whether your request was received. Your details remain here. If you retry, use the same business email; repeat submissions do not replace earlier requests.';
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
     try {
-      const response = await fetch(endpoint, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-      if (!response.ok) throw new Error('request_failed');
-      showInstantPreview(payload);
-      form.reset();
-      status.textContent = 'Thank you. Your request was received. Generic starter reply examples appear below while your specific problem awaits review.';
-    } catch (_) {
-      status.textContent = 'Your request was not sent. Please try again later.';
-      submit.disabled = false;
+      const response = await fetch(endpoint, {signal:controller.signal, method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
+      if (response.status !== 202) {
+        status.textContent = [400,403,405,413,422,429].includes(response.status)
+          ? 'Your request was not accepted. Review your details or try again later.' : uncertain;
+        return;
+      }
+      let body;
+      try { body = await response.json(); } catch (_) { status.textContent = uncertain; return; }
+      if (body?.accepted !== true || typeof body.previously_received !== 'boolean') {
+        status.textContent = uncertain; return;
+      }
+      if (body.previously_received) {
+        status.textContent = 'No new request was saved. Your new details and contact preferences have not replaced an earlier request. No follow-up is promised.';
+      } else {
+        form.reset();
+        status.textContent = 'Thank you. Your new request was received. Generic examples appear below while your specific problem awaits review before any tailored preview.';
+      }
+      try { showInstantPreview(payload); } catch (_) { preview.hidden = true; }
+    } catch (_) { status.textContent = uncertain; }
+    finally {
+      clearTimeout(timeout);
+      controls.forEach((control,index) => { control.disabled = disabledBefore[index]; });
+      form.removeAttribute('aria-busy');
+      requestInFlight = false;
     }
   });
 </script>
