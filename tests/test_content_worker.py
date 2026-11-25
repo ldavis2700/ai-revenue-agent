@@ -51,6 +51,48 @@ class ContentWorkerTests(unittest.TestCase):
     def test_disk_full_never_discards_final_media(self):
         with patch.object(c,'disk_bytes',return_value=c.MAX_DISK+1),patch.object(c,'render') as render:
             c.cycle(self.jobs);render.assert_not_called()
+    def test_storage_capacity_thresholds(self):
+        from types import SimpleNamespace
+        for used,free,reason in (
+            (c.MAX_DISK,c.MIN_FREE_DISK,'available'),
+            (c.MAX_DISK+1,c.MIN_FREE_DISK,'state_limit'),
+            (c.MAX_DISK,c.MIN_FREE_DISK-1,'free_space'),
+            (c.MAX_DISK+1,c.MIN_FREE_DISK-1,'state_limit+free_space'),
+        ):
+            with self.subTest(reason=reason), patch.object(c,'disk_bytes',return_value=used), patch.object(c.shutil,'disk_usage',return_value=SimpleNamespace(free=free)):
+                result=c.storage_capacity()
+                self.assertEqual(result['reason'],reason)
+                self.assertEqual(result['blocked'],reason!='available')
+                self.assertEqual(result['state_bytes'],used)
+                self.assertEqual(result['free_bytes'],free)
+
+    def test_storage_measurement_failure_preserves_queue_and_media(self):
+        from io import StringIO
+        from contextlib import redirect_stdout
+        c.ingest(self.jobs)
+        existing=c.STATE/'artifacts'/'preserve';existing.mkdir()
+        media=existing/'video.mp4';media.write_bytes(b'original')
+        output=StringIO()
+        with patch.object(c,'disk_bytes',side_effect=OSError('/private/path')),patch.object(c,'render') as render,redirect_stdout(output):
+            c.cycle(self.jobs)
+            render.assert_not_called()
+        events=[json.loads(line) for line in output.getvalue().splitlines()]
+        event=next(e for e in events if e.get('event')=='content_storage_full')
+        self.assertTrue(event['blocked'])
+        self.assertEqual(event['reason'],'measurement_error')
+        self.assertNotIn('/private/path',output.getvalue())
+        self.assertEqual(media.read_bytes(),b'original')
+        with c.connect() as db:
+            self.assertEqual(tuple(db.execute('SELECT status,attempts FROM jobs').fetchone()),('queued',0))
+
+    def test_storage_free_measurement_failure_is_not_zero(self):
+        with patch.object(c,'disk_bytes',return_value=12),patch.object(c.shutil,'disk_usage',side_effect=OSError('private')):
+            result=c.storage_capacity()
+        self.assertTrue(result['blocked'])
+        self.assertEqual(result['reason'],'measurement_error')
+        self.assertEqual(result['state_bytes'],12)
+        self.assertIsNone(result['free_bytes'])
+
     def test_pause_preserves_queue(self):
         (c.STATE/'pause').touch()
         with patch.object(c,'render') as render:c.cycle(self.jobs);render.assert_not_called()
