@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parent
 STATE = Path(os.environ.get('CONTENT_STATE_DIR', '/data/content'))
 STOP = threading.Event()
 MAX_DISK = 600_000_000
+MIN_FREE_DISK = 150_000_000
 MAX_EGRESS_DAY = 100_000_000
 PUBLIC_ORIGIN = 'https://apex-content-worker-production.up.railway.app'
 PUBLIC_PAGES = {'/': 'offer.html', '/offer.html': 'offer.html'}
@@ -171,6 +172,22 @@ def render(m, target):
 def disk_bytes():
     return sum(p.stat().st_size for p in STATE.rglob('*') if p.is_file())
 
+def storage_capacity():
+    """Measure the same limits used for render admission; fail closed on I/O errors."""
+    result = {'state_bytes': None, 'free_bytes': None,
+              'max_state_bytes': MAX_DISK, 'min_free_bytes': MIN_FREE_DISK}
+    try:
+        result['state_bytes'] = disk_bytes()
+        result['free_bytes'] = shutil.disk_usage(STATE).free
+    except OSError:
+        return {**result, 'blocked': True, 'reason': 'measurement_error'}
+    reasons = []
+    if result['state_bytes'] > MAX_DISK:
+        reasons.append('state_limit')
+    if result['free_bytes'] < MIN_FREE_DISK:
+        reasons.append('free_space')
+    return {**result, 'blocked': bool(reasons), 'reason': '+'.join(reasons) or 'available'}
+
 def cycle(directory):
     for m in ingest(directory):
         if STOP.is_set() or (STATE/'pause').exists():
@@ -181,8 +198,9 @@ def cycle(directory):
                 continue
             if row['status']=='failed' and time.time()-row['updated']<3600:
                 continue
-            if disk_bytes()>MAX_DISK or shutil.disk_usage(STATE).free<150_000_000:
-                print('{"event":"content_storage_full"}',flush=True);return
+            capacity = storage_capacity()
+            if capacity['blocked']:
+                print(json.dumps({'event':'content_storage_full',**capacity}),flush=True);return
             db.execute("UPDATE jobs SET status='rendering',attempts=attempts+1,updated=? WHERE id=?",(time.time(),m['id']))
         target=STATE/'artifacts'/m['id']
         try:
@@ -306,6 +324,7 @@ def main():
     # Clean only abandoned scratch files belonging to this renderer, never final media.
     for path in STATE.glob('render-*'):
         if path.is_dir() and not path.is_symlink():shutil.rmtree(path)
+    print(json.dumps({'event':'content_storage_snapshot',**storage_capacity()}),flush=True)
     for sig in (signal.SIGTERM,signal.SIGINT):signal.signal(sig,lambda *_:STOP.set())
     threading.Thread(target=heartbeat,daemon=True).start()
     if not args.once:
