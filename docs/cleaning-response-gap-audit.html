@@ -13,6 +13,7 @@
     table { border-collapse: collapse; width: 100%; margin: 1rem 0; min-width: 500px; }
     th,td { padding: .65rem; border-bottom: 1px solid #c9d1d9; text-align: left; }
     input { width: 6rem; max-width: 90%; font: inherit; padding: .4rem; }
+    input[type="checkbox"] { width: auto; margin-right: .5rem; }
     button { font: inherit; padding: .6rem 1rem; margin: .3rem .5rem .3rem 0; cursor: pointer; }
     button.primary { background: #193e65; color: white; border: none; }
     #error { color: #922d28; font-weight: 600; }
@@ -29,7 +30,7 @@
       <strong>Privacy:</strong> This page contains no analytics, external libraries, cookies, storage, background requests, or automatic submission. Your numbers stay in this open browser tab. Do not enter customer names, addresses, messages, phone numbers, pricing, door codes, or personal information. Download the file first and open it locally to use offline.
     </div>
     <h2>Enter seven daily inquiry cohorts</h2>
-    <p>Count genuine new inquiries once on their original day. For each cohort, count only replies actually sent within 24 hours. Drafts and failed attempts do not count. You can revise yesterday's replies after the 24-hour window closes. Record actual staff review time in whole minutes.</p>
+    <p>Count genuine new inquiries once on their original day. For each cohort, count only replies actually sent within 24 hours. Drafts and failed attempts do not count. Do not include a day until the last inquiry in that cohort has had its full 24-hour reply window. Record actual staff review time in whole minutes.</p>
     <form id="audit" novalidate>
       <div class="scroll">
         <table>
@@ -37,7 +38,8 @@
           <tbody id="rows"></tbody>
         </table>
       </div>
-      <p><button class="primary" type="submit">Calculate response share</button><button id="reset" type="button">Clear all values</button></p>
+      <p><label><input type="checkbox" id="cohorts-closed"> Every included day has ended and every inquiry in those days has had a full 24-hour reply window. Leave incomplete days blank.</label></p>
+      <p><button class="primary" type="submit">Calculate response share</button><button id="clear-audit" type="button">Clear all values</button></p>
       <p id="error" role="alert"></p>
     </form>
     <section id="results" aria-live="polite" hidden>
@@ -80,13 +82,23 @@
     const form = document.getElementById("audit");
     const error = document.getElementById("error");
     const results = document.getElementById("results");
+    const closed = document.getElementById("cohorts-closed");
+    form.addEventListener("input", event => {
+      results.hidden = true;
+      if (event.target !== closed) closed.checked = false;
+    });
     form.addEventListener("submit", event => {
       event.preventDefault();
       error.textContent = "";
       results.hidden = true;
-      let N = 0, R = 0, M = 0;
+      let N = 0, R = 0, M = 0, included = 0;
       for (let day = 1; day <= 7; day += 1) {
-        const values = ["n","r","m"].map(k => document.getElementById(k + day).value.trim());
+        const inputs = ["n","r","m"].map(k => document.getElementById(k + day));
+        if (inputs.some(input => input.validity.badInput)) {
+          error.textContent = "Day " + day + ": enter valid whole numbers.";
+          return;
+        }
+        const values = inputs.map(input => input.value.trim());
         if (values.every(v => v === "")) continue;
         if (values.some(v => v === "" || !/^\d+$/.test(v) || Number(v) > 1000000)) {
           error.textContent = "Day " + day + ": enter whole nonnegative numbers in all three fields, or leave the entire day blank.";
@@ -97,7 +109,15 @@
           error.textContent = "Day " + day + ": replies within 24 hours cannot exceed new inquiries in that day's cohort.";
           return;
         }
-        N += n; R += r; M += m;
+        N += n; R += r; M += m; included += 1;
+      }
+      if (!included) {
+        error.textContent = "Enter at least one completed day, including explicit zeros where applicable.";
+        return;
+      }
+      if (!closed.checked) {
+        error.textContent = "Confirm all included inquiry cohorts have completed their 24-hour reply windows.";
+        return;
       }
       document.getElementById("n").textContent = N.toLocaleString();
       document.getElementById("r").textContent = R.toLocaleString();
@@ -106,7 +126,7 @@
       document.getElementById("mins").textContent = M.toLocaleString();
       results.hidden = false;
     });
-    document.getElementById("reset").addEventListener("click", () => {
+    document.getElementById("clear-audit").addEventListener("click", () => {
       form.reset();
       error.textContent = "";
       results.hidden = true;
