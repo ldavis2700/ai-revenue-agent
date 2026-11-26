@@ -67,7 +67,10 @@ class FranticDiscoveryTests(unittest.TestCase):
                     lambda _: self.detail(1, **overrides), self.robots, self.stamp), [])
 
     def test_robots_denial(self):
+        # RobotFileParser.parse appends rules; use a fresh policy for denial.
+        self.robots = RobotFileParser()
         self.robots.parse(['User-agent: *', 'Disallow: /v1/bounties/'])
+        self.assertFalse(self.robots.can_fetch(r.USER_AGENT, r.FRANTIC_DETAIL+'1'))
         self.assertEqual(r.frantic_references(self.board([self.row()]), self.fetch,
                                             self.robots, self.stamp), [])
         self.assertEqual(self.calls, [])
