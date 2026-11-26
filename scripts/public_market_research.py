@@ -6,6 +6,7 @@ from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 import ipaddress
 import json
+import math
 import os
 import re
 from pathlib import Path
@@ -23,6 +24,14 @@ SOURCES = (
     ('openai_news', 'https://openai.com/news/rss.xml', 'technical_capability'),
     ('stripe_pricing', 'https://stripe.com/pricing', 'delivery_cost'),
 )
+FRANTIC_SOURCE = ('frantic_board', 'https://gofrantic.com/v1/board', 'market_demand')
+FRANTIC_DETAIL = 'https://gofrantic.com/v1/bounties/'
+
+
+def sources():
+    return SOURCES + ((FRANTIC_SOURCE,) if os.getenv('APEX_FRANTIC_DISCOVERY_ENABLED', 'false').lower() == 'true' else ())
+
+
 USER_AGENT = 'APEXResearch/1.0'
 MAX_BYTES = 1_048_576
 REFRESH_SECONDS = 21600
@@ -80,9 +89,11 @@ class NoRedirect(HTTPRedirectHandler):
 def fetch(url):
     # Only compiled-in source/robots URLs are requestable. Extracted links are
     # references for review, never followed and never interpreted as commands.
-    allowed = {s[1] for s in SOURCES}
-    allowed.update(urljoin(s[1], '/robots.txt') for s in SOURCES)
-    if url not in allowed:
+    allowed = {s[1] for s in sources()}
+    allowed.update(urljoin(s[1], '/robots.txt') for s in sources())
+    detail_allowed = (FRANTIC_SOURCE in sources() and
+                      re.fullmatch(re.escape(FRANTIC_DETAIL) + r'[1-9][0-9]{0,11}', url))
+    if url not in allowed and not detail_allowed:
         raise ValueError('source_not_allowed')
     host = urlsplit(url).hostname
     addresses = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
@@ -154,6 +165,75 @@ def extract(body, url):
     return list(result.values())
 
 
+def frantic_object(body, key):
+    if len(body) > MAX_BYTES:
+        raise ValueError('source_too_large')
+    payload = json.loads(body)
+    if not isinstance(payload, dict) or payload.get('ok') is not True or not isinstance(payload.get(key), dict):
+        raise ValueError('invalid_source')
+    return payload[key]
+
+
+def available_slot(value):
+    if not isinstance(value, dict):
+        return False
+    capacity, occupied, available = (value.get(k) for k in ('capacity', 'occupied', 'available'))
+    return (all(type(n) is int for n in (capacity, occupied, available))
+            and capacity > 0 and occupied >= 0 and available > 0
+            and occupied + available == capacity)
+
+
+def frantic_references(body, fetcher, robots, stamp):
+    """Bounded board/detail GETs only; venue assertions are not payment proof."""
+    board = frantic_object(body, 'board')
+    rows = board.get('open_bounties')
+    if not isinstance(rows, list):
+        raise ValueError('invalid_source')
+    seen, references = set(), []
+    attempted = 0
+    for row in rows[:100]:
+        if not isinstance(row, dict):
+            continue
+        number, price = row.get('number'), row.get('price_usd')
+        if (type(number) is not int or not 1 <= number <= 999999999999
+                or number in seen or row.get('funded') is not True
+                or row.get('visibility') != 'public'
+                or row.get('settled_at') is not None
+                or type(price) not in (int, float) or not 0 < price <= 1_000_000
+                or not math.isfinite(price) or not available_slot(row.get('claim_slots'))):
+            continue
+        seen.add(number)
+        target = FRANTIC_DETAIL + str(number)
+        if not robots.can_fetch(USER_AGENT, target):
+            continue
+        if attempted >= 3:
+            break
+        attempted += 1
+        detail = frantic_object(fetcher(target), 'bounty')
+        receipt, title, posted = (detail.get(k) for k in ('funded_receipt_ref', 'title', 'posted_at'))
+        cents = detail.get('price_cents')
+        if (type(detail.get('number')) is not int or detail['number'] != number
+                or detail.get('funded') is not True or detail.get('visibility') != 'public'
+                or 'cancellation_status' not in detail or detail['cancellation_status'] is not None
+                or type(cents) is not int or cents <= 0
+                or abs(cents / 100 - price) > 0.000001
+                or not available_slot(detail.get('claim_progress'))
+                or not isinstance(receipt, str) or not receipt.strip() or len(receipt) > 500
+                or not isinstance(title, str) or not isinstance(posted, str)
+                or not isinstance(detail.get('funded_at'), str)
+                or publication_freshness(posted, stamp) != 'current'
+                or publication_freshness(detail['funded_at'], stamp) != 'current'
+                or not isinstance(detail.get('criteria'), dict) or not detail['criteria']
+                or not isinstance(detail.get('delivery_contract'), dict)
+                or not isinstance(detail.get('required_artifacts'), list)
+                or not detail['required_artifacts']):
+            continue
+        clean_title = ' '.join(title.split())[:180]
+        if len(clean_title) >= 12:
+            references.append((target, clean_title, posted[:100]))
+    return references
+
+
 def connect(path):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(path, timeout=5)
@@ -180,7 +260,7 @@ def run(path, *, fetcher=fetch, clock=time.time):
         return {'status': 'paused', 'external_actions_allowed': False}
     results = []
     with connect(path) as db:
-        for source_id, url, topic in SOURCES:
+        for source_id, url, topic in sources():
             if os.getenv('REVENUE_AGENT_KILL_SWITCH', 'false').lower() == 'true' or Path(str(path)+'.pause').exists():
                 break
             stamp = clock()
@@ -203,8 +283,9 @@ def run(path, *, fetcher=fetch, clock=time.time):
                 body = fetcher(url)
                 if len(body) > MAX_BYTES:
                     raise ValueError('source_too_large')
-                items = extract(body, url)
-                if not items:
+                items = (frantic_references(body, fetcher, robots, stamp)
+                         if source_id == FRANTIC_SOURCE[0] else extract(body, url))
+                if not items and source_id != FRANTIC_SOURCE[0]:
                     raise ValueError('no_research_items')
                 # Stable semantic hash ignores rotating HTML, ads and tracking IDs.
                 digest = hashlib.sha256(json.dumps(sorted(items)).encode()).hexdigest()
