@@ -103,6 +103,7 @@ jobs:
       - name: Test consented autonomy routing
         run: |
           python -m unittest discover -s tests -p 'test_public_market_research.py' -v
+          python -m unittest discover -s tests -p 'test_frantic_discovery.py' -v
           python -m unittest discover -s tests -p 'test_runtime_supervisor.py' -v
           python -m unittest discover -s tests -p 'test_revenue_cycle_consent.py' -v
           python -m unittest discover -s tests -p 'test_autonomous_cycle.py' -v
