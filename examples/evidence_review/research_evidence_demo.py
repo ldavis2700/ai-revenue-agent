@@ -106,12 +106,12 @@ def ingest(db: sqlite3.Connection, records: list[dict[str, Any]]) -> int:
 
     with db:
         for rec_id, field, proposed, source, url, excerpt, sha in validated:
+            # Acquire the write transaction before comparing evidence. A competing
+            # importer may have inserted the same record after a stale read.
+            db.execute('INSERT INTO proposals (record_id,field_name,proposed_value,source_label,source_url,excerpt,evidence_sha256) VALUES (?,?,?,?,?,?,?) ON CONFLICT(record_id) DO NOTHING', (rec_id, field, proposed, source, url, excerpt, sha))
             prev = db.execute('SELECT field_name, proposed_value, source_label, source_url, excerpt, evidence_sha256 FROM proposals WHERE record_id=?', (rec_id,)).fetchone()
-            if prev:
-                if tuple(prev) != (field, proposed, source, url, excerpt, sha):
-                    raise ValueError(f'Existing record {rec_id} differs: manual reconciliation required')
-            else:
-                db.execute('INSERT INTO proposals (record_id,field_name,proposed_value,source_label,source_url,excerpt,evidence_sha256) VALUES (?,?,?,?,?,?,?)', (rec_id, field, proposed, source, url, excerpt, sha))
+            if prev is None or tuple(prev) != (field, proposed, source, url, excerpt, sha):
+                raise ValueError(f'Existing record {rec_id} differs: manual reconciliation required')
     return len(validated)
 
 

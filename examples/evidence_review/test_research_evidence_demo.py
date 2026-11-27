@@ -153,6 +153,50 @@ class EvidenceReviewTest(unittest.TestCase):
             review(raced, 'sample-1', 'approve', 'Reviewer A')
         self.assertEqual(approved_export(self.db), [])
 
+    def _competing_ingest(self, competing_record, approved=False):
+        original = self.db
+        competitor = connect(Path(self.temp.name) / 'pilot.sqlite')
+
+        class InterleavedConnection:
+            fired = False
+
+            def __enter__(self):
+                original.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return original.__exit__(*args)
+
+            def execute(self, sql, params):
+                if sql.startswith('INSERT INTO proposals') and not self.fired:
+                    self.fired = True
+                    ingest(competitor, [competing_record])
+                    if approved:
+                        review(competitor, competing_record['record_id'], 'approve', 'Reviewer B')
+                return original.execute(sql, params)
+
+        self.addCleanup(competitor.close)
+        return InterleavedConnection()
+
+    def test_identical_competing_import_preserves_review(self):
+        raced = self._competing_ingest(sample(), approved=True)
+        self.assertEqual(ingest(raced, [sample()]), 1)
+        self.assertEqual(pending(self.db), [])
+        self.assertEqual(len(approved_export(self.db)), 1)
+        self.assertEqual(approved_export(self.db)[0]['reviewer'], 'Reviewer B')
+
+    def test_conflicting_competing_import_requires_reconciliation(self):
+        raced = self._competing_ingest(dict(sample(), proposed_value='5'), approved=True)
+        with self.assertRaisesRegex(ValueError, 'manual reconciliation'):
+            ingest(raced, [sample()])
+        self.assertEqual(approved_export(self.db)[0]['accepted_value'], '5')
+
+    def test_conflicting_import_rolls_back_entire_batch(self):
+        ingest(self.db, [sample()])
+        with self.assertRaisesRegex(ValueError, 'manual reconciliation'):
+            ingest(self.db, [sample('new'), dict(sample(), proposed_value='5')])
+        self.assertEqual([row['record_id'] for row in pending(self.db)], ['sample-1'])
+
     def test_attempted_sql_injection_is_data_not_code(self):
         evil=sample("id'); DROP TABLE proposals; --")
         ingest(self.db,[evil])
