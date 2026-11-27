@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit, urlencode
 from urllib.request import Request, HTTPRedirectHandler, build_opener
-from research_evidence_demo import connect, evidence_hash
+from research_evidence_demo import connect, evidence_hash, validated_source_url
 
 TABLE = 'apex_evidence_pilot_test'
 
@@ -47,6 +47,9 @@ class NoRedirect(HTTPRedirectHandler):
         return None
 
 MAX_TEST_ROWS = 20
+# Match the offline ingestion/review text limits before any external test write.
+FIELD_LIMITS = {'record_id': 80, 'field_name': 100, 'accepted_value': 1000,
+                'source_label': 200, 'source_url': 500, 'reviewer': 100}
 READBACK_COLUMNS = ('record_id', 'field_name', 'accepted_value', 'source_label',
                     'source_url', 'evidence_sha256', 'review_status', 'reviewer',
                     'approval_key')
@@ -99,8 +102,11 @@ def validate_approved_batch(rows):
                 or row['review_status'] not in ('approved', 'corrected')
                 or re.fullmatch(r'[a-f0-9]{64}', row['evidence_sha256']) is None
                 or re.fullmatch(r'[a-f0-9]{64}', row['approval_key']) is None
+                or any('\x00' in row[k] for k in READBACK_COLUMNS)
+                or any(len(row[k]) > limit for k, limit in FIELD_LIMITS.items())
                 or row['record_id'] in seen):
             raise ValueError('Invalid approved test batch')
+        validated_source_url(row['source_url'])
         record = {k: row[k] for k in READBACK_COLUMNS if k != 'approval_key'}
         blob = json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
         if hashlib.sha256(blob.encode('utf-8')).hexdigest() != row['approval_key']:

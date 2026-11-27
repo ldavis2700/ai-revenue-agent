@@ -134,5 +134,30 @@ class TestHandoff(unittest.TestCase):
                         'https://abcdefghijklmnopqrst.supabase.co', 'fictional',
                         execute=True, confirmed=True)
 
+    def test_rehashed_invalid_fields_never_post(self):
+        import hashlib
+        row = prepared_rows(self.db)[0]
+        # Self-consistent approval keys must not bypass the offline field contract.
+        cases = (
+            ('record_id', 'x' * 81), ('field_name', 'x' * 101),
+            ('accepted_value', 'x' * 65537), ('source_label', 'x' * 201),
+            ('reviewer', 'x' * 101), ('accepted_value', 'bad\x00value'),
+            ('source_url', 'http://example.com/evidence'),
+            ('source_url', 'https://example.com/' + 'x' * 500),
+        )
+        for field, value in cases:
+            record = {k: v for k, v in row.items() if k != 'approval_key'}
+            record[field] = value
+            record['approval_key'] = hashlib.sha256(json.dumps(
+                record, sort_keys=True, ensure_ascii=False,
+                separators=(',', ':')).encode('utf-8')).hexdigest()
+            with self.subTest(field=field, length=len(value)), patch(
+                    'supabase_test_handoff.build_opener',
+                    side_effect=AssertionError('network forbidden')):
+                with self.assertRaises(ValueError):
+                    send_test_rows([record],
+                        'https://abcdefghijklmnopqrst.supabase.co', 'fictional',
+                        execute=True, confirmed=True)
+
 if __name__ == '__main__':
     unittest.main()
