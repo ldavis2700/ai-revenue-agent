@@ -116,5 +116,23 @@ class TestHandoff(unittest.TestCase):
                     'https://abcdefghijklmnopqrst.supabase.co', 'fictional',
                     execute=True, confirmed=True)
 
+    def test_inconsistent_or_unapproved_batch_never_posts(self):
+        rows = prepared_rows(self.db)
+        import hashlib
+        rejected = dict(rows[0], review_status='rejected')
+        payload = {k: v for k, v in rejected.items() if k != 'approval_key'}
+        rejected['approval_key'] = hashlib.sha256(json.dumps(
+            payload, sort_keys=True, ensure_ascii=False,
+            separators=(',', ':')).encode('utf-8')).hexdigest()
+        for bad in ([rejected], [dict(rows[0], accepted_value='changed')],
+                    [dict(rows[0], reviewer=' ')], rows * 2):
+            with self.subTest(batch=bad), patch(
+                    'supabase_test_handoff.build_opener',
+                    side_effect=AssertionError('network forbidden')):
+                with self.assertRaisesRegex(ValueError, 'Invalid'):
+                    send_test_rows(bad,
+                        'https://abcdefghijklmnopqrst.supabase.co', 'fictional',
+                        execute=True, confirmed=True)
+
 if __name__ == '__main__':
     unittest.main()
