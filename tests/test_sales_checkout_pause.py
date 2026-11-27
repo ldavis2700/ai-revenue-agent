@@ -100,6 +100,11 @@ class PausedCheckoutOfferTests(unittest.TestCase):
         self.assertNotIn('checkout.stripe.com', home.lower())
         self.assertNotIn('buy.stripe.com', home.lower())
 
+    def test_home_service_review_example_is_voluntary_and_sentiment_neutral(self):
+        home = (OFFER.parent / "home-services.html").read_text(encoding="utf-8")
+        self.assertIn("If you would like to, please share an honest review of your experience, whether positive or negative.", home)
+        self.assertNotIn("If everything looks good, would you be willing to share", home)
+
     def test_visible_copy_does_not_promise_live_checkout(self):
         self.assertIn("Online checkout is paused", self.html)
         self.assertIn("does not currently accept payments or subscriptions", self.html)
