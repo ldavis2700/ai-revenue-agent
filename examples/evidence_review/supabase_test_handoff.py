@@ -87,6 +87,27 @@ def verify_test_readback(rows, origin, key):
     return len(rows)
 
 
+def validate_approved_batch(rows):
+    """Validate shape and self-consistency, not human identity or evidence truth."""
+    if not isinstance(rows, list) or len(rows) > MAX_TEST_ROWS:
+        raise ValueError('Invalid or oversized approved test batch')
+    seen = set()
+    for row in rows:
+        if (not isinstance(row, dict) or set(row) != set(READBACK_COLUMNS)
+                or any(not isinstance(row[k], str) for k in READBACK_COLUMNS)
+                or any(not row[k].strip() for k in READBACK_COLUMNS if k != 'source_url')
+                or row['review_status'] not in ('approved', 'corrected')
+                or re.fullmatch(r'[a-f0-9]{64}', row['evidence_sha256']) is None
+                or re.fullmatch(r'[a-f0-9]{64}', row['approval_key']) is None
+                or row['record_id'] in seen):
+            raise ValueError('Invalid approved test batch')
+        record = {k: row[k] for k in READBACK_COLUMNS if k != 'approval_key'}
+        blob = json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+        if hashlib.sha256(blob.encode('utf-8')).hexdigest() != row['approval_key']:
+            raise ValueError('Invalid approval key for test row')
+        seen.add(row['record_id'])
+
+
 def send_test_rows(rows, origin, key, *, execute=False, confirmed=False):
     """Explicit test-only write + exact readback; no remote work by default."""
     zero = {'remote_requests': 0, 'submitted_rows': 0,
@@ -98,13 +119,7 @@ def send_test_rows(rows, origin, key, *, execute=False, confirmed=False):
     if not isinstance(key, str) or not key.strip():
         raise ValueError('A secure test project API key is required')
     endpoint = test_endpoint(origin)
-    if (not isinstance(rows, list) or len(rows) > MAX_TEST_ROWS
-            or any(not isinstance(row, dict)
-                   or set(row) != set(READBACK_COLUMNS)
-                   or not isinstance(row.get('approval_key'), str)
-                   or re.fullmatch(r'[a-f0-9]{64}', row['approval_key']) is None
-                   for row in rows)):
-        raise ValueError('Invalid or oversized approved test batch')
+    validate_approved_batch(rows)
     if not rows:
         return zero
     req = Request(endpoint, data=json.dumps(rows).encode('utf-8'), method='POST', headers={
