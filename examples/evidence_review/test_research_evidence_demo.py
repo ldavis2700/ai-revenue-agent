@@ -96,6 +96,107 @@ class EvidenceReviewTest(unittest.TestCase):
             review(self.db,'sample-1','correct','Reviewer','new value')
         self.assertEqual(len(approved_export(self.db)),1)
 
+    def _competing_review(self, decision, reviewer, corrected_value=None):
+        # Deterministically interleave a second connection after the first SELECT.
+        path = Path(self.temp.name) / 'pilot.sqlite'
+        original = self.db
+        competitor = connect(path)
+
+        class InterleavedConnection:
+            fired = False
+
+            def __enter__(self):
+                original.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return original.__exit__(*args)
+
+            def execute(self, sql, params):
+                if sql.startswith('SELECT review_status,proposed_value') and not self.fired:
+                    self.fired = True
+                    cursor = original.execute(sql, params)
+                    snapshot = cursor.fetchone()
+                    cursor.close()
+                    review(competitor, 'sample-1', decision, reviewer, corrected_value)
+
+                    class Snapshot:
+                        def fetchone(self):
+                            return snapshot
+
+                    return Snapshot()
+                return original.execute(sql, params)
+
+        self.addCleanup(competitor.close)
+        return InterleavedConnection()
+
+    def test_competing_review_cannot_report_false_success(self):
+        ingest(self.db, [sample()])
+        raced = self._competing_review('approve', 'Reviewer B')
+        with self.assertRaisesRegex(ValueError, 'Concurrent review'):
+            review(raced, 'sample-1', 'correct', 'Reviewer A', '4')
+        exported = approved_export(self.db)
+        self.assertEqual(exported[0]['accepted_value'], '3')
+        self.assertEqual(exported[0]['reviewer'], 'Reviewer B')
+
+    def test_identical_competing_review_is_idempotent(self):
+        ingest(self.db, [sample()])
+        raced = self._competing_review('approve', 'Reviewer B')
+        result = review(raced, 'sample-1', 'approve', 'Reviewer B')
+        self.assertTrue(result['idempotent'])
+        self.assertEqual(len(approved_export(self.db)), 1)
+
+    def test_competing_rejection_cannot_be_reported_as_approval(self):
+        ingest(self.db, [sample()])
+        raced = self._competing_review('reject', 'Reviewer B')
+        with self.assertRaisesRegex(ValueError, 'Concurrent review'):
+            review(raced, 'sample-1', 'approve', 'Reviewer A')
+        self.assertEqual(approved_export(self.db), [])
+
+    def _competing_ingest(self, competing_record, approved=False):
+        original = self.db
+        competitor = connect(Path(self.temp.name) / 'pilot.sqlite')
+
+        class InterleavedConnection:
+            fired = False
+
+            def __enter__(self):
+                original.__enter__()
+                return self
+
+            def __exit__(self, *args):
+                return original.__exit__(*args)
+
+            def execute(self, sql, params):
+                if sql.startswith('INSERT INTO proposals') and not self.fired:
+                    self.fired = True
+                    ingest(competitor, [competing_record])
+                    if approved:
+                        review(competitor, competing_record['record_id'], 'approve', 'Reviewer B')
+                return original.execute(sql, params)
+
+        self.addCleanup(competitor.close)
+        return InterleavedConnection()
+
+    def test_identical_competing_import_preserves_review(self):
+        raced = self._competing_ingest(sample(), approved=True)
+        self.assertEqual(ingest(raced, [sample()]), 1)
+        self.assertEqual(pending(self.db), [])
+        self.assertEqual(len(approved_export(self.db)), 1)
+        self.assertEqual(approved_export(self.db)[0]['reviewer'], 'Reviewer B')
+
+    def test_conflicting_competing_import_requires_reconciliation(self):
+        raced = self._competing_ingest(dict(sample(), proposed_value='5'), approved=True)
+        with self.assertRaisesRegex(ValueError, 'manual reconciliation'):
+            ingest(raced, [sample()])
+        self.assertEqual(approved_export(self.db)[0]['accepted_value'], '5')
+
+    def test_conflicting_import_rolls_back_entire_batch(self):
+        ingest(self.db, [sample()])
+        with self.assertRaisesRegex(ValueError, 'manual reconciliation'):
+            ingest(self.db, [sample('new'), dict(sample(), proposed_value='5')])
+        self.assertEqual([row['record_id'] for row in pending(self.db)], ['sample-1'])
+
     def test_attempted_sql_injection_is_data_not_code(self):
         evil=sample("id'); DROP TABLE proposals; --")
         ingest(self.db,[evil])

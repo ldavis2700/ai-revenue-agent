@@ -106,12 +106,12 @@ def ingest(db: sqlite3.Connection, records: list[dict[str, Any]]) -> int:
 
     with db:
         for rec_id, field, proposed, source, url, excerpt, sha in validated:
+            # Acquire the write transaction before comparing evidence. A competing
+            # importer may have inserted the same record after a stale read.
+            db.execute('INSERT INTO proposals (record_id,field_name,proposed_value,source_label,source_url,excerpt,evidence_sha256) VALUES (?,?,?,?,?,?,?) ON CONFLICT(record_id) DO NOTHING', (rec_id, field, proposed, source, url, excerpt, sha))
             prev = db.execute('SELECT field_name, proposed_value, source_label, source_url, excerpt, evidence_sha256 FROM proposals WHERE record_id=?', (rec_id,)).fetchone()
-            if prev:
-                if tuple(prev) != (field, proposed, source, url, excerpt, sha):
-                    raise ValueError(f'Existing record {rec_id} differs: manual reconciliation required')
-            else:
-                db.execute('INSERT INTO proposals (record_id,field_name,proposed_value,source_label,source_url,excerpt,evidence_sha256) VALUES (?,?,?,?,?,?,?)', (rec_id, field, proposed, source, url, excerpt, sha))
+            if prev is None or tuple(prev) != (field, proposed, source, url, excerpt, sha):
+                raise ValueError(f'Existing record {rec_id} differs: manual reconciliation required')
     return len(validated)
 
 
@@ -135,8 +135,13 @@ def review(db: sqlite3.Connection, record_id: str, decision: str, reviewer: str,
             if old['review_status'] == status and old['accepted_value'] == accepted and old['reviewer'] == reviewer:
                 return {'record_id': record_id, 'status': status, 'idempotent': True}
             raise ValueError('Already reviewed; immutable decision requires a new record')
-        db.execute('UPDATE proposals SET review_status=?,accepted_value=?,reviewer=? WHERE record_id=? AND review_status=?',
-                   (status, accepted, reviewer, record_id, 'pending'))
+        result = db.execute('UPDATE proposals SET review_status=?,accepted_value=?,reviewer=? WHERE record_id=? AND review_status=?',
+                            (status, accepted, reviewer, record_id, 'pending'))
+        if result.rowcount != 1:
+            current = db.execute('SELECT review_status,accepted_value,reviewer FROM proposals WHERE record_id=?', (record_id,)).fetchone()
+            if current is not None and (current['review_status'], current['accepted_value'], current['reviewer']) == (status, accepted, reviewer):
+                return {'record_id': record_id, 'status': status, 'idempotent': True}
+            raise ValueError('Concurrent review changed the record; reload and reconcile')
     return {'record_id': record_id, 'status': status, 'idempotent': False}
 
 
@@ -179,7 +184,7 @@ def main() -> None:
             output = pending(db)
         else:
             output = {'approved_only': approved_export(db), 'remote_writes': 0,
-                      'note': 'Local SQLite demonstration; separately approved Supabase test handoff is NOT implemented'}
+                      'note': 'Local SQLite demonstration; separate test handoff requires explicit authorization'}
     print(json.dumps(output, indent=2, ensure_ascii=False, sort_keys=True))
 
 
