@@ -135,8 +135,13 @@ def review(db: sqlite3.Connection, record_id: str, decision: str, reviewer: str,
             if old['review_status'] == status and old['accepted_value'] == accepted and old['reviewer'] == reviewer:
                 return {'record_id': record_id, 'status': status, 'idempotent': True}
             raise ValueError('Already reviewed; immutable decision requires a new record')
-        db.execute('UPDATE proposals SET review_status=?,accepted_value=?,reviewer=? WHERE record_id=? AND review_status=?',
-                   (status, accepted, reviewer, record_id, 'pending'))
+        result = db.execute('UPDATE proposals SET review_status=?,accepted_value=?,reviewer=? WHERE record_id=? AND review_status=?',
+                            (status, accepted, reviewer, record_id, 'pending'))
+        if result.rowcount != 1:
+            current = db.execute('SELECT review_status,accepted_value,reviewer FROM proposals WHERE record_id=?', (record_id,)).fetchone()
+            if current is not None and (current['review_status'], current['accepted_value'], current['reviewer']) == (status, accepted, reviewer):
+                return {'record_id': record_id, 'status': status, 'idempotent': True}
+            raise ValueError('Concurrent review changed the record; reload and reconcile')
     return {'record_id': record_id, 'status': status, 'idempotent': False}
 
 
@@ -179,7 +184,7 @@ def main() -> None:
             output = pending(db)
         else:
             output = {'approved_only': approved_export(db), 'remote_writes': 0,
-                      'note': 'Local SQLite demonstration; separately approved Supabase test handoff is NOT implemented'}
+                      'note': 'Local SQLite demonstration; separate test handoff requires explicit authorization'}
     print(json.dumps(output, indent=2, ensure_ascii=False, sort_keys=True))
 
 
